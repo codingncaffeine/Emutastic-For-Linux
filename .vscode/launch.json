@@ -1,0 +1,30 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Emutastic",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Emutastic/bin/Debug/net10.0/Emutastic.dll",
+      "cwd": "${workspaceFolder}/src/Emutastic",
+      "env": { "DOTNET_ROOT": "${userHome}/.dotnet" },
+      "console": "internalConsole",
+      "stopAtEntry": false
+    },
+    {
+      "name": "Run Emutastic (ROM via args)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Emutastic/bin/Debug/net10.0/Emutastic.dll",
+      "args": [
+        "${workspaceFolder}/../emutastic-linux/spike/cores/nestopia_libretro.so",
+        "${workspaceFolder}/../emutastic-linux/spike/roms/full_palette.nes"
+      ],
+      "cwd": "${workspaceFolder}/src/Emutastic",
+      "env": { "DOTNET_ROOT": "${userHome}/.dotnet" },
+      "console": "internalConsole"
+    }
+  ]
+}

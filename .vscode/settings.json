@@ -1,0 +1,13 @@
+{
+  "dotnet.defaultSolution": "src/Emutastic.slnx",
+  "omnisharp.dotnetPath": "${userHome}/.dotnet",
+  "files.exclude": {
+    "**/bin": true,
+    "**/obj": true
+  },
+  "search.exclude": {
+    "**/reference/**": true,
+    "**/bin/**": true,
+    "**/obj/**": true
+  }
+}
