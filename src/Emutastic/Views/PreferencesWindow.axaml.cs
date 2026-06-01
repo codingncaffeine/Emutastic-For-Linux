@@ -63,6 +63,7 @@ public partial class PreferencesWindow : Window
         WireAbout();
         WireTheme();
         WireLibrary();
+        WireSnaps();
     }
 
     protected override void OnClosed(EventArgs e)
@@ -83,6 +84,7 @@ public partial class PreferencesWindow : Window
         if (target == "PanelAbout") LoadAboutSettings();
         if (target == "PanelTheme") LoadThemeSettings();
         if (target == "PanelLibrary") LoadLibrarySettings();
+        if (target == "PanelSnaps") LoadSnapsSettings();
     }
 
     // Temporary placeholder until the panel's sub-splinter fills it.
@@ -466,6 +468,92 @@ public partial class PreferencesWindow : Window
         App.Configuration!.SetLibraryConfiguration(lib);
         App.Configuration!.ScheduleSave();
         this.FindControl<TextBlock>("LibraryStatusText")!.Text = "Saved.";
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  U5 — Snaps panel (ScreenScraper credentials + login test + 2D-art pref)
+    // ════════════════════════════════════════════════════════════════════════
+
+    private bool _snapsLoaded;
+    private bool _suppressSnapSave;
+
+    private void WireSnaps()
+    {
+        this.FindControl<ToggleSwitch>("SSEnabledToggle")!.IsCheckedChanged += (_, _) => { Refresh2DPrefEnabled(); SaveSnapSettings(); };
+        this.FindControl<ToggleSwitch>("SSPrefer2DToggle")!.IsCheckedChanged += (_, _) => SaveSnapSettings();
+        this.FindControl<TextBox>("SSUsernameBox")!.LostFocus += (_, _) => { Refresh2DPrefEnabled(); SaveSnapSettings(); };
+        this.FindControl<TextBox>("SSPasswordBox")!.LostFocus += (_, _) => SaveSnapSettings();
+        this.FindControl<Button>("SSTestBtn")!.Click += (_, _) => _ = SnapsTestLoginAsync();
+    }
+
+    private void LoadSnapsSettings()
+    {
+        var snap = App.Configuration?.GetSnapConfiguration() ?? new Configuration.SnapConfiguration();
+        _suppressSnapSave = true;
+        this.FindControl<ToggleSwitch>("SSEnabledToggle")!.IsChecked = snap.ScreenScraperEnabled;
+        this.FindControl<TextBox>("SSUsernameBox")!.Text = snap.ScreenScraperUser;
+        this.FindControl<TextBox>("SSPasswordBox")!.Text = snap.ScreenScraperPassword;
+        this.FindControl<ToggleSwitch>("SSPrefer2DToggle")!.IsChecked = snap.PreferScreenScraper2D;
+        _suppressSnapSave = false;
+        _snapsLoaded = true;
+        Refresh2DPrefEnabled();
+    }
+
+    private void Refresh2DPrefEnabled()
+    {
+        var pref = this.FindControl<ToggleSwitch>("SSPrefer2DToggle")!;
+        bool ssOn = this.FindControl<ToggleSwitch>("SSEnabledToggle")!.IsChecked == true
+                    && !string.IsNullOrWhiteSpace(this.FindControl<TextBox>("SSUsernameBox")!.Text);
+        pref.IsEnabled = ssOn;
+        if (!ssOn) { _suppressSnapSave = true; pref.IsChecked = false; _suppressSnapSave = false; }
+    }
+
+    private void SaveSnapSettings()
+    {
+        if (_suppressSnapSave || !_snapsLoaded) return;
+        var snap = App.Configuration?.GetSnapConfiguration();
+        if (snap == null) return;
+        snap.ScreenScraperEnabled  = this.FindControl<ToggleSwitch>("SSEnabledToggle")!.IsChecked == true;
+        snap.ScreenScraperUser     = (this.FindControl<TextBox>("SSUsernameBox")!.Text ?? "").Trim();
+        snap.ScreenScraperPassword = this.FindControl<TextBox>("SSPasswordBox")!.Text ?? "";
+        snap.PreferScreenScraper2D = this.FindControl<ToggleSwitch>("SSPrefer2DToggle")!.IsChecked == true;
+        App.Configuration!.SetSnapConfiguration(snap);
+        App.Configuration!.ScheduleSave();
+        Models.Game.PreferScreenScraper2D = snap.PreferScreenScraper2D;
+    }
+
+    private async Task SnapsTestLoginAsync()
+    {
+        var btn = this.FindControl<Button>("SSTestBtn")!;
+        var label = this.FindControl<TextBlock>("SSStatusLabel")!;
+        btn.IsEnabled = false;
+        label.Text = "Testing…";
+        label.Foreground = Brush("TextMutedBrush");
+        try
+        {
+            var (error, maxThreads) = await new Services.ScreenScraperService().TestLoginAsync(
+                (this.FindControl<TextBox>("SSUsernameBox")!.Text ?? "").Trim(),
+                this.FindControl<TextBox>("SSPasswordBox")!.Text ?? "");
+            if (error == null)
+            {
+                label.Text = $"Verified — {maxThreads} thread{(maxThreads == 1 ? "" : "s")} available";
+                label.Foreground = new SolidColorBrush(Color.Parse("#28C840"));
+                var snap = App.Configuration?.GetSnapConfiguration();
+                if (snap != null) { snap.ScreenScraperMaxThreads = maxThreads; App.Configuration!.SetSnapConfiguration(snap); App.Configuration!.ScheduleSave(); }
+                Services.ScreenScraperService.SetMaxThreads(maxThreads);
+            }
+            else
+            {
+                label.Text = error;
+                label.Foreground = Brush("AccentBrush");
+            }
+        }
+        catch (Exception ex)
+        {
+            label.Text = $"Login failed: {ex.Message}";
+            label.Foreground = Brush("AccentBrush");
+        }
+        finally { btn.IsEnabled = true; }
     }
 
     private IBrush? Brush(string key) => this.TryFindResource(key, out var v) ? v as IBrush : null;

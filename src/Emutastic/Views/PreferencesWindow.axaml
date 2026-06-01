@@ -273,7 +273,64 @@
                         </StackPanel>
                     </ScrollViewer>
                 </Grid>
-                <Grid Name="PanelSnaps" IsVisible="False"/>
+                <Grid Name="PanelSnaps" IsVisible="False">
+                    <ScrollViewer Margin="32,24,32,24" VerticalScrollBarVisibility="Auto">
+                        <StackPanel MaxWidth="560" HorizontalAlignment="Left">
+                            <TextBlock Text="VIDEO SNAPS" Theme="{StaticResource PrefLabel}"/>
+                            <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,0,0,16"/>
+                            <TextBlock Text="When a game card is opened, Emutastic can play a video preview instead of a static screenshot. Configure the ScreenScraper provider below."
+                                       FontSize="12" FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextSecondaryBrush}"
+                                       TextWrapping="Wrap" Margin="0,0,0,24"/>
+
+                            <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,16">
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="ScreenScraper" FontSize="15" FontWeight="SemiBold"
+                                               FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextPrimaryBrush}"/>
+                                    <TextBlock Text="Free accounts at screenscraper.fr — no developer registration required."
+                                               FontSize="11" FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextSecondaryBrush}"
+                                               TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                </StackPanel>
+                                <ToggleSwitch Name="SSEnabledToggle" Grid.Column="1" OnContent="" OffContent="" VerticalAlignment="Center"/>
+                            </Grid>
+
+                            <TextBlock Text="Username" FontSize="12" FontFamily="{DynamicResource PrimaryFont}"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,6"/>
+                            <TextBox Name="SSUsernameBox" Margin="0,0,0,14" Background="{DynamicResource BgTertiaryBrush}"
+                                     Foreground="{DynamicResource TextPrimaryBrush}" BorderBrush="{DynamicResource BorderNormalBrush}"
+                                     FontFamily="{DynamicResource PrimaryFont}"/>
+
+                            <TextBlock Text="Password" FontSize="12" FontFamily="{DynamicResource PrimaryFont}"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,6"/>
+                            <TextBox Name="SSPasswordBox" PasswordChar="●" Margin="0,0,0,20" Background="{DynamicResource BgTertiaryBrush}"
+                                     Foreground="{DynamicResource TextPrimaryBrush}" BorderBrush="{DynamicResource BorderNormalBrush}"
+                                     FontFamily="{DynamicResource PrimaryFont}"/>
+
+                            <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,0,0,8">
+                                <Button Name="SSTestBtn" Content="Login" Theme="{StaticResource PrefActionBtn}"/>
+                                <TextBlock Name="SSStatusLabel" FontSize="12" FontFamily="{DynamicResource PrimaryFont}"
+                                           Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center"/>
+                            </StackPanel>
+
+                            <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,20,0,20"/>
+
+                            <TextBlock Text="2D ARTWORK SOURCE" Theme="{StaticResource PrefLabel}"/>
+                            <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,0,0,16"/>
+                            <Grid ColumnDefinitions="*,Auto">
+                                <StackPanel Grid.Column="0" Margin="0,0,16,0">
+                                    <TextBlock Text="Prefer ScreenScraper 2D art" FontSize="13" FontWeight="SemiBold"
+                                               FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextPrimaryBrush}"/>
+                                    <TextBlock TextWrapping="Wrap" FontSize="11" FontFamily="{DynamicResource PrimaryFont}"
+                                               Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,0"
+                                               Text="Use higher-quality ScreenScraper box art instead of libretro thumbnails. Free accounts have low API limits — best on paid tiers."/>
+                                </StackPanel>
+                                <ToggleSwitch Name="SSPrefer2DToggle" Grid.Column="1" OnContent="" OffContent="" VerticalAlignment="Center" IsEnabled="False"/>
+                            </Grid>
+
+                            <TextBlock Text="EmuMovies support is coming once their v3 API ships."
+                                       FontSize="11" FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextMutedBrush}" Margin="0,20,0,0"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
                 <Grid Name="PanelAchievements" IsVisible="False"/>
                 <Grid Name="PanelMedia" IsVisible="False"/>
                 <Grid Name="PanelBackups" IsVisible="False"/>
