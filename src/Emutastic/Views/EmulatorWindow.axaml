@@ -1,4 +1,5 @@
 <Window xmlns="https://github.com/avaloniaui"
+        Icon="/Assets/banners and icons/emutastic-logo.png"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="Emutastic.Views.EmulatorWindow"
         Width="768" Height="720"

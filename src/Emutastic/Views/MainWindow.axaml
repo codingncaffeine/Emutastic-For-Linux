@@ -8,6 +8,7 @@
         x:CompileBindings="False"
         Width="1100" Height="720" MinWidth="800" MinHeight="500"
         Title="Emutastic"
+        Icon="/Assets/banners and icons/emutastic-logo.png"
         Background="{DynamicResource BgPrimaryBrush}"
         WindowDecorations="None">
 
@@ -20,7 +21,8 @@
             <Border Grid.Column="0" Background="{DynamicResource BgSecondaryBrush}">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
                     <Image Width="20" Height="20" Margin="0,0,7,0"
-                           Source="avares://Emutastic/Assets/system_icons/nes_icon.jpg"/>
+                           RenderOptions.BitmapInterpolationMode="HighQuality"
+                           Source="avares://Emutastic/Assets/banners and icons/emutastic-logo.png"/>
                     <TextBlock Text="Emutastic" FontFamily="{DynamicResource PrimaryFont}"
                                FontSize="13" FontWeight="SemiBold"
                                Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center"/>
