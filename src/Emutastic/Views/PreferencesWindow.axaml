@@ -41,6 +41,56 @@
             </Style>
         </ControlTheme>
 
+        <!-- Section label above a setting. -->
+        <ControlTheme x:Key="PrefLabel" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
+            <Setter Property="FontFamily" Value="{DynamicResource PrimaryFont}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Margin" Value="0,10,0,4"/>
+        </ControlTheme>
+
+        <!-- Charcoal primary action button. -->
+        <ControlTheme x:Key="PrefActionBtn" TargetType="Button">
+            <Setter Property="Background" Value="{DynamicResource PlayBtnBorderBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="18,8"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="FontFamily" Value="{DynamicResource PrimaryFont}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Border Name="bd" Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                        <ContentPresenter Content="{TemplateBinding Content}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+            <Style Selector="^:pointerover /template/ Border#bd"><Setter Property="Background" Value="{DynamicResource PillHoverBgBrush}"/></Style>
+        </ControlTheme>
+
+        <!-- Secondary (outlined) button. -->
+        <ControlTheme x:Key="PrefSecondaryBtn" TargetType="Button">
+            <Setter Property="Background" Value="{DynamicResource BgQuaternaryBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderNormalBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="14,8"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontFamily" Value="{DynamicResource PrimaryFont}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Border Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                        <ContentPresenter Content="{TemplateBinding Content}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+            <Style Selector="^:pointerover /template/ Border#bd"><Setter Property="Background" Value="{DynamicResource BgTertiaryBrush}"/></Style>
+        </ControlTheme>
+
         <!-- Traffic-light window button (round). -->
         <ControlTheme x:Key="WinBtn" TargetType="Button">
             <Setter Property="Width" Value="14"/>
@@ -109,7 +159,43 @@
                 <Grid Name="PanelAchievements" IsVisible="False"/>
                 <Grid Name="PanelMedia" IsVisible="False"/>
                 <Grid Name="PanelBackups" IsVisible="False"/>
-                <Grid Name="PanelAbout" IsVisible="False"/>
+                <Grid Name="PanelAbout" IsVisible="False">
+                    <ScrollViewer Margin="32,24,32,24" VerticalScrollBarVisibility="Auto">
+                        <StackPanel MaxWidth="560" HorizontalAlignment="Left">
+                            <TextBlock Text="ABOUT" Theme="{StaticResource PrefLabel}"/>
+                            <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,0,0,16"/>
+
+                            <TextBlock Text="Emutastic" FontSize="24" FontWeight="Bold"
+                                       FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,0,0,4"/>
+                            <TextBlock Text="An OpenEmu-style retro game library, ported to Linux."
+                                       FontSize="12" FontFamily="{DynamicResource PrimaryFont}"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,24"/>
+
+                            <TextBlock Text="Installed Version" FontSize="11" FontWeight="SemiBold"
+                                       FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,4"/>
+                            <TextBlock Name="AboutInstalledVersionText" Text="v0.0.0" FontSize="14"
+                                       FontFamily="monospace" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,0,0,16"/>
+
+                            <TextBlock Text="Latest Release" FontSize="11" FontWeight="SemiBold"
+                                       FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,4"/>
+                            <TextBlock Name="AboutLatestVersionText" Text="Checking…" FontSize="14"
+                                       FontFamily="monospace" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,0,0,4"/>
+                            <TextBlock Name="AboutUpdateStatusText" FontSize="11" FontFamily="{DynamicResource PrimaryFont}"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,16" TextWrapping="Wrap"/>
+
+                            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
+                                <Button Name="AboutOpenLatestReleaseBtn" Content="Open Latest Release" Theme="{StaticResource PrefActionBtn}" IsVisible="False"/>
+                                <Button Name="AboutOpenRepoBtn" Content="View on GitHub" Theme="{StaticResource PrefSecondaryBtn}"/>
+                                <Button Name="AboutRecheckBtn" Content="Check Again" Theme="{StaticResource PrefSecondaryBtn}"/>
+                            </StackPanel>
+
+                            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,16,0,0">
+                                <Button Name="AboutLicenseBtn" Content="License (GPL-3.0)" Theme="{StaticResource PrefSecondaryBtn}"/>
+                                <Button Name="AboutCoresBtn" Content="Cores &amp; Licenses" Theme="{StaticResource PrefSecondaryBtn}"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
             </Grid>
         </Grid>
     </Border>

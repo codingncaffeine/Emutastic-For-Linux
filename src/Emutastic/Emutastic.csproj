@@ -8,6 +8,8 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Mirror the upstream release line; surfaced in Preferences → About. -->
+    <Version>1.7.6</Version>
   </PropertyGroup>
 
   <ItemGroup>

@@ -1,4 +1,7 @@
+using System;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
@@ -54,7 +57,17 @@ public partial class PreferencesWindow : Window
             rb.IsCheckedChanged += (_, _) => { if (rb.IsChecked == true) ShowPanel(panel); };
             FillPlaceholder(panel, name);
         }
+
+        WireAbout();
     }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _windowCts.Cancel();
+        base.OnClosed(e);
+    }
+
+    private readonly CancellationTokenSource _windowCts = new();
 
     private void ShowPanel(string target)
     {
@@ -63,6 +76,7 @@ public partial class PreferencesWindow : Window
             var grid = this.FindControl<Grid>(panel);
             if (grid != null) grid.IsVisible = panel == target;
         }
+        if (target == "PanelAbout") LoadAboutSettings();
     }
 
     // Temporary placeholder until the panel's sub-splinter fills it.
@@ -79,5 +93,124 @@ public partial class PreferencesWindow : Window
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
         });
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  U5 — About panel (port of upstream; GitHub release check inlined, since
+    //  PreferencesCache isn't ported — a self-contained HttpClient GET + 3s budget)
+    // ════════════════════════════════════════════════════════════════════════
+
+    private const string GitHubRepoUrl     = "https://github.com/codingncaffeine/Emutastic-For-Linux";
+    private const string GitHubLatestApi   = "https://api.github.com/repos/codingncaffeine/Emutastic-For-Linux/releases/latest";
+    private const string GitHubReleasesUrl = "https://github.com/codingncaffeine/Emutastic-For-Linux/releases";
+
+    private static readonly System.Net.Http.HttpClient _aboutHttp = CreateAboutHttp();
+    private string? _latestReleaseUrl;
+    private bool _aboutLoaded;
+
+    private static System.Net.Http.HttpClient CreateAboutHttp()
+    {
+        var http = new System.Net.Http.HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("Emutastic/about-tab");   // GitHub rejects no-UA requests
+        http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+        return http;
+    }
+
+    private void WireAbout()
+    {
+        this.FindControl<Button>("AboutOpenRepoBtn")!.Click += (_, _) => OpenUrl(GitHubRepoUrl);
+        this.FindControl<Button>("AboutOpenLatestReleaseBtn")!.Click += (_, _) => OpenUrl(_latestReleaseUrl ?? GitHubReleasesUrl);
+        this.FindControl<Button>("AboutRecheckBtn")!.Click += (_, _) => _ = CheckLatestReleaseAsync();
+        this.FindControl<Button>("AboutLicenseBtn")!.Click += (_, _) => OpenUrl(GitHubRepoUrl + "/blob/main/LICENSE");
+        this.FindControl<Button>("AboutCoresBtn")!.Click += (_, _) => OpenUrl(GitHubRepoUrl + "#credits");
+    }
+
+    private void LoadAboutSettings()
+    {
+        var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+        this.FindControl<TextBlock>("AboutInstalledVersionText")!.Text =
+            version != null ? $"v{version.Major}.{version.Minor}.{version.Build}" : "v?.?.?";
+
+        if (_aboutLoaded) return;   // one fetch per window lifetime; "Check Again" forces a re-fetch
+        _aboutLoaded = true;
+        _ = CheckLatestReleaseAsync();
+    }
+
+    private async Task CheckLatestReleaseAsync()
+    {
+        var latest = this.FindControl<TextBlock>("AboutLatestVersionText")!;
+        var status = this.FindControl<TextBlock>("AboutUpdateStatusText")!;
+        var openLatest = this.FindControl<Button>("AboutOpenLatestReleaseBtn")!;
+        var recheck = this.FindControl<Button>("AboutRecheckBtn")!;
+
+        latest.Text = "Checking…";
+        status.Text = "";
+        openLatest.IsVisible = false;
+        recheck.IsEnabled = false;
+
+        try
+        {
+            using var budget = CancellationTokenSource.CreateLinkedTokenSource(_windowCts.Token);
+            budget.CancelAfter(TimeSpan.FromSeconds(5));
+            string json = await _aboutHttp.GetStringAsync(GitHubLatestApi, budget.Token).ConfigureAwait(true);
+
+            var obj = Newtonsoft.Json.Linq.JObject.Parse(json);
+            string tag = obj.Value<string>("tag_name") ?? "";
+            _latestReleaseUrl = obj.Value<string>("html_url");
+            if (string.IsNullOrWhiteSpace(_latestReleaseUrl)) _latestReleaseUrl = GitHubReleasesUrl;
+
+            latest.Text = string.IsNullOrWhiteSpace(tag) ? "—" : tag;
+
+            if (TryCompareVersions(tag, out int cmp))
+            {
+                if (cmp > 0)
+                {
+                    status.Text = "A newer release is available.";
+                    status.Foreground = this.TryFindResource("AccentBrush", out var a) ? a as IBrush : Brushes.OrangeRed;
+                    openLatest.IsVisible = true;
+                }
+                else if (cmp < 0)
+                    status.Text = "Your installed version is newer than the latest release (development build).";
+                else
+                    status.Text = "You're running the latest release.";
+            }
+            else
+            {
+                status.Text = "Could not compare versions — open the release on GitHub for details.";
+                openLatest.IsVisible = true;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            latest.Text = "—";
+            status.Text = "Network request timed out. Try again later.";
+        }
+        catch (Exception ex)
+        {
+            latest.Text = "—";
+            status.Text = $"Could not check for updates: {ex.Message}";
+        }
+        finally
+        {
+            recheck.IsEnabled = true;
+        }
+    }
+
+    // Compare installed (assembly) version against a GitHub tag like "v1.7.6".
+    // >0 remote newer · <0 local newer · 0 equal. False when either side is unparseable.
+    private static bool TryCompareVersions(string remoteTag, out int comparison)
+    {
+        comparison = 0;
+        if (!Version.TryParse(remoteTag.TrimStart('v', 'V').Trim(), out var remote)) return false;
+        var local = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+        if (local == null) return false;
+        comparison = new Version(remote.Major, remote.Minor, remote.Build)
+            .CompareTo(new Version(local.Major, local.Minor, local.Build));
+        return true;
+    }
+
+    private static void OpenUrl(string url)
+    {
+        try { System.Diagnostics.Process.Start("xdg-open", url); } catch { }
     }
 }
