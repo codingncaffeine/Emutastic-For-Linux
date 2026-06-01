@@ -704,7 +704,9 @@ public partial class PreferencesWindow : Window
         this.FindControl<Button>("ResetHotkeyBtn")!.Click       += (_, _) => SetScreenshotHotkey("");
         this.FindControl<TextBox>("ScreenshotHotkeyBox")!.KeyDown += (_, e) =>
         {
-            if (e.Key is Key.Tab or Key.Escape) return;
+            // Ignore navigation keys and bare modifiers — they're unusable as a standalone hotkey.
+            if (e.Key is Key.Tab or Key.Escape or Key.LeftCtrl or Key.RightCtrl or Key.LeftShift
+                or Key.RightShift or Key.LeftAlt or Key.RightAlt or Key.LWin or Key.RWin) return;
             SetScreenshotHotkey(e.Key.ToString());
             e.Handled = true;
         };
@@ -862,9 +864,11 @@ public partial class PreferencesWindow : Window
         string src = App.Configuration?.GetUserPreferences().BackupFolder ?? "";
         if (string.IsNullOrEmpty(src)) return;
         var status = this.FindControl<TextBlock>("BackupFolderStatusText")!;
-        bool hasDb = System.IO.File.Exists(System.IO.Path.Combine(src, "library.db"));
-        bool hasSaves = System.IO.Directory.Exists(System.IO.Path.Combine(src, "BatterySaves"));
-        bool hasStates = System.IO.Directory.Exists(System.IO.Path.Combine(src, "Save States"));
+        // Stat the (possibly removable/network) backup path off the UI thread.
+        var (hasDb, hasSaves, hasStates) = await Task.Run(() => (
+            System.IO.File.Exists(System.IO.Path.Combine(src, "library.db")),
+            System.IO.Directory.Exists(System.IO.Path.Combine(src, "BatterySaves")),
+            System.IO.Directory.Exists(System.IO.Path.Combine(src, "Save States"))));
         if (!hasDb && !hasSaves && !hasStates) { status.Text = "No backup data found in that folder."; return; }
 
         var parts = new System.Collections.Generic.List<string>();
