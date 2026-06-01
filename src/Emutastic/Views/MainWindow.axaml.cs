@@ -905,6 +905,10 @@ public partial class MainWindow : Window
 
         _importer.StatusChanged += msg => Dispatcher.UIThread.Post(() =>
         {
+            // Route through SetStatus (notification path) so it stays visible during the late
+            // artwork-download phase — those tasks fire StatusChanged AFTER the queue drains sets
+            // IsImporting false, so ImportStatusText alone would be masked/hidden (matches upstream).
+            _vm.SetStatus(msg);
             _vm.IsImporting = _importer!.IsImporting;
             _vm.ImportStatusText = msg;
         });
@@ -913,9 +917,16 @@ public partial class MainWindow : Window
         {
             if (total == 0) return;
             _vm.IsImporting = _importer!.IsImporting;
-            if (current >= total) { _vm.ImportProgressPercent = 100; return; }
+            if (current >= total)
+            {
+                _vm.SetStatus("Import complete", autoClear: true);
+                _vm.ImportProgressPercent = 100;
+                return;
+            }
             int pct = (int)(current / (double)total * 100);
-            _vm.ImportStatusText = $"Importing… {pct}%  ({current} of {total})";
+            string headline = $"Importing… {pct}%  ({current} of {total})";
+            _vm.SetStatus(headline);
+            _vm.ImportStatusText = headline;
             _vm.ImportProgressPercent = pct;
         });
 
