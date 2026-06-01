@@ -93,6 +93,7 @@ public partial class PreferencesWindow : Window
         if (target == "PanelMedia") LoadMediaSettings();
         if (target == "PanelBackups") LoadBackupsSettings();
         if (target == "PanelSystemFiles") BuildBiosPanel();
+        if (target == "PanelCores") BuildCoresPanel();
     }
 
     // Temporary placeholder until the panel's sub-splinter fills it.
@@ -1237,6 +1238,206 @@ public partial class PreferencesWindow : Window
         System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(destPath)!);
         using var dest = System.IO.File.Create(destPath);
         source.CopyTo(dest);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  U5 P5 — Cores panel (download accordion). Revert/backup + per-console
+    //  CoreSpecificOptions overrides are a noted follow-up (P5b).
+    // ════════════════════════════════════════════════════════════════════════
+
+    private static readonly (string Category, string[] Consoles)[] ConsoleCategories =
+    {
+        ("Nintendo", new[] { "NES", "FDS", "SNES", "N64", "GameCube", "GB", "GBC", "GBA", "NDS", "3DS", "VirtualBoy" }),
+        ("Sega",     new[] { "Genesis", "SegaCD", "Sega32X", "Saturn", "SMS", "GameGear", "SG1000", "Dreamcast" }),
+        ("Sony",     new[] { "PS1", "PSP" }),
+        ("NEC",      new[] { "TG16", "TGCD" }),
+        ("Atari",    new[] { "Atari2600", "Atari7800", "Jaguar" }),
+        ("Arcade",   new[] { "Arcade", "NeoGeo", "NeoCD" }),
+        ("Other",    new[] { "NGP", "ColecoVision", "Vectrex", "3DO", "CDi" }),
+    };
+
+    private readonly Services.CoreDownloadService _coreDownloader = new();
+    private readonly Dictionary<string, TextBlock> _coreUpdatePills = new();
+
+    private async void BuildCoresPanel()
+    {
+        var panel = this.FindControl<StackPanel>("CoresListPanel")!;
+        panel.Children.Clear();
+        _coreUpdatePills.Clear();
+        panel.Children.Add(new TextBlock { Text = "Scanning…", FontFamily = Font("PrimaryFont"), FontSize = 12, Foreground = Brush("TextMutedBrush"), Margin = new Thickness(2, 8, 0, 0) });
+
+        string coresFolder = AppPaths.GetCoresFolder();
+        var installed = await Task.Run(() =>
+        {
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try { foreach (var f in System.IO.Directory.EnumerateFiles(coresFolder, "*.so")) set.Add(System.IO.Path.GetFileName(f)); } catch { }
+            return set;
+        });
+        if (!this.FindControl<Grid>("PanelCores")!.IsVisible) return;
+        bool IsInstalled(string dll) => installed.Contains(dll);
+        panel.Children.Clear();
+
+        // Download All Recommended + Update All row.
+        var recommended = Services.CoreDownloadService.Catalog.Where(c => c.Recommended).ToList();
+        int recInstalled = recommended.Count(c => IsInstalled(c.FileName));
+        var dlAllBtn = new Button { Content = "Download All Recommended", Theme = (Avalonia.Styling.ControlTheme?)(this.TryFindResource("PrefActionBtn", out var t1) ? t1 : null), VerticalAlignment = VerticalAlignment.Center };
+        var dlAllSummary = new TextBlock { Text = $"{recInstalled} of {recommended.Count} installed", FontSize = 11, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextMutedBrush"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0) };
+        var updateAllBtn = new Button { Content = "Update All", Theme = (Avalonia.Styling.ControlTheme?)(this.TryFindResource("PrefActionBtn", out var t2) ? t2 : null), IsVisible = false, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
+        var topRow = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), Margin = new Thickness(0, 0, 0, 12) };
+        Grid.SetColumn(dlAllBtn, 0); Grid.SetColumn(dlAllSummary, 1); Grid.SetColumn(updateAllBtn, 2);
+        topRow.Children.Add(dlAllBtn); topRow.Children.Add(dlAllSummary); topRow.Children.Add(updateAllBtn);
+        panel.Children.Add(topRow);
+
+        dlAllBtn.Click += async (_, _) =>
+        {
+            dlAllBtn.IsEnabled = false; dlAllBtn.Content = "Downloading…";
+            foreach (var entry in recommended.Where(c => !IsInstalled(c.FileName)))
+            {
+                try { await _coreDownloader.DownloadAsync(entry, coresFolder, new Progress<int>()); } catch { }
+            }
+            dlAllBtn.IsEnabled = true; dlAllBtn.Content = "Download All Recommended";
+            BuildCoresPanel();
+        };
+
+        // Category → Console → Core accordion.
+        var prefs = App.Configuration?.GetCorePreferences() ?? new Configuration.CorePreferences();
+        foreach (var (category, consoles) in ConsoleCategories)
+        {
+            var catConsoles = consoles.Where(c => Services.CoreManager.ConsoleCoreMap.ContainsKey(c)).ToList();
+            if (catConsoles.Count == 0) continue;
+            int catInstalled = 0, catTotal = 0;
+            foreach (var c in catConsoles) { var cs = Services.CoreManager.ConsoleCoreMap[c]; catTotal += cs.Length; catInstalled += cs.Count(IsInstalled); }
+
+            var catBody = new StackPanel { IsVisible = false };
+            panel.Children.Add(MakeAccordionHeader(category, $"{catConsoles.Count} {(catConsoles.Count == 1 ? "system" : "systems")}", catInstalled, catTotal, catBody, 14));
+            panel.Children.Add(catBody);
+
+            foreach (var consoleName in catConsoles)
+            {
+                var candidates = Services.CoreManager.ConsoleCoreMap[consoleName];
+                int conInstalled = candidates.Count(IsInstalled);
+                string? savedPref = prefs.PreferredCores.TryGetValue(consoleName, out var pp) ? pp : null;
+                string activeDll = candidates.FirstOrDefault(d => d == savedPref && IsInstalled(d)) ?? candidates.FirstOrDefault(IsInstalled) ?? "";
+
+                var conBody = new StackPanel { IsVisible = false, Margin = new Thickness(12, 0, 0, 4) };
+                catBody.Children.Add(MakeAccordionHeader(consoleName, IsInstalled(activeDll) ? FormatCoreName(activeDll) : "Not installed", conInstalled, candidates.Length, conBody, 13));
+                catBody.Children.Add(conBody);
+
+                foreach (var dll in candidates)
+                    conBody.Children.Add(BuildCoreRow(dll, consoleName, coresFolder, IsInstalled(dll), dll == activeDll && IsInstalled(dll), candidates.Count(IsInstalled) > 1));
+            }
+        }
+
+        // Reveal "update available" pills + Update All once the staleness check returns.
+        _ = DecorateCoreUpdatesAsync(coresFolder, updateAllBtn);
+    }
+
+    private Control BuildCoreRow(string dll, string consoleName, string coresFolder, bool installed, bool preferred, bool canChoosePreferred)
+    {
+        var entry = Services.CoreDownloadService.Catalog.FirstOrDefault(c => c.FileName.Equals(dll, StringComparison.OrdinalIgnoreCase));
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), Margin = new Thickness(12, 4, 0, 0) };
+
+        // Preferred indicator (● preferred / ○ other installed); click to set when >1 installed.
+        var pref = new TextBlock { Text = installed ? (preferred ? "●" : "○") : " ", FontSize = 10, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0),
+            Foreground = preferred ? new SolidColorBrush(Color.Parse("#30D158")) : Brush("TextMutedBrush"),
+            Cursor = new Cursor(installed && canChoosePreferred ? StandardCursorType.Hand : StandardCursorType.Arrow) };
+        if (installed && canChoosePreferred)
+        {
+            ToolTip.SetTip(pref, "Set as preferred core");
+            pref.PointerPressed += (_, _) =>
+            {
+                var cp = App.Configuration!.GetCorePreferences();
+                cp.PreferredCores[consoleName] = dll;
+                App.Configuration!.SetCorePreferences(cp); App.Configuration!.ScheduleSave();
+                BuildCoresPanel();
+            };
+        }
+        Grid.SetColumn(pref, 0);
+
+        var name = new TextBlock { Text = FormatCoreName(dll), FontSize = 12, FontFamily = Font("PrimaryFont"),
+            FontWeight = installed ? FontWeight.SemiBold : FontWeight.Normal, Foreground = Brush(installed ? "TextPrimaryBrush" : "TextSecondaryBrush"),
+            VerticalAlignment = VerticalAlignment.Center };
+        ToolTip.SetTip(name, dll);
+        Grid.SetColumn(name, 1);
+
+        var btnPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
+        if (entry != null)
+        {
+            var pill = new TextBlock { Text = "Update available", FontSize = 10, FontWeight = FontWeight.SemiBold, Foreground = Brush("AccentBrush"), VerticalAlignment = VerticalAlignment.Center, IsVisible = false };
+            if (installed) _coreUpdatePills[dll] = pill;
+            var bar = new ProgressBar { Height = 3, Width = 60, Minimum = 0, Maximum = 100, IsVisible = false, VerticalAlignment = VerticalAlignment.Center };
+            var statusTb = new TextBlock { FontSize = 10, Foreground = Brush("TextMutedBrush"), IsVisible = false, VerticalAlignment = VerticalAlignment.Center };
+            var dlBtn = new Button { Content = installed ? "⟳" : "↓", Theme = (Avalonia.Styling.ControlTheme?)(this.TryFindResource("PrefSecondaryBtn", out var t) ? t : null), Width = 30, Height = 26, Padding = new Thickness(0), VerticalAlignment = VerticalAlignment.Center };
+            ToolTip.SetTip(dlBtn, installed ? "Re-download" : "Download");
+            dlBtn.Click += async (_, _) => await DownloadCoreAsync(entry, coresFolder, bar, statusTb, dlBtn);
+            btnPanel.Children.Add(pill); btnPanel.Children.Add(bar); btnPanel.Children.Add(statusTb); btnPanel.Children.Add(dlBtn);
+        }
+        else
+        {
+            btnPanel.Children.Add(new TextBlock { Text = installed ? "installed" : "—", FontSize = 10, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextMutedBrush"), VerticalAlignment = VerticalAlignment.Center });
+        }
+        Grid.SetColumn(btnPanel, 2);
+
+        row.Children.Add(pref); row.Children.Add(name); row.Children.Add(btnPanel);
+        return row;
+    }
+
+    private async Task DownloadCoreAsync(Services.CoreEntry entry, string coresFolder, ProgressBar bar, TextBlock statusTb, Button dlBtn)
+    {
+        dlBtn.IsEnabled = false; bar.IsVisible = true; statusTb.IsVisible = true; statusTb.Text = "…"; bar.Value = 0;
+        try
+        {
+            await _coreDownloader.DownloadAsync(entry, coresFolder, new Progress<int>(v => bar.Value = v));
+            statusTb.Text = "Done"; bar.IsVisible = false;
+            BuildCoresPanel(); // rescan + repaint (re-download / install reflected)
+        }
+        catch (Exception ex)
+        {
+            statusTb.Text = $"Error: {ex.Message}"; dlBtn.IsEnabled = true;
+            System.Diagnostics.Trace.WriteLine($"[CoreDownload] FAILED {entry.FileName}: {ex.Message}");
+        }
+    }
+
+    private async Task DecorateCoreUpdatesAsync(string coresFolder, Button updateAllBtn)
+    {
+        try
+        {
+            var updates = await _coreDownloader.CheckAllForUpdatesAsync(coresFolder);
+            if (!this.FindControl<Grid>("PanelCores")!.IsVisible || updates.Count == 0) return;
+            foreach (var e in updates)
+                if (_coreUpdatePills.TryGetValue(e.FileName, out var pill)) pill.IsVisible = true;
+            updateAllBtn.IsVisible = true;
+            updateAllBtn.Click += async (_, _) =>
+            {
+                updateAllBtn.IsEnabled = false; updateAllBtn.Content = "Updating…";
+                foreach (var e in updates) { try { await _coreDownloader.DownloadAsync(e, coresFolder, new Progress<int>()); } catch { } }
+                BuildCoresPanel();
+            };
+        }
+        catch { /* update check is best-effort (offline, etc.) */ }
+    }
+
+    private static string FormatCoreName(string dllName)
+    {
+        string name = dllName.Replace("_libretro.so", "", StringComparison.OrdinalIgnoreCase).Replace("_libretro.dll", "", StringComparison.OrdinalIgnoreCase);
+        return name switch
+        {
+            "nestopia" => "Nestopia", "fceumm" => "FCE Ultra MM", "quicknes" => "QuickNES",
+            "snes9x" => "Snes9x", "snes9x2002" => "Snes9x 2002", "snes9x2005" => "Snes9x 2005",
+            "snes9x2005_plus" => "Snes9x 2005 Plus", "snes9x2010" => "Snes9x 2010", "bsnes" => "bsnes",
+            "parallel_n64" => "Parallel N64", "mupen64plus_next" => "Mupen64Plus-Next", "dolphin" => "Dolphin",
+            "mgba" => "mGBA", "gambatte" => "Gambatte", "sameboy" => "SameBoy", "desmume" => "DeSmuME",
+            "melonds" => "melonDS", "azahar" => "Azahar (3DS)", "mednafen_vb" => "Mednafen Virtual Boy",
+            "genesis_plus_gx" => "Genesis Plus GX", "picodrive" => "PicoDrive", "kronos" => "Kronos",
+            "mednafen_saturn" => "Mednafen Saturn", "yabause" => "Yabause", "mednafen_psx" => "Mednafen PSX (Beetle)",
+            "pcsx_rearmed" => "PCSX-ReARMed", "ppsspp" => "PPSSPP", "mednafen_pce" => "Mednafen PCE",
+            "mednafen_pce_fast" => "Mednafen PCE Fast", "mednafen_ngp" => "Mednafen Neo Geo Pocket",
+            "gearcoleco" => "GearColeco", "stella" => "Stella", "stella2014" => "Stella 2014", "stella2023" => "Stella 2023",
+            "prosystem" => "ProSystem", "flycast" => "Flycast (Dreamcast)", "virtualjaguar" => "Virtual Jaguar",
+            "bluemsx" => "blueMSX", "vecx" => "Vecx", "opera" => "Opera (3DO)", "same_cdi" => "SAME CDi",
+            "fbneo" => "FBNeo (Final Burn Neo)", "geolith" => "Geolith (Neo Geo)",
+            _ => name,
+        };
     }
 
     private IBrush? Brush(string key) => this.TryFindResource(key, out var v) ? v as IBrush : null;
