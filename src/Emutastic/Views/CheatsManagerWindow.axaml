@@ -1,0 +1,59 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Emutastic.Views.CheatsManagerWindow"
+        x:CompileBindings="False"
+        WindowDecorations="None" Background="Transparent" TransparencyLevelHint="Transparent"
+        CanResize="False" ShowInTaskbar="False"
+        Width="480" Height="560" WindowStartupLocation="CenterOwner">
+    <Window.Styles>
+        <!-- Row button: transparent, hover surface. -->
+        <Style Selector="Button.cheatRow">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="10,8"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="CornerRadius" Value="6"/>
+        </Style>
+        <Style Selector="Button.cheatRow:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource BgTertiaryBrush}"/>
+        </Style>
+    </Window.Styles>
+
+    <Border Background="{DynamicResource BgSecondaryBrush}" BorderBrush="{DynamicResource BorderNormalBrush}"
+            BorderThickness="1" CornerRadius="10">
+        <Grid Margin="24" RowDefinitions="Auto,Auto,Auto,*,Auto">
+            <TextBlock Grid.Row="0" Name="HeaderTitle" Text="Cheats" FontFamily="{DynamicResource PrimaryFont}"
+                       FontSize="15" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}"/>
+            <TextBlock Grid.Row="1" Name="HeaderSubtitle" FontFamily="{DynamicResource PrimaryFont}" FontSize="12"
+                       Foreground="{DynamicResource TextMutedBrush}" Margin="0,4,0,16"/>
+
+            <StackPanel Grid.Row="2" Orientation="Horizontal">
+                <Button Name="AddBtn" Classes="cheatRow">
+                    <TextBlock Text="＋  Add Cheat…" FontFamily="{DynamicResource PrimaryFont}"
+                               Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold"/>
+                </Button>
+                <Button Name="ImportBtn" Classes="cheatRow"
+                        ToolTip.Tip="Import cheats from the downloaded database (Preferences → Cores / Extras → DAT/cheats)">
+                    <TextBlock Text="⇩  Import from database…" FontFamily="{DynamicResource PrimaryFont}"
+                               Foreground="{DynamicResource TextSecondaryBrush}"/>
+                </Button>
+            </StackPanel>
+
+            <Border Grid.Row="3" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,1" Margin="0,8,0,8">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Name="CheatList" Margin="0,4,0,4"/>
+                </ScrollViewer>
+            </Border>
+
+            <Grid Grid.Row="4">
+                <TextBlock Name="EmptyHint" Text="No cheats yet. Click Add Cheat… to create one."
+                           FontFamily="{DynamicResource PrimaryFont}" FontSize="12" Foreground="{DynamicResource TextMutedBrush}"
+                           HorizontalAlignment="Left" VerticalAlignment="Center"/>
+                <Button Name="CloseBtn" Content="Close" HorizontalAlignment="Right"
+                        Theme="{StaticResource SecondaryButtonStyle}" Padding="16,8"/>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

@@ -1,0 +1,44 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Emutastic.Views.CheatEditWindow"
+        x:CompileBindings="False"
+        WindowDecorations="None" Background="Transparent" TransparencyLevelHint="Transparent"
+        CanResize="False" ShowInTaskbar="False"
+        Width="440" SizeToContent="Height" WindowStartupLocation="CenterOwner">
+    <Border Background="{DynamicResource BgSecondaryBrush}" BorderBrush="{DynamicResource BorderNormalBrush}"
+            BorderThickness="1" CornerRadius="10">
+        <StackPanel Margin="24">
+            <TextBlock Name="HeaderTitle" Text="Add Cheat" FontFamily="{DynamicResource PrimaryFont}" FontSize="15"
+                       FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,0,0,16"/>
+
+            <TextBlock Text="Title" FontFamily="{DynamicResource PrimaryFont}" FontSize="11"
+                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,4"/>
+            <TextBox Name="TitleBox" Background="{DynamicResource BgTertiaryBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}"
+                     BorderThickness="1" CornerRadius="6" Foreground="{DynamicResource TextPrimaryBrush}"
+                     CaretBrush="{DynamicResource AccentBrush}" FontFamily="{DynamicResource PrimaryFont}" FontSize="13"
+                     Padding="10,8" Margin="0,0,0,12"/>
+
+            <TextBlock Text="Code" FontFamily="{DynamicResource PrimaryFont}" FontSize="11"
+                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,4"/>
+            <TextBox Name="CodeBox" Background="{DynamicResource BgTertiaryBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}"
+                     BorderThickness="1" CornerRadius="6" Foreground="{DynamicResource TextPrimaryBrush}"
+                     CaretBrush="{DynamicResource AccentBrush}" FontFamily="monospace" FontSize="13"
+                     Padding="10,8" Margin="0,0,0,4" AcceptsReturn="True" TextWrapping="Wrap" Height="60"
+                     VerticalContentAlignment="Top" ScrollViewer.VerticalScrollBarVisibility="Auto"/>
+            <TextBlock Name="FormatHint" FontFamily="{DynamicResource PrimaryFont}" FontSize="11"
+                       Foreground="{DynamicResource TextMutedBrush}" TextWrapping="Wrap" Margin="0,0,0,14"/>
+
+            <CheckBox Name="EnabledCheck" Content="Enable now" Foreground="{DynamicResource TextPrimaryBrush}"
+                      FontFamily="{DynamicResource PrimaryFont}" Margin="0,0,0,18"/>
+
+            <Grid>
+                <Button Name="DeleteBtn" Content="Delete" HorizontalAlignment="Left" Theme="{StaticResource SecondaryButtonStyle}"
+                        Padding="14,6" IsVisible="False"/>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+                    <Button Name="CancelBtn" Content="Cancel" Theme="{StaticResource SecondaryButtonStyle}" Padding="16,8"/>
+                    <Button Name="SaveBtn" Content="Add Cheat" Theme="{StaticResource PlayButtonStyle}" Padding="16,8"/>
+                </StackPanel>
+            </Grid>
+        </StackPanel>
+    </Border>
+</Window>

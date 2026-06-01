@@ -767,7 +767,11 @@ public partial class MainWindow : Window
         // Deferred to their splinters (disabled stubs).
         items.Add(new MenuItem { Header = "📝  Notes", IsEnabled = false });           // U7
         items.Add(new MenuItem { Header = "📖  Manual", IsEnabled = false });          // U7
-        if (!game.HasPatch && RomPatcher.SupportedConsoles.Contains(game.Console))
+        // Cheats — only when the console's core supports them (upstream gate).
+        if (CoreManager.ConsoleCoreMap.TryGetValue(game.Console ?? "", out var cheatCores) && cheatCores.Length > 0
+            && CheatSupport.Lookup(cheatCores[0]).Level != CheatSupportLevel.NotSupported)
+            items.Add(MenuAction("🎮  Cheats…", () => new CheatsManagerWindow(game).Show(this)));
+        if (!game.HasPatch && RomPatcher.SupportedConsoles.Contains(game.Console ?? ""))
             items.Add(new MenuItem { Header = "🧩  Apply ROM Hack…", IsEnabled = false }); // later
 
         items.Add(MenuAction("📁  Show in Files", () =>
@@ -797,7 +801,7 @@ public partial class MainWindow : Window
             });
             string? src = files.Count > 0 ? files[0].TryGetLocalPath() : null;
             if (string.IsNullOrEmpty(src)) return;
-            string dest = System.IO.Path.Combine(AppPaths.GetFolder("Artwork", game.Console),
+            string dest = System.IO.Path.Combine(AppPaths.GetFolder("Artwork", game.Console ?? ""),
                 $"{game.RomHash}_custom{System.IO.Path.GetExtension(src)}");
             System.IO.File.Copy(src, dest, overwrite: true);
             _db!.UpdateCoverArt(game.Id, dest);

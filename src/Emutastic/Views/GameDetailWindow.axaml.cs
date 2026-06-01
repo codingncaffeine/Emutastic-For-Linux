@@ -412,10 +412,18 @@ public partial class GameDetailWindow : Window
         };
         menu.Items.Add(rename);
 
-        // Notes / Manual land in U7 (disabled stubs). Cheats (U6) needs the CheatSupport
-        // per-core gate to match upstream's show/hide, so it's omitted until that lands.
+        // Notes / Manual land in U7 (disabled stubs).
         menu.Items.Add(new MenuItem { Header = "Notes…", IsEnabled = false });
         menu.Items.Add(new MenuItem { Header = "Manual…", IsEnabled = false });
+
+        // Cheats — shown only when this console's core actually supports cheats (upstream gate).
+        if (CoreManager.ConsoleCoreMap.TryGetValue(_game.Console ?? "", out var cores) && cores.Length > 0
+            && CheatSupport.Lookup(cores[0]).Level != CheatSupportLevel.NotSupported)
+        {
+            var cheats = new MenuItem { Header = "Cheats…" };
+            cheats.Click += (_, _) => new CheatsManagerWindow(_game).Show(this);
+            menu.Items.Add(cheats);
+        }
 
         menu.Items.Add(new Separator());
 
