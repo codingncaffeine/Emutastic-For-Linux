@@ -156,7 +156,20 @@ namespace Emutastic.Services
                 Log($"Login response ({(int)response.StatusCode}): {json.Length} bytes");
 
                 if (!response.IsSuccessStatusCode)
-                    return ($"Server returned {(int)response.StatusCode}", 1);
+                {
+                    // ScreenScraper returns the reason as plain text (often with a 403), e.g.
+                    // "Erreur de login : Vérifier les identifiants utilisateurs !". Surface it
+                    // so the user knows it's their account login, not a server fault.
+                    string body = json.Trim();
+                    string reason =
+                        body.Contains("identifiant", StringComparison.OrdinalIgnoreCase) ? "Incorrect ScreenScraper username or password. (Register a free account at screenscraper.fr.)"
+                        : body.Contains("ferm", StringComparison.OrdinalIgnoreCase)        ? "The ScreenScraper API is temporarily closed — try again later."
+                        : body.Contains("quota", StringComparison.OrdinalIgnoreCase)       ? "ScreenScraper daily quota reached — try again later."
+                        : (body.Length is > 0 and < 200)                                   ? body
+                        : $"ScreenScraper returned HTTP {(int)response.StatusCode}.";
+                    Log($"Login failed ({(int)response.StatusCode}): {reason}");
+                    return (reason, 1);
+                }
 
                 var doc = JsonNode.Parse(json);
 
