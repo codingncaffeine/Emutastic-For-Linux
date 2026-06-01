@@ -483,6 +483,34 @@
         </Style>
     </ControlTheme>
 
+    <!-- ── DARK COMBOBOX (Preferences panels) ──
+         Recolors the Fluent ComboBox dark to match the app chrome (the dropdown
+         popup already follows the Dark theme variant). Deferred from M4a; folded
+         in at U5 since every Preferences panel uses it. -->
+    <ControlTheme x:Key="DarkComboBox" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+        <Setter Property="Background" Value="{DynamicResource BgTertiaryBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderNormalBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="6"/>
+        <Setter Property="FontFamily" Value="{DynamicResource PrimaryFont}"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="MinHeight" Value="32"/>
+        <Setter Property="Padding" Value="10,0"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Style Selector="^ /template/ Border#Background">
+            <Setter Property="Background" Value="{DynamicResource BgTertiaryBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderNormalBrush}"/>
+        </Style>
+        <Style Selector="^:pointerover /template/ Border#Background">
+            <Setter Property="Background" Value="{DynamicResource BgQuaternaryBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderNormalBrush}"/>
+        </Style>
+        <Style Selector="^:focus /template/ Border#Background">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+        </Style>
+    </ControlTheme>
+
     <!-- ── TEXT STYLES (applied via Theme=) ── -->
     <ControlTheme x:Key="LabelMuted" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{DynamicResource PrimaryFont}"/>

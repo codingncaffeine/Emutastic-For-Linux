@@ -154,7 +154,36 @@
                 <Grid Name="PanelCores" IsVisible="False"/>
                 <Grid Name="PanelCoreOptions" IsVisible="False"/>
                 <Grid Name="PanelLibrary" IsVisible="False"/>
-                <Grid Name="PanelTheme" IsVisible="False"/>
+                <Grid Name="PanelTheme" IsVisible="False">
+                    <ScrollViewer Margin="32,24,32,24" VerticalScrollBarVisibility="Auto">
+                        <StackPanel MaxWidth="560" HorizontalAlignment="Left">
+                            <TextBlock Text="THEME" Theme="{StaticResource PrefLabel}"/>
+                            <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,0,0,16"/>
+
+                            <TextBlock Text="Color theme" FontSize="13" FontFamily="{DynamicResource PrimaryFont}"
+                                       Foreground="{DynamicResource TextPrimaryBrush}"/>
+                            <TextBlock Text="Choose a color theme for the entire app. Changes take effect immediately."
+                                       FontSize="11" FontFamily="{DynamicResource PrimaryFont}"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,2,0,8" TextWrapping="Wrap"/>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <ComboBox Name="ThemeCombo" Width="220" Theme="{StaticResource DarkComboBox}"/>
+                                <Button Name="CustomizeThemeBtn" Content="Customize…" Theme="{StaticResource PrefSecondaryBtn}"
+                                        Padding="10,4" FontSize="12" IsEnabled="False" ToolTip.Tip="Theme editor — coming soon"/>
+                            </StackPanel>
+
+                            <TextBlock Text="INSTALLED THEMES" Theme="{StaticResource PrefLabel}" Margin="0,22,0,4"/>
+                            <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,0,0,12"/>
+                            <WrapPanel Name="InstalledThemesPanel" Margin="0,0,0,8"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                <Button Name="ImportThemeBtn" Content="Import Theme…" Theme="{StaticResource PrefSecondaryBtn}"
+                                        Padding="10,4" FontSize="12"/>
+                            </StackPanel>
+
+                            <TextBlock Name="ThemeStatusText" FontSize="11" FontFamily="{DynamicResource PrimaryFont}"
+                                       Foreground="{DynamicResource TextMutedBrush}" Margin="0,12,0,0" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
                 <Grid Name="PanelSnaps" IsVisible="False"/>
                 <Grid Name="PanelAchievements" IsVisible="False"/>
                 <Grid Name="PanelMedia" IsVisible="False"/>

@@ -2,10 +2,12 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 
 namespace Emutastic.Views;
 
@@ -59,6 +61,7 @@ public partial class PreferencesWindow : Window
         }
 
         WireAbout();
+        WireTheme();
     }
 
     protected override void OnClosed(EventArgs e)
@@ -77,6 +80,7 @@ public partial class PreferencesWindow : Window
             if (grid != null) grid.IsVisible = panel == target;
         }
         if (target == "PanelAbout") LoadAboutSettings();
+        if (target == "PanelTheme") LoadThemeSettings();
     }
 
     // Temporary placeholder until the panel's sub-splinter fills it.
@@ -212,5 +216,124 @@ public partial class PreferencesWindow : Window
     private static void OpenUrl(string url)
     {
         try { System.Diagnostics.Process.Start("xdg-open", url); } catch { }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  U5 — Theme panel (selector + live apply + swatches + .emutheme import).
+    //  Background-image controls land in the next increment.
+    // ════════════════════════════════════════════════════════════════════════
+
+    private bool _themePopulated;
+    private bool _suppressThemeChange;
+
+    private void WireTheme()
+    {
+        this.FindControl<ComboBox>("ThemeCombo")!.SelectionChanged += (_, _) =>
+        {
+            if (_suppressThemeChange) return;
+            if (this.FindControl<ComboBox>("ThemeCombo")!.SelectedItem is ComboBoxItem { Tag: string id })
+                ApplyTheme(id);
+        };
+        this.FindControl<Button>("ImportThemeBtn")!.Click += (_, _) => _ = ImportThemeAsync();
+    }
+
+    private void LoadThemeSettings()
+    {
+        var combo = this.FindControl<ComboBox>("ThemeCombo")!;
+        string activeId = Services.ThemeService.Instance.ActiveThemeId;
+
+        if (!_themePopulated)
+        {
+            _themePopulated = true;
+            _suppressThemeChange = true;
+            combo.Items.Clear();
+            foreach (var (id, name) in Services.ThemeService.Instance.GetAvailableThemes())
+                combo.Items.Add(new ComboBoxItem { Content = name, Tag = id });
+            _suppressThemeChange = false;
+        }
+
+        // Reflect the active theme in the combo without re-applying.
+        _suppressThemeChange = true;
+        combo.SelectedItem = combo.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string?)i.Tag == activeId);
+        _suppressThemeChange = false;
+
+        BuildThemeSwatches(activeId);
+    }
+
+    private void ApplyTheme(string id)
+    {
+        Services.ThemeService.Instance.LoadAndApplyTheme(id);   // pushes colors into Application.Resources (live)
+        var cfg = App.Configuration?.GetThemeConfiguration();
+        if (cfg != null) { cfg.ActiveThemeId = id; App.Configuration?.SetThemeConfiguration(cfg); }
+        BuildThemeSwatches(id);
+    }
+
+    private void BuildThemeSwatches(string activeId)
+    {
+        var panel = this.FindControl<WrapPanel>("InstalledThemesPanel");
+        if (panel == null) return;
+        panel.Children.Clear();
+
+        foreach (var (id, name) in Services.ThemeService.Instance.GetAvailableThemes())
+        {
+            var colors = Services.ThemeService.Instance.GetColorsForTheme(id);
+            bool active = id == activeId;
+
+            var card = new Border
+            {
+                Width = 132, Height = 76, Margin = new Thickness(0, 0, 10, 10), CornerRadius = new CornerRadius(8),
+                Background = ParseBrush(colors.BgPrimary, "#0F0F10"),
+                BorderBrush = active ? Brush("AccentBrush") : Brush("BorderNormalBrush"),
+                BorderThickness = new Thickness(active ? 2 : 1),
+                Cursor = new Cursor(StandardCursorType.Hand),
+            };
+            var stack = new StackPanel { Margin = new Thickness(10) };
+            // Three color chips previewing the palette.
+            var chips = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Margin = new Thickness(0, 0, 0, 8) };
+            foreach (var hex in new[] { colors.Accent, colors.BgTertiary, colors.TextPrimary })
+                chips.Children.Add(new Border { Width = 16, Height = 16, CornerRadius = new CornerRadius(3), Background = ParseBrush(hex, "#888888") });
+            stack.Children.Add(chips);
+            stack.Children.Add(new TextBlock
+            {
+                Text = name, FontFamily = Font("PrimaryFont"), FontSize = 12, FontWeight = FontWeight.SemiBold,
+                Foreground = ParseBrush(colors.TextPrimary, "#F0F0F0"),
+            });
+            card.Child = stack;
+            card.PointerPressed += (_, _) =>
+            {
+                var combo = this.FindControl<ComboBox>("ThemeCombo")!;
+                _suppressThemeChange = true;
+                combo.SelectedItem = combo.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string?)i.Tag == id);
+                _suppressThemeChange = false;
+                ApplyTheme(id);
+            };
+            panel.Children.Add(card);
+        }
+    }
+
+    private async Task ImportThemeAsync()
+    {
+        var status = this.FindControl<TextBlock>("ThemeStatusText")!;
+        var files = await StorageProvider.OpenFilePickerAsync(new Avalonia.Platform.Storage.FilePickerOpenOptions
+        {
+            Title = "Import Theme",
+            AllowMultiple = false,
+            FileTypeFilter = new[] { new Avalonia.Platform.Storage.FilePickerFileType("Emutastic Theme") { Patterns = new[] { "*.emutheme" } } },
+        });
+        string? path = files.Count > 0 ? files[0].TryGetLocalPath() : null;
+        if (string.IsNullOrEmpty(path)) return;
+
+        string? id = Services.ThemeService.Instance.InstallTheme(path);
+        status.Text = id != null
+            ? $"Imported theme. Select it from the dropdown to apply."
+            : "Could not import that theme file.";
+    }
+
+    private IBrush? Brush(string key) => this.TryFindResource(key, out var v) ? v as IBrush : null;
+    private FontFamily Font(string key) => this.TryFindResource(key, out var v) && v is FontFamily f ? f : FontFamily.Default;
+    private static IBrush ParseBrush(string? hex, string fallback)
+    {
+        try { return new SolidColorBrush(Color.Parse(string.IsNullOrWhiteSpace(hex) ? fallback : hex)); }
+        catch { return new SolidColorBrush(Color.Parse(fallback)); }
     }
 }
