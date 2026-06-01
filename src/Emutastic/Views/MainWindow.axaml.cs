@@ -38,6 +38,7 @@ public partial class MainWindow : Window
         InitializeComponent();
 
         Platform.WindowResize.Enable(this);   // edge/corner resize for the borderless window
+        Activated += OnMainActivated;          // click back on the app → dismiss the game-detail card
 
         this.FindControl<Button>("MinimizeButton")!.Click += (_, _) => WindowState = WindowState.Minimized;
         this.FindControl<Button>("MaximizeButton")!.Click += (_, _) => ToggleMaximize();
@@ -361,6 +362,7 @@ public partial class MainWindow : Window
 
     // ── Game detail card (U4) ───────────────────────────────────────────────
     private GameDetailWindow? _openDetailWindow;
+    private DateTime _detailOpenedAt;
 
     // Single-click a box-art card → open its detail window (upstream UX). Shift+click
     // is reserved for range-select, so it never opens the card.
@@ -433,7 +435,18 @@ public partial class MainWindow : Window
                 if (_vm != null) await _vm.FilterGamesAsync();
             }
         };
+        _detailOpenedAt = DateTime.Now;
         win.Show(this);
+    }
+
+    // Clicking back on the main window dismisses an open game-detail card (light dismiss). The
+    // small grace window avoids a spurious close from the activation flicker when the card opens.
+    // Child dialogs opened FROM the card (Notes/Cheats/Rename) reactivate the card, not the main
+    // window, so they don't trigger this.
+    private void OnMainActivated(object? sender, EventArgs e)
+    {
+        if (_openDetailWindow != null && (DateTime.Now - _detailOpenedAt).TotalMilliseconds > 350)
+            _openDetailWindow.Close();
     }
 
     private void LaunchGame(Game game)

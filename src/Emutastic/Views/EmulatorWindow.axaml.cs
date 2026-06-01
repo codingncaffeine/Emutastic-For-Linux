@@ -54,6 +54,18 @@ namespace Emutastic.Views
 
             SetupEmulatorLog(session);
 
+            // Themed custom chrome (matches the rest of the app).
+            Platform.WindowResize.Enable(this);
+            var titleBar = this.FindControl<Grid>("CustomTitleBar")!;
+            titleBar.PointerPressed += (_, e) =>
+            {
+                if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+                if (e.ClickCount == 2) ToggleMaximize(); else BeginMoveDrag(e);
+            };
+            this.FindControl<Button>("MinimizeButton")!.Click += (_, _) => WindowState = WindowState.Minimized;
+            this.FindControl<Button>("MaximizeButton")!.Click += (_, _) => ToggleMaximize();
+            this.FindControl<Button>("CloseButton")!.Click += (_, _) => Close();
+
             Opened += OnOpened;
             Closed += OnClosed;
         }
@@ -83,7 +95,7 @@ namespace Emutastic.Views
 
         private void OnOpened(object? sender, EventArgs e)
         {
-            Title = "Emutastic — loading…";
+            SetTitle("Emutastic — loading…");
             // GOLDEN RULE: never block the UI thread. Core dlopen + retro_load_game (which can be
             // slow for heavy cores / BIOS / CHD) runs on a background thread; we marshal back to the
             // UI thread only to start the frame timer (or report failure).
@@ -94,11 +106,11 @@ namespace Emutastic.Views
                 {
                     if (!ok)
                     {
-                        Title = "Emutastic — failed to start";
+                        SetTitle("Emutastic — failed to start");
                         System.Diagnostics.Trace.WriteLine($"[EmulatorWindow] start failed: {error}");
                         return;
                     }
-                    Title = $"Emutastic — {_session.CoreName}";
+                    SetTitle($"Emutastic — {_session.CoreName}");
                     _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1000.0 / 60.0) };
                     _timer.Tick += (_, _) => PumpFrame();
                     _timer.Start();
@@ -158,6 +170,16 @@ namespace Emutastic.Views
             }
             return KeyMap.TryGetValue(key, out id);
         }
+
+        private void SetTitle(string t)
+        {
+            Title = t;
+            var tb = this.FindControl<TextBlock>("TitleText");
+            if (tb != null) tb.Text = t;
+        }
+
+        private void ToggleMaximize()
+            => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
 
         private void OnClosed(object? sender, EventArgs e)
         {

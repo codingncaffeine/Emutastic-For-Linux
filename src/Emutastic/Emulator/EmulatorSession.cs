@@ -21,6 +21,7 @@ namespace Emutastic.Emulator
     public sealed class EmulatorSession : IDisposable
     {
         // ---- libretro environment command numbers (libretro.h) ----
+        const uint ENV_SET_ROTATION = 1;   // core requests screen rotation (value × 90° CCW)
         const uint ENV_GET_OVERSCAN = 2;
         const uint ENV_GET_CAN_DUPE = 3;
         const uint ENV_SET_PERFORMANCE_LEVEL = 8;
@@ -61,6 +62,7 @@ namespace Emutastic.Emulator
         private readonly object _frameLock = new();
         private byte[]? _frame;
         private int _frameW, _frameH;
+        private volatile int _rotationDeg;   // 0/90/180/270, set by ENV_SET_ROTATION
         private long _frameSeq;
 
         public string CoreName => _core?.CoreName ?? "?";
@@ -161,6 +163,10 @@ namespace Emutastic.Emulator
                 case ENV_SET_PIXEL_FORMAT:
                     if (data != IntPtr.Zero) _pixelFormat = Marshal.ReadInt32(data);
                     return true;
+                case ENV_SET_ROTATION:
+                    // value 0..3 → 0/90/180/270° counter-clockwise (vertical arcade games etc.)
+                    if (data != IntPtr.Zero) _rotationDeg = (Marshal.ReadInt32(data) & 3) * 90;
+                    return true;
                 case ENV_GET_SYSTEM_DIRECTORY:
                     if (data != IntPtr.Zero) Marshal.WriteIntPtr(data, _systemDirPtr);
                     return true;
@@ -244,7 +250,42 @@ namespace Emutastic.Emulator
                     }
                 }
             }
+            // Honor a core-requested rotation by rotating the BGRA buffer (and swapping dims for
+            // 90/270) so the displayed Image is upright with the correct aspect — no UI transform.
+            if (_rotationDeg != 0) bgra = RotateBgra(bgra, ref w, ref h, _rotationDeg);
+
             lock (_frameLock) { _frame = bgra; _frameW = w; _frameH = h; _frameSeq++; }
+        }
+
+        // Rotate a tightly-packed BGRA buffer counter-clockwise by deg (90/180/270). Returns the
+        // new buffer; w/h are updated (swapped for 90/270).
+        private static byte[] RotateBgra(byte[] src, ref int w, ref int h, int deg)
+        {
+            int sw = w, sh = h;
+            var dst = new byte[src.Length];
+            if (deg == 180)
+            {
+                for (int y = 0; y < sh; y++)
+                    for (int x = 0; x < sw; x++)
+                    {
+                        int s = (y * sw + x) * 4, d = ((sh - 1 - y) * sw + (sw - 1 - x)) * 4;
+                        dst[d] = src[s]; dst[d + 1] = src[s + 1]; dst[d + 2] = src[s + 2]; dst[d + 3] = src[s + 3];
+                    }
+                return dst;
+            }
+            int dw = sh, dh = sw;   // 90/270 swap dimensions
+            for (int y = 0; y < sh; y++)
+                for (int x = 0; x < sw; x++)
+                {
+                    int s = (y * sw + x) * 4;
+                    int dx, dy;
+                    if (deg == 90) { dx = y; dy = sw - 1 - x; }       // 90° CCW
+                    else           { dx = sh - 1 - y; dy = x; }       // 270° CCW (= 90° CW)
+                    int d = (dy * dw + dx) * 4;
+                    dst[d] = src[s]; dst[d + 1] = src[s + 1]; dst[d + 2] = src[s + 2]; dst[d + 3] = src[s + 3];
+                }
+            w = dw; h = dh;
+            return dst;
         }
 
         /// <summary>

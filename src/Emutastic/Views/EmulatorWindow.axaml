@@ -1,11 +1,43 @@
 <Window xmlns="https://github.com/avaloniaui"
-        Icon="/Assets/banners and icons/emutastic-logo.png"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="Emutastic.Views.EmulatorWindow"
-        Width="768" Height="720"
-        Background="Black"
-        Title="Emutastic — Emulator">
-    <!-- M2 vertical slice: software-rendered frames blitted into this Image.
-         The HW (GL/Vulkan) path in M6 swaps this Image for a NativeControlHost child surface. -->
-    <Image Name="Screen" Stretch="Uniform" />
+        Icon="/Assets/banners and icons/emutastic-logo.png"
+        Width="768" Height="720" MinWidth="480" MinHeight="360"
+        Title="Emutastic — Emulator"
+        Background="Transparent"
+        TransparencyLevelHint="Transparent"
+        WindowDecorations="None">
+
+    <!-- Themed shell to match the rest of the app (rounded chrome + dark title bar). Software frames
+         blit into the Screen Image; the HW (GL/Vulkan) path swaps it for a NativeControlHost child. -->
+    <Border x:Name="OuterBorder" Background="{DynamicResource BgPrimaryBrush}"
+            BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1" CornerRadius="10">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="30" OffsetX="0" OffsetY="0" Opacity="0.6" Color="{DynamicResource ShadowColor}"/>
+        </Border.Effect>
+        <Border CornerRadius="10" ClipToBounds="True">
+            <Grid RowDefinitions="38,*">
+                <!-- ══ TITLE BAR ══ -->
+                <Grid Name="CustomTitleBar" Grid.Row="0" Background="{DynamicResource BgSecondaryBrush}" ColumnDefinitions="*,Auto">
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0" Spacing="7">
+                        <Image Width="18" Height="18" RenderOptions.BitmapInterpolationMode="HighQuality"
+                               Source="avares://Emutastic/Assets/banners and icons/emutastic-logo.png"/>
+                        <TextBlock Name="TitleText" Text="Emutastic" FontFamily="{DynamicResource PrimaryFont}"
+                                   FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}"
+                                   VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0" Spacing="6">
+                        <Button Name="MinimizeButton" Padding="0" Theme="{DynamicResource ActiveMinButton}" ToolTip.Tip="Minimize"/>
+                        <Button Name="MaximizeButton" Padding="0" Theme="{DynamicResource ActiveMaxButton}" ToolTip.Tip="Maximize"/>
+                        <Button Name="CloseButton" Padding="0" Theme="{DynamicResource ActiveCloseButton}" ToolTip.Tip="Close"/>
+                    </StackPanel>
+                </Grid>
+
+                <!-- ══ SCREEN ══ -->
+                <Border Grid.Row="1" Background="Black">
+                    <Image Name="Screen" Stretch="Uniform"/>
+                </Border>
+            </Grid>
+        </Border>
+    </Border>
 </Window>
