@@ -253,6 +253,12 @@ public partial class MainWindow : Window
         WireImportEvents();
         DataContext = _vm;
 
+        // Retry artwork that didn't finish downloading last session (e.g. the app was closed
+        // mid-download). Repairs games whose art is already cached on disk but the DB path was
+        // lost, then re-fetches the rest silently (subsequent attempts bump ArtworkAttempts).
+        // Matches upstream's startup call; the method self-delays 500ms so the window renders first.
+        _ = _artworkFetch.RetryMissingArtworkAsync();
+
         // Warm LibVLC off the UI thread so the first detail-card snap video doesn't
         // pay the multi-second native init on the dispatcher.
         VideoPlaybackService.Instance.StartWarmup();
