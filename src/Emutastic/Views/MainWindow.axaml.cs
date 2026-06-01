@@ -229,6 +229,10 @@ public partial class MainWindow : Window
         WireImportEvents();
         DataContext = _vm;
 
+        // Warm LibVLC off the UI thread so the first detail-card snap video doesn't
+        // pay the multi-second native init on the dispatcher.
+        VideoPlaybackService.Instance.StartWarmup();
+
         // Apply the saved/default theme palette into Application.Resources (enables Light/OLED/Midnight;
         // for Dark this matches the static DarkTheme.axaml values).
         try

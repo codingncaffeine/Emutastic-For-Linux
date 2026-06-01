@@ -1,5 +1,7 @@
 using System;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
+using Avalonia;
 using Avalonia.Animation;
 using Avalonia.Animation.Easings;
 using Avalonia.Controls;
@@ -7,10 +9,12 @@ using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Media.Transformation;
+using Avalonia.Platform;
 using Avalonia.Threading;
 using Emutastic.Emulator;
 using Emutastic.Models;
 using Emutastic.Services;
+using LibVLCSharp.Shared;
 
 namespace Emutastic.Views;
 
@@ -25,6 +29,14 @@ public partial class GameDetailWindow : Window
     private readonly Game _game;
     private readonly DatabaseService _db = new();
     private volatile bool _closed;
+
+    // LibVLC snap-trailer playback (U4b). The display callback marshals to the UI
+    // thread and memcpys _videoBuffer → _videoBitmap; the bail-out guards are nulled
+    // in OnClosed BEFORE the buffer is freed so a late callback can't touch freed memory.
+    private MediaPlayer? _vlcPlayer;
+    private WriteableBitmap? _videoBitmap;
+    private IntPtr _videoBuffer;
+    private bool _crossfadeDone;
 
     public GameDetailWindow() : this(new Game { Title = "Game", Console = "NES" }) { }
 
@@ -46,7 +58,24 @@ public partial class GameDetailWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        // Signal in-flight async work (placeholder decode, snap-video worker) to drop
+        // its results instead of writing into a dead window.
         _closed = true;
+
+        if (_vlcPlayer != null)
+        {
+            try { _vlcPlayer.Stop(); _vlcPlayer.Dispose(); } catch { }
+            _vlcPlayer = null;
+        }
+
+        // The display callback posts to the dispatcher, so a queued blit can outlive
+        // Dispose. Null the guards BEFORE freeing the buffer so any late callback bails
+        // instead of memcpying into freed memory.
+        _videoBitmap = null;
+        var buf = _videoBuffer;
+        _videoBuffer = IntPtr.Zero;
+        if (buf != IntPtr.Zero) Marshal.FreeHGlobal(buf);
+
         base.OnClosed(e);
     }
 
@@ -147,15 +176,32 @@ public partial class GameDetailWindow : Window
         return h < 100 ? $"{h:0.#}h" : $"{(int)h}h";
     }
 
-    // ── Snap loading: cover art placeholder → static libretro snap (video → U4b) ──
+    // ── Snap loading: cover art placeholder → ScreenScraper video → static snap ──
     private async Task LoadSnapAsync()
     {
         try
         {
+            // Show cover art immediately as a placeholder while a video loads.
             await ShowCoverArtPlaceholderAsync();
 
-            // Static libretro screenshot fallback (off-thread decode; UI-thread assign).
             string romPath = AppPaths.FromStoragePath(_game.RomPath);
+
+            // 1 — ScreenScraper video snap if configured (cache first, then network).
+            var snapConfig = App.Configuration?.GetSnapConfiguration();
+            if (snapConfig is { ScreenScraperEnabled: true } && !string.IsNullOrWhiteSpace(snapConfig.ScreenScraperUser))
+            {
+                var ss = new ScreenScraperService();
+                string? cached = ss.FindCachedSnap(_game.RomHash, _game.Console)
+                    ?? await ss.FetchSnapAsync(snapConfig.ScreenScraperUser, snapConfig.ScreenScraperPassword,
+                                               _game.Console, _game.RomHash, romPath);
+                if (cached != null && !_closed)
+                {
+                    await PlaySnapVideoAsync(cached);
+                    return;
+                }
+            }
+
+            // 2 — fall back to a static libretro screenshot (off-thread decode).
             string? snapPath = await new ArtworkService().FetchSnapAsync(_game.RomHash, romPath, _game.Console);
             if (snapPath == null || !System.IO.File.Exists(snapPath)) return;
 
@@ -189,6 +235,99 @@ public partial class GameDetailWindow : Window
     {
         try { using var fs = System.IO.File.OpenRead(path); return Bitmap.DecodeToWidth(fs, width); }
         catch { return null; }
+    }
+
+    // Play a ScreenScraper MP4 snap into VideoImage via LibVLC video callbacks.
+    private async Task PlaySnapVideoAsync(string mp4Path)
+    {
+        _crossfadeDone = false;
+
+        // ── UI thread: bitmap + buffer MUST exist before any VLC display callback
+        // fires. ScreenScraper snaps are 320x240; use a fixed RV32 (BGRA) format. ──
+        const int width = 320, height = 240;
+        const int stride = width * 4;
+
+        if (_videoBuffer != IntPtr.Zero) Marshal.FreeHGlobal(_videoBuffer);
+        _videoBuffer = Marshal.AllocHGlobal(stride * height);
+
+        _videoBitmap = new WriteableBitmap(new PixelSize(width, height), new Vector(96, 96),
+                                           PixelFormat.Bgra8888, AlphaFormat.Opaque);
+        Get<Image>("VideoImage").Source = _videoBitmap;
+
+        IntPtr bufferPtr = _videoBuffer;
+
+        // Awaits an already-completed Task on the hot path (warmed at startup).
+        var libVLC = await VideoPlaybackService.Instance.GetLibVLCAsync();
+
+        // ── Worker thread: MediaPlayer ctor, callback wiring, Media open, Play ──
+        await Task.Run(() =>
+        {
+            var player = new MediaPlayer(libVLC);
+            player.SetVideoFormat("RV32", width, height, stride);
+
+            player.SetVideoCallbacks(
+                // Lock: hand VLC our buffer.
+                (IntPtr opaque, IntPtr planes) => { Marshal.WriteIntPtr(planes, bufferPtr); return IntPtr.Zero; },
+                // Unlock: no-op.
+                null,
+                // Display: blit to the WriteableBitmap on the UI thread.
+                (IntPtr opaque, IntPtr picture) => Dispatcher.UIThread.Post(() =>
+                {
+                    if (_videoBitmap == null || _videoBuffer == IntPtr.Zero) return;
+                    using (var fb = _videoBitmap.Lock())
+                    {
+                        // Copy row-by-row honoring the framebuffer's own stride — Avalonia
+                        // may pad rows, so never assume RowBytes == width*4.
+                        unsafe
+                        {
+                            byte* src = (byte*)_videoBuffer;
+                            byte* dst = (byte*)fb.Address;
+                            int dstStride = fb.RowBytes;
+                            for (int y = 0; y < height; y++)
+                                Buffer.MemoryCopy(src + y * stride, dst + (long)y * dstStride, dstStride, stride);
+                        }
+                    }
+                    Get<Image>("VideoImage").InvalidateVisual();
+
+                    if (!_crossfadeDone)
+                    {
+                        _crossfadeDone = true;
+                        Get<Image>("VideoImage").IsVisible = true;
+                        Get<TextBlock>("ArtPlaceholderText").IsVisible = false;
+                        var header = Get<Image>("HeaderImage");
+                        header.Transitions ??= new Transitions
+                        {
+                            new DoubleTransition { Property = OpacityProperty, Duration = TimeSpan.FromMilliseconds(400) },
+                        };
+                        header.Opacity = 0;
+                    }
+                }));
+
+            using var media = new Media(libVLC, mp4Path, FromType.FromPath);
+            // Loop natively (libvlc restarts the input); avoids racing an EndReached re-play.
+            media.AddOption(":input-repeat=65535");
+
+            // Bail before the blocking Invoke if the window already closed, so we don't
+            // marshal onto a tearing-down dispatcher.
+            if (_closed) { try { player.Dispose(); } catch { } return; }
+
+            // Stash AND start inside the UI critical section so OnClosed (also UI) can't
+            // interleave and Dispose the player between the assignment and Play.
+            bool keep = false;
+            try
+            {
+                Dispatcher.UIThread.Invoke(() =>
+                {
+                    if (_closed) return;
+                    _vlcPlayer = player;
+                    player.Play(media);
+                    keep = true;
+                });
+            }
+            catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"[GameDetail] snap play failed: {ex.Message}"); }
+
+            if (!keep) { try { player.Dispose(); } catch { } }
+        });
     }
 
     // ── Slide-up + fade-in entrance ──

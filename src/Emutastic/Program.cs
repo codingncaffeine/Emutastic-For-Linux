@@ -23,6 +23,19 @@ sealed class Program
             Emutastic.SelfTest.RunImport(args[1], args[2]);
             return;
         }
+        // Headless LibVLC native-init check (U4b): `Emutastic --selftest-vlc`.
+        // Proves Core.Initialize() + new LibVLC resolve system libvlc on this box.
+        if (args.Length >= 1 && args[0] == "--selftest-vlc")
+        {
+            try
+            {
+                var lib = Emutastic.Services.VideoPlaybackService.Instance.GetLibVLCAsync()
+                    .GetAwaiter().GetResult();
+                Console.WriteLine($"=== PASS (LibVLC initialized: {lib.Version}) ===");
+            }
+            catch (Exception ex) { Console.WriteLine($"=== FAIL: {ex.Message} ==="); }
+            return;
+        }
 
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }
