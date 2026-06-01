@@ -1330,6 +1330,82 @@ public partial class PreferencesWindow : Window
 
         // Reveal "update available" pills + Update All once the staleness check returns.
         _ = DecorateCoreUpdatesAsync(coresFolder, updateAllBtn);
+
+        AppendExtrasSection(panel);
+    }
+
+    // ── P6: Extras — DAT downloads (the Linux-relevant part of upstream's Extras).
+    //  Native libs (SDL3/ffmpeg) are system packages on Linux → dropped. Shader pack +
+    //  Vectrex overlays defer to the shader/overlay splinter (noted in the UI).
+    private static readonly (string Tag, string Label, string? RedumpSlug, string? DirectUrl)[] KnownDats =
+    {
+        ("Arcade",       "Arcade (FBNeo)",          null, "https://raw.githubusercontent.com/libretro/FBNeo/master/dats/FinalBurn%20Neo%20(ClrMame%20Pro%20XML%2C%20Arcade%20only).dat"),
+        ("mame2003plus", "Arcade (MAME 2003-Plus)", null, "https://raw.githubusercontent.com/libretro/mame2003-plus-libretro/master/metadata/mame2003-plus.xml"),
+        ("NeoGeo",       "Neo Geo (Geolith)",       null, "https://raw.githubusercontent.com/libretro/libretro-database/master/dat/SNK%20-%20Neo%20Geo.dat"),
+        ("NeoCD",        "Neo Geo CD",              null, "https://raw.githubusercontent.com/libretro/libretro-database/master/metadat/redump/SNK%20-%20Neo%20Geo%20CD.dat"),
+        ("SegaCD", "Sega CD / Mega CD", "mcd", null),
+        ("Saturn", "Sega Saturn",       "ss",  null),
+        ("PS1",    "PlayStation",        "psx", null),
+        ("TGCD",   "TurboGrafx-CD",     "pce", null),
+        ("3DO",    "3DO",                "3do", null),
+        ("CDi",    "Philips CD-i",       "cdi", null),
+        ("NGP",    "Neo Geo Pocket",       null, "https://raw.githubusercontent.com/libretro/libretro-database/master/metadat/no-intro/SNK%20-%20Neo%20Geo%20Pocket.dat"),
+        ("NGPC",   "Neo Geo Pocket Color", null, "https://raw.githubusercontent.com/libretro/libretro-database/master/metadat/no-intro/SNK%20-%20Neo%20Geo%20Pocket%20Color.dat"),
+    };
+
+    private void AppendExtrasSection(StackPanel panel)
+    {
+        string datsDir = AppPaths.GetDatsFolder();
+        try { System.IO.Directory.CreateDirectory(datsDir); } catch { }
+
+        panel.Children.Add(new TextBlock { Text = "DAT FILES (ROM IDENTIFICATION)", Theme = (Avalonia.Styling.ControlTheme?)(this.TryFindResource("PrefLabel", out var t) ? t : null), Margin = new Thickness(0, 24, 0, 4) });
+        panel.Children.Add(new Border { Height = 1, Background = Brush("BorderNormalBrush"), Margin = new Thickness(0, 0, 0, 8) });
+        panel.Children.Add(new TextBlock { Text = "Reference DAT files improve ROM identification for disc/arcade systems. Native libraries (SDL3, ffmpeg) are provided by your system packages on Linux; shader packs and overlays arrive with the shader splinter.",
+            FontSize = 11, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextMutedBrush"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10) });
+
+        foreach (var (tag, label, slug, directUrl) in KnownDats)
+        {
+            string datPath = System.IO.Path.Combine(datsDir, $"{tag}.dat");
+            bool present = System.IO.File.Exists(datPath);
+
+            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), Margin = new Thickness(0, 0, 0, 6) };
+            var info = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            info.Children.Add(new TextBlock { Text = label, FontSize = 12, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextPrimaryBrush") });
+            var status = new TextBlock { Text = present ? "Present" : "", FontSize = 10, FontFamily = Font("PrimaryFont"),
+                Foreground = new SolidColorBrush(Color.Parse(present ? "#30D158" : "#888888")) };
+            info.Children.Add(status);
+            Grid.SetColumn(info, 0);
+
+            var bar = new ProgressBar { Height = 3, Width = 60, Minimum = 0, Maximum = 100, IsVisible = false, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
+            Grid.SetColumn(bar, 1);
+            var btn = new Button { Content = present ? "Re-download" : "Download", Theme = (Avalonia.Styling.ControlTheme?)(this.TryFindResource("PrefSecondaryBtn", out var t2) ? t2 : null), Padding = new Thickness(10, 4), FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+            Grid.SetColumn(btn, 2);
+
+            btn.Click += async (_, _) =>
+            {
+                btn.IsEnabled = false; bar.IsVisible = true; bar.Value = 10; status.Text = "Downloading…"; status.Foreground = Brush("TextMutedBrush");
+                try
+                {
+                    string url = directUrl ?? $"http://redump.org/datfile/{slug}/";
+                    byte[] bytes = await Task.Run(async () =>
+                    {
+                        using var http = new System.Net.Http.HttpClient();
+                        http.DefaultRequestHeaders.Add("User-Agent", "Emutastic");
+                        return await http.GetByteArrayAsync(url);
+                    });
+                    bar.Value = 90;
+                    await System.IO.File.WriteAllBytesAsync(datPath, bytes);
+                    bar.Value = 100; bar.IsVisible = false;
+                    status.Text = "Present"; status.Foreground = new SolidColorBrush(Color.Parse("#30D158"));
+                    btn.Content = "Re-download";
+                }
+                catch (Exception ex) { bar.IsVisible = false; status.Text = $"Failed: {ex.Message}"; status.Foreground = Brush("AccentBrush"); }
+                finally { btn.IsEnabled = true; }
+            };
+
+            row.Children.Add(info); row.Children.Add(bar); row.Children.Add(btn);
+            panel.Children.Add(row);
+        }
     }
 
     private Control BuildCoreRow(string dll, string consoleName, string coresFolder, bool installed, bool preferred, bool canChoosePreferred)
