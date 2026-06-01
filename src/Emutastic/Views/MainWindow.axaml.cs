@@ -64,6 +64,9 @@ public partial class MainWindow : Window
         list.KeyDown += (_, e) => { if (e.Key == Key.Enter) { OpenSelectedDetail(); e.Handled = true; } };
         list.AddHandler(ContextRequestedEvent, OnGameContextRequested);
 
+        // Right-click a console in the left nav → console context menu.
+        this.FindControl<StackPanel>("SidebarPanel")!.AddHandler(ContextRequestedEvent, OnConsoleContextRequested);
+
         // Drag-drop ROM import.
         DragDrop.SetAllowDrop(this, true);
         AddHandler(DragDrop.DragOverEvent, OnDragOver);
@@ -448,6 +451,127 @@ public partial class MainWindow : Window
         var mi = new MenuItem { Header = header, IsEnabled = enabled };
         if (enabled) mi.Click += (_, _) => onClick();
         return mi;
+    }
+
+    // ── Sidebar console context menu (right-click a console in the left nav) ──
+    private void OnConsoleContextRequested(object? sender, ContextRequestedEventArgs e)
+    {
+        // Walk up to the console nav Button (CommandParameter carries the console tag).
+        var node = e.Source as Control;
+        while (node != null && !(node is Button b && b.CommandParameter is string)) node = node.Parent as Control;
+        if (node is not Button btn || btn.CommandParameter is not string console || string.IsNullOrEmpty(console)) return;
+        if (!CoreManager.ConsoleCoreMap.ContainsKey(console)) return;   // real consoles only (not the LIBRARY pseudo-navs)
+
+        string display = console;
+        if (btn.Content is StackPanel sp)
+        {
+            var tb = sp.Children.OfType<TextBlock>().LastOrDefault();
+            if (tb?.Text != null) display = tb.Text;
+        }
+        BuildConsoleContextMenu(console, display).Open(btn);
+        e.Handled = true;
+    }
+
+    private ContextMenu BuildConsoleContextMenu(string console, string display)
+    {
+        var menu = new ContextMenu();
+        int count = _db?.GetGameCountForConsole(console) ?? 0;
+
+        // Refresh Library — always available (rescans the console's source folders for new ROMs).
+        menu.Items.Add(MenuAction("🔄  Refresh Library", () => RefreshLibraryFolder(console, display)));
+
+        if (count == 0) return menu;   // empty console → refresh only (matches upstream)
+
+        menu.Items.Add(new Separator());
+
+        var remove = MenuAction($"🗑  Remove all {display} games ({count})", () => RunGuarded(async () =>
+        {
+            bool ok = await new ConfirmDialog("Remove All Games",
+                $"Remove all {count} {display} games from your library?\n\nYour save states will not be affected.",
+                "Remove All", danger: true).ShowDialog<bool>(this);
+            if (!ok) return;
+            _db!.DeleteAllGamesForConsole(console);
+            await Task.Run(() => _vm!.Reload());
+            await _vm!.FilterGamesAsync();
+        }));
+        remove.Foreground = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#FF5F57"));
+        menu.Items.Add(remove);
+
+        menu.Items.Add(MenuAction("⬇  Download Missing Artwork",
+            () => RunGuarded(() => _artworkFetch!.FetchMissingArtworkForConsoleAsync(console, display))));
+
+        var snap = App.Configuration?.GetSnapConfiguration();
+        if (snap is { ScreenScraperEnabled: true } && !string.IsNullOrWhiteSpace(snap.ScreenScraperUser))
+        {
+            menu.Items.Add(MenuAction("⬇  Download 3D Box Art",
+                () => RunGuarded(() => _artworkFetch!.Fetch3DBoxArtForConsoleAsync(console, display))));
+            menu.Items.Add(MenuAction("⬇  Download ScreenScraper 2D Art",
+                () => RunGuarded(() => _artworkFetch!.FetchScreenScraperArtForConsoleAsync(console, display))));
+        }
+
+        // Edit Controls — opens Preferences (the per-console Controls panel lands with the
+        // in-game input subsystem in U9; for now it opens the Preferences window).
+        var editControls = MenuAction("🎮  Edit Controls…", () => new PreferencesWindow().Show(this));
+        menu.Items.Insert(0, editControls);
+        menu.Items.Insert(1, new Separator());
+        return menu;
+    }
+
+    // Rescan the source folders of this console's imported games for new ROMs of its
+    // extensions and import them (port of upstream RefreshLibraryFolder), then backfill
+    // missing artwork for the console.
+    private void RefreshLibraryFolder(string console, string display)
+    {
+        if (_db == null || _importer == null) return;
+
+        var scanDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var game in _db.GetAllGames())
+        {
+            if (!string.Equals(game.Console, console, StringComparison.OrdinalIgnoreCase)) continue;
+            string source = !string.IsNullOrEmpty(game.OriginalSourcePath) ? game.OriginalSourcePath : game.RomPath;
+            source = AppPaths.FromStoragePath(source);
+            if (string.IsNullOrEmpty(source)) continue;
+            try { string? dir = System.IO.Path.GetDirectoryName(source); if (!string.IsNullOrEmpty(dir) && System.IO.Directory.Exists(dir)) scanDirs.Add(dir); }
+            catch { }
+        }
+        if (scanDirs.Count == 0) { _vm?.SetStatus($"Nothing to refresh — no {display} game folders found on disk.", autoClear: true); return; }
+
+        var exts = new HashSet<string>(RomService.GetExtensionsForConsole(console), StringComparer.OrdinalIgnoreCase);
+        if (exts.Count == 0) { _vm?.SetStatus($"No file extensions registered for {display}.", autoClear: true); return; }
+
+        var candidates = new List<string>();
+        foreach (var dir in scanDirs)
+        {
+            try { foreach (var path in System.IO.Directory.EnumerateFiles(dir, "*", System.IO.SearchOption.AllDirectories))
+                    if (exts.Contains(System.IO.Path.GetExtension(path))) candidates.Add(path); }
+            catch { }
+        }
+        if (candidates.Count == 0) { _vm?.SetStatus($"Nothing to refresh — no new {display} files found.", autoClear: true); return; }
+
+        int before = _db.GetAllGames().Count(g => string.Equals(g.Console, console, StringComparison.OrdinalIgnoreCase));
+        Action? onDrained = null;
+        onDrained = () =>
+        {
+            _importer!.ImportQueueDrained -= onDrained;
+            Dispatcher.UIThread.Post(async () =>
+            {
+                await Task.Run(() => _vm!.Reload());
+                await _vm!.FilterGamesAsync();
+                int after = _db!.GetAllGames().Count(g => string.Equals(g.Console, console, StringComparison.OrdinalIgnoreCase));
+                int added = Math.Max(0, after - before);
+                _vm!.SetStatus(added switch
+                {
+                    0 => $"Refresh — no new {display} ROMs.",
+                    1 => $"Refresh — added 1 new {display} game.",
+                    _ => $"Refresh — added {added} new {display} games.",
+                }, autoClear: true);
+                // Backfill missing artwork for the console (the user expects a full refresh).
+                try { await _artworkFetch!.FetchMissingArtworkForConsoleAsync(console, display); } catch { }
+            });
+        };
+        _importer.ImportQueueDrained += onDrained;
+        _vm?.SetStatus($"Refreshing {display}…", autoClear: false);
+        _importer.ImportFilesAsync(candidates, console);
     }
 
     private ContextMenu BuildGameContextMenu(Game game)
