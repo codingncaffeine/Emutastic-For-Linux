@@ -42,7 +42,7 @@ namespace Emutastic
             {
                 string? resolved = coreManager.GetCorePathForGame(g);
                 Console.WriteLine($"GetCorePathForGame -> {resolved}  exists={System.IO.File.Exists(resolved ?? "")}");
-                db.DeleteGame(g.Id); // cleanup
+                if (Environment.GetEnvironmentVariable("KEEP") != "1") db.DeleteGame(g.Id); // cleanup (KEEP=1 to persist)
                 Console.WriteLine(resolved != null && System.IO.File.Exists(resolved)
                     ? "=== PASS (import + core resolution) ===" : "=== FAIL (core not resolved) ===");
             }

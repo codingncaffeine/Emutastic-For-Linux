@@ -258,6 +258,36 @@
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
+
+                <!-- OpenEmu-style list view (toggled by the grid/list view buttons) -->
+                <DataGrid Name="GameListView" Grid.Row="1" ItemsSource="{Binding Games}"
+                          IsVisible="False" AutoGenerateColumns="False" CanUserSortColumns="True"
+                          CanUserResizeColumns="True" IsReadOnly="True" GridLinesVisibility="Horizontal"
+                          Background="Transparent" RowBackground="Transparent"
+                          HeadersVisibility="Column" SelectionMode="Extended">
+                    <!-- Column order matches upstream: Name / Rating / Last Played / System. -->
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Name" Binding="{Binding Title}" Width="*"/>
+                        <DataGridTemplateColumn Header="Rating" Width="90" SortMemberPath="Rating">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate x:DataType="models:Game">
+                                    <TextBlock Text="{Binding Rating, Converter={StaticResource RatingToStars}}" Margin="8,0" VerticalAlignment="Center"/>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTextColumn Header="Last Played" Binding="{Binding LastPlayed, Converter={StaticResource LastPlayedToMediumDate}}" Width="120"/>
+                        <DataGridTemplateColumn Header="System" Width="160" SortMemberPath="Console">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate x:DataType="models:Game">
+                                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="8,0" VerticalAlignment="Center">
+                                        <Image Width="16" Height="16" Source="{Binding Console, Converter={StaticResource ConsoleTagToIcon}}"/>
+                                        <TextBlock Text="{Binding Console}" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                    </DataGrid.Columns>
+                </DataGrid>
             </Grid>
         </Grid>
 

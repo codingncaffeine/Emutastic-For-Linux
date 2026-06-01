@@ -54,6 +54,12 @@ public partial class MainWindow : Window
         grid.KeyDown += (_, e) => { if (e.Key == Key.Enter) { LaunchSelected(); e.Handled = true; } };
         grid.AddHandler(ContextRequestedEvent, OnGameContextRequested);
 
+        // List view (DataGrid) shares the launch + context-menu gestures.
+        var list = this.FindControl<DataGrid>("GameListView")!;
+        list.DoubleTapped += (_, _) => LaunchSelected();
+        list.KeyDown += (_, e) => { if (e.Key == Key.Enter) { LaunchSelected(); e.Handled = true; } };
+        list.AddHandler(ContextRequestedEvent, OnGameContextRequested);
+
         // Drag-drop ROM import.
         DragDrop.SetAllowDrop(this, true);
         AddHandler(DragDrop.DragOverEvent, OnDragOver);
@@ -101,20 +107,14 @@ public partial class MainWindow : Window
             _vm?.SetStatus($"{clicked.Content} view is coming soon.", autoClear: true);
     }
 
-    // View-mode toggle: grid is live; list view lands in U2.
+    // View-mode toggle: switch between the box-art grid and the list (DataGrid).
     private void OnViewToggle(object? sender, RoutedEventArgs e)
     {
-        if ((sender as ToggleButton)?.Tag as string == "List")
-        {
-            this.FindControl<ToggleButton>("ViewList")!.IsChecked = false;
-            this.FindControl<ToggleButton>("ViewGrid")!.IsChecked = true;
-            _vm?.SetStatus("List view is coming soon.", autoClear: true);
-        }
-        else
-        {
-            this.FindControl<ToggleButton>("ViewGrid")!.IsChecked = true;
-            this.FindControl<ToggleButton>("ViewList")!.IsChecked = false;
-        }
+        bool list = (sender as ToggleButton)?.Tag as string == "List";
+        this.FindControl<ToggleButton>("ViewGrid")!.IsChecked = !list;
+        this.FindControl<ToggleButton>("ViewList")!.IsChecked = list;
+        this.FindControl<ListBox>("GameGridView")!.IsVisible = !list;
+        this.FindControl<DataGrid>("GameListView")!.IsVisible = list;
     }
 
     private void OnOpened(object? sender, EventArgs e)
@@ -154,14 +154,26 @@ public partial class MainWindow : Window
         Task.Run(() =>
         {
             _vm.Reload();
-            Dispatcher.UIThread.Post(() => _vm.NavigateToAllGamesCommand.Execute(null));
+            Dispatcher.UIThread.Post(() =>
+            {
+                _vm.NavigateToAllGamesCommand.Execute(null);
+                if (Environment.GetEnvironmentVariable("EMUTASTIC_SHOT") == "list")
+                    OnViewToggle(this.FindControl<ToggleButton>("ViewList"), null!);
+            });
         });
     }
 
     // ── Launch ─────────────────────────────────────────────────────────────
+    private Game? SelectedGame()
+    {
+        var list = this.FindControl<DataGrid>("GameListView");
+        if (list is { IsVisible: true } && list.SelectedItem is Game lg) return lg;
+        return this.FindControl<ListBox>("GameGridView")?.SelectedItem as Game;
+    }
+
     private void LaunchSelected()
     {
-        if (this.FindControl<ListBox>("GameGridView")?.SelectedItem is Game g) LaunchGame(g);
+        if (SelectedGame() is Game g) LaunchGame(g);
     }
 
     private void LaunchGame(Game game)
