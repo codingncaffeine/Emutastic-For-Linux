@@ -62,6 +62,7 @@ public partial class PreferencesWindow : Window
 
         WireAbout();
         WireTheme();
+        WireLibrary();
     }
 
     protected override void OnClosed(EventArgs e)
@@ -81,6 +82,7 @@ public partial class PreferencesWindow : Window
         }
         if (target == "PanelAbout") LoadAboutSettings();
         if (target == "PanelTheme") LoadThemeSettings();
+        if (target == "PanelLibrary") LoadLibrarySettings();
     }
 
     // Temporary placeholder until the panel's sub-splinter fills it.
@@ -406,6 +408,64 @@ public partial class PreferencesWindow : Window
         status.Text = id != null
             ? $"Imported theme. Select it from the dropdown to apply."
             : "Could not import that theme file.";
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  U5 — Library panel (data dir + library folder + import behaviour)
+    // ════════════════════════════════════════════════════════════════════════
+
+    private void WireLibrary()
+    {
+        this.FindControl<Button>("BrowseLibraryBtn")!.Click += (_, _) => _ = BrowseLibraryAsync();
+        this.FindControl<Button>("LibrarySaveBtn")!.Click += (_, _) => SaveLibrarySettings();
+        var copy = this.FindControl<RadioButton>("LibraryCopyFiles")!;
+        var keep = this.FindControl<RadioButton>("LibraryKeepInPlace")!;
+        var organize = this.FindControl<CheckBox>("LibraryOrganizeByConsole")!;
+        copy.IsCheckedChanged += (_, _) => { if (copy.IsChecked == true) organize.IsEnabled = true; };
+        keep.IsCheckedChanged += (_, _) => { if (keep.IsChecked == true) organize.IsEnabled = false; };
+    }
+
+    private void LoadLibrarySettings()
+    {
+        this.FindControl<TextBlock>("DataDirPathText")!.Text = AppPaths.DataRoot;
+        var lib = App.Configuration?.GetLibraryConfiguration() ?? new Configuration.LibraryConfiguration();
+        var pathText = this.FindControl<TextBlock>("LibraryPathText")!;
+        bool hasPath = !string.IsNullOrEmpty(lib.LibraryPath);
+        pathText.Text = hasPath ? lib.LibraryPath : "Not set — games stay in their original location";
+        pathText.Foreground = Brush(hasPath ? "TextPrimaryBrush" : "TextSecondaryBrush");
+        this.FindControl<RadioButton>("LibraryCopyFiles")!.IsChecked = lib.CopyToLibrary;
+        this.FindControl<RadioButton>("LibraryKeepInPlace")!.IsChecked = !lib.CopyToLibrary;
+        var organize = this.FindControl<CheckBox>("LibraryOrganizeByConsole")!;
+        organize.IsChecked = lib.OrganizeByConsole;
+        organize.IsEnabled = lib.CopyToLibrary;
+        this.FindControl<TextBlock>("LibraryStatusText")!.Text = "";
+    }
+
+    private async Task BrowseLibraryAsync()
+    {
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = "Select game library folder",
+            AllowMultiple = false,
+        });
+        string? path = folders.Count > 0 ? folders[0].TryGetLocalPath() : null;
+        if (string.IsNullOrEmpty(path)) return;
+        var pathText = this.FindControl<TextBlock>("LibraryPathText")!;
+        pathText.Text = path;
+        pathText.Foreground = Brush("TextPrimaryBrush");
+    }
+
+    private void SaveLibrarySettings()
+    {
+        var lib = App.Configuration?.GetLibraryConfiguration();
+        if (lib == null) return;
+        string shown = this.FindControl<TextBlock>("LibraryPathText")!.Text ?? "";
+        lib.LibraryPath = shown.StartsWith("Not set") ? "" : shown;
+        lib.CopyToLibrary = this.FindControl<RadioButton>("LibraryCopyFiles")!.IsChecked == true;
+        lib.OrganizeByConsole = this.FindControl<CheckBox>("LibraryOrganizeByConsole")!.IsChecked == true;
+        App.Configuration!.SetLibraryConfiguration(lib);
+        App.Configuration!.ScheduleSave();
+        this.FindControl<TextBlock>("LibraryStatusText")!.Text = "Saved.";
     }
 
     private IBrush? Brush(string key) => this.TryFindResource(key, out var v) ? v as IBrush : null;
