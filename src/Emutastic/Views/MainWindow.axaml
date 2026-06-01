@@ -203,6 +203,9 @@
 
                 <!-- ══ LIBRARY view (grid + list + empty placeholder) ══ -->
                 <Grid Name="LibraryView" Grid.Row="1">
+                <!-- user-configurable background image (behind the cards) -->
+                <Image Name="GridBackgroundImage" IsHitTestVisible="False" IsVisible="False"
+                       Stretch="UniformToFill" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
                 <!-- empty-library placeholder -->
                 <TextBlock Text="No games yet — drag ROMs here, or click ＋ Import"
                            HorizontalAlignment="Center" VerticalAlignment="Center"

@@ -10,6 +10,7 @@ namespace Emutastic.Configuration
         void SetValue<T>(string key, T value);
         Task SaveAsync();
         Task LoadAsync();
+        void ScheduleSave();
         bool HasKey(string key);
         void RemoveKey(string key);
         void Clear();

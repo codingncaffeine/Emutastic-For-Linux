@@ -235,6 +235,84 @@ public partial class PreferencesWindow : Window
                 ApplyTheme(id);
         };
         this.FindControl<Button>("ImportThemeBtn")!.Click += (_, _) => _ = ImportThemeAsync();
+
+        // Background image controls.
+        this.FindControl<Button>("BgImagePickBtn")!.Click += (_, _) => _ = PickBackgroundAsync();
+        this.FindControl<Button>("BgImageClearBtn")!.Click += (_, _) =>
+        {
+            UpdateThemeConfig(c => { c.BackgroundImagePath = ""; });
+            LoadBackgroundSettings();
+            Services.ThemeService.Instance.RaiseBackgroundImageChanged();
+        };
+        this.FindControl<Slider>("BgOpacitySlider")!.PropertyChanged += (s, e) =>
+        {
+            if (_suppressBgChange || e.Property.Name != nameof(Slider.Value)) return;
+            double v = this.FindControl<Slider>("BgOpacitySlider")!.Value;
+            this.FindControl<TextBlock>("BgOpacityValueLabel")!.Text = $"{(int)v}%";
+            UpdateThemeConfig(c => c.BackgroundImageOpacity = v / 100.0);
+            Services.ThemeService.Instance.RaiseBackgroundImageChanged();
+        };
+        this.FindControl<ComboBox>("BgStretchCombo")!.SelectionChanged += (_, _) =>
+        {
+            if (_suppressBgChange) return;
+            if (this.FindControl<ComboBox>("BgStretchCombo")!.SelectedItem is ComboBoxItem { Content: string fit })
+            {
+                UpdateThemeConfig(c => c.BackgroundImageStretch = fit);
+                Services.ThemeService.Instance.RaiseBackgroundImageChanged();
+            }
+        };
+    }
+
+    private bool _suppressBgChange;
+    private bool _bgStretchPopulated;
+
+    private void UpdateThemeConfig(System.Action<Configuration.ThemeConfiguration> mutate)
+    {
+        var cfg = App.Configuration?.GetThemeConfiguration();
+        if (cfg == null) return;
+        mutate(cfg);
+        App.Configuration?.SetThemeConfiguration(cfg);
+    }
+
+    private void LoadBackgroundSettings()
+    {
+        var cfg = App.Configuration?.GetThemeConfiguration();
+        if (cfg == null) return;
+        _suppressBgChange = true;
+
+        var stretchCombo = this.FindControl<ComboBox>("BgStretchCombo")!;
+        if (!_bgStretchPopulated)
+        {
+            _bgStretchPopulated = true;
+            foreach (var fit in new[] { "UniformToFill", "Uniform", "Fill", "None" })
+                stretchCombo.Items.Add(new ComboBoxItem { Content = fit });
+        }
+        stretchCombo.SelectedItem = stretchCombo.Items.OfType<ComboBoxItem>()
+            .FirstOrDefault(i => (string?)i.Content == cfg.BackgroundImageStretch) ?? stretchCombo.Items[0];
+
+        this.FindControl<Slider>("BgOpacitySlider")!.Value = cfg.BackgroundImageOpacity * 100.0;
+        this.FindControl<TextBlock>("BgOpacityValueLabel")!.Text = $"{(int)(cfg.BackgroundImageOpacity * 100)}%";
+
+        string abs = AppPaths.FromStoragePath(cfg.BackgroundImagePath);
+        this.FindControl<TextBlock>("BgImagePathLabel")!.Text =
+            string.IsNullOrEmpty(abs) ? "No image set." : abs;
+
+        _suppressBgChange = false;
+    }
+
+    private async Task PickBackgroundAsync()
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Choose Background Image",
+            AllowMultiple = false,
+            FileTypeFilter = new[] { new FilePickerFileType("Images") { Patterns = new[] { "*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp" } } },
+        });
+        string? path = files.Count > 0 ? files[0].TryGetLocalPath() : null;
+        if (string.IsNullOrEmpty(path)) return;
+        UpdateThemeConfig(c => c.BackgroundImagePath = AppPaths.ToStoragePath(path));
+        LoadBackgroundSettings();
+        Services.ThemeService.Instance.RaiseBackgroundImageChanged();
     }
 
     private void LoadThemeSettings()
@@ -258,6 +336,7 @@ public partial class PreferencesWindow : Window
         _suppressThemeChange = false;
 
         BuildThemeSwatches(activeId);
+        LoadBackgroundSettings();
     }
 
     private void ApplyTheme(string id)

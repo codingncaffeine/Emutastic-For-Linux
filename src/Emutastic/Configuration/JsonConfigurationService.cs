@@ -40,8 +40,26 @@ namespace Emutastic.Configuration
         private readonly JsonSerializerOptions _jsonOptions;
         private readonly System.Threading.SemaphoreSlim _saveLock = new(1, 1);
         private bool _loadedSuccessfully;
+        private System.Threading.CancellationTokenSource? _saveDebounce;
 
         private ConfigData _data = new();
+
+        /// <summary>
+        /// Debounced persist — coalesces rapid Set* calls (e.g. an opacity-slider drag)
+        /// into a single off-thread write ~400ms after the last change. Safe to call from
+        /// the UI thread. The save-on-close flush is the catch-all for anything still pending.
+        /// </summary>
+        public void ScheduleSave()
+        {
+            if (!_loadedSuccessfully) return;
+            _saveDebounce?.Cancel();
+            var cts = _saveDebounce = new System.Threading.CancellationTokenSource();
+            _ = Task.Run(async () =>
+            {
+                try { await Task.Delay(400, cts.Token); } catch { return; }
+                try { await SaveAsync(); } catch { /* logged inside SaveAsync */ }
+            });
+        }
 
         public JsonConfigurationService(ILogger<JsonConfigurationService>? logger = null)
         {
@@ -267,6 +285,7 @@ namespace Emutastic.Configuration
         {
             config.LastModified = DateTime.UtcNow;
             _data.ThemeConfiguration = config;
+            ScheduleSave();
         }
 
         public SnapConfiguration GetSnapConfiguration() => _data.SnapConfiguration;

@@ -223,6 +223,17 @@ public partial class MainWindow : Window
         // GOLDEN RULE: construct services + VM on the UI thread (they capture
         // SynchronizationContext.Current); the heavy library read runs off-thread.
         App.Configuration ??= new JsonConfigurationService();
+        // Load persisted settings before anything reads them (theme, library, etc.).
+        // Run on the thread pool + block briefly so LoadAsync's continuations don't
+        // need the UI thread (no deadlock); the config file is tiny + read once.
+        try { Task.Run(() => App.Configuration!.LoadAsync()).GetAwaiter().GetResult(); }
+        catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"config load failed: {ex.Message}"); }
+        // Flush any pending settings on exit (catch-all for changes not yet debounce-saved).
+        Closing += (_, _) =>
+        {
+            try { Task.Run(() => App.Configuration?.SaveAsync() ?? Task.CompletedTask).GetAwaiter().GetResult(); }
+            catch { /* best-effort on shutdown */ }
+        };
         _db = new DatabaseService();
         _coreManager = new CoreManager(App.Configuration);
         _importer = new ImportService(_db, _coreManager, App.Configuration);
@@ -243,6 +254,10 @@ public partial class MainWindow : Window
             ThemeService.Instance.LoadAndApplyTheme(string.IsNullOrEmpty(themeId) ? "builtin.dark" : themeId);
         }
         catch { /* theme apply is best-effort; static dark palette is the fallback */ }
+
+        // Grid background image (Preferences → Theme): apply now + on change.
+        ThemeService.Instance.BackgroundImageChanged += (_, _) => Dispatcher.UIThread.Post(ApplyBackgroundImage);
+        ApplyBackgroundImage();
 
         // Sidebar OPTIONS buttons.
         var importBtn = this.FindControl<Button>("ImportButton");
@@ -273,6 +288,57 @@ public partial class MainWindow : Window
     private void LaunchSelected()
     {
         if (SelectedGame() is Game g) LaunchGame(g);
+    }
+
+    // ── Grid background image (Preferences → Theme) ─────────────────────────
+    private string? _bgImagePath;                            // path of the currently-decoded bitmap
+    private Avalonia.Media.Imaging.Bitmap? _bgBitmap;
+
+    private void ApplyBackgroundImage()
+    {
+        var img = this.FindControl<Image>("GridBackgroundImage");
+        if (img == null) return;
+        var cfg = App.Configuration?.GetThemeConfiguration();
+        string path = cfg != null ? AppPaths.FromStoragePath(cfg.BackgroundImagePath) : "";
+
+        if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path))
+        {
+            _bgImagePath = null; _bgBitmap = null;
+            img.Source = null; img.IsVisible = false;
+            return;
+        }
+
+        // Opacity + stretch are cheap property sets — always apply (no decode needed).
+        img.Opacity = cfg!.BackgroundImageOpacity;
+        img.Stretch = cfg.BackgroundImageStretch switch
+        {
+            "Uniform" => Avalonia.Media.Stretch.Uniform,
+            "Fill"    => Avalonia.Media.Stretch.Fill,
+            "None"    => Avalonia.Media.Stretch.None,
+            _          => Avalonia.Media.Stretch.UniformToFill,
+        };
+
+        // Only (re)decode when the path actually changed — and do it off the UI thread,
+        // so dragging the opacity slider doesn't re-read/decode the image every tick.
+        if (path == _bgImagePath && _bgBitmap != null)
+        {
+            img.Source = _bgBitmap; img.IsVisible = true;
+            return;
+        }
+        _bgImagePath = path;
+        string captured = path;
+        Task.Run(() =>
+        {
+            Avalonia.Media.Imaging.Bitmap? bmp = null;
+            try { bmp = new Avalonia.Media.Imaging.Bitmap(captured); } catch { }
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (bmp == null || _bgImagePath != captured) return;   // path changed again meanwhile
+                _bgBitmap = bmp;
+                img.Source = bmp;
+                img.IsVisible = true;
+            });
+        });
     }
 
     // ── Game detail card (U4) ───────────────────────────────────────────────

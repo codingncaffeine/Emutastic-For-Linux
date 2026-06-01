@@ -155,6 +155,17 @@ namespace Emutastic.Services
         /// <summary>Raised when the active theme's background image changes; the main window applies it.</summary>
         public event EventHandler? BackgroundImageChanged;
 
+        /// <summary>Lets the Preferences Theme panel signal a manual background-image change
+        /// (pick/clear/opacity/stretch) so the main window re-applies it without going through
+        /// a theme load. Marshals to the UI thread.</summary>
+        public void RaiseBackgroundImageChanged()
+        {
+            if (Dispatcher.UIThread.CheckAccess())
+                BackgroundImageChanged?.Invoke(this, EventArgs.Empty);
+            else
+                Dispatcher.UIThread.Post(() => BackgroundImageChanged?.Invoke(this, EventArgs.Empty));
+        }
+
         /// <summary>
         /// Applies a custom-edited color set (from the Theme Editor).
         /// Sets ActiveThemeId to "custom" so it won't match any built-in.
