@@ -224,6 +224,41 @@
         </Style>
     </ControlTheme>
 
+    <!-- ── SIDEBAR EXPANDER (flat manufacturer groups) ──
+         Replaces Fluent's boxy expander with upstream's flat look: transparent header,
+         muted SemiBold caption, small left chevron that rotates when expanded. -->
+    <ControlTheme x:Key="SidebarExpander" TargetType="Expander">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}"/>
+        <Setter Property="Template">
+            <ControlTemplate>
+                <StackPanel>
+                    <ToggleButton Name="header"
+                                  IsChecked="{Binding IsExpanded, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                  Content="{TemplateBinding Header}"
+                                  Background="Transparent" BorderThickness="0" Padding="18,8,0,4"
+                                  Cursor="Hand" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                  Foreground="{DynamicResource TextMutedBrush}" FontSize="10" FontWeight="SemiBold">
+                        <ToggleButton.Template>
+                            <ControlTemplate>
+                                <!-- Flat muted caption only — NO chevron/box, so the group reads as a
+                                     plain section header (still toggles collapse on click). -->
+                                <Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
+                                    <ContentPresenter Content="{TemplateBinding Content}" VerticalAlignment="Center"/>
+                                </Border>
+                            </ControlTemplate>
+                        </ToggleButton.Template>
+                    </ToggleButton>
+                    <ContentPresenter Content="{TemplateBinding Content}"
+                                      IsVisible="{TemplateBinding IsExpanded}" Margin="0,0,0,6"/>
+                </StackPanel>
+            </ControlTemplate>
+        </Setter>
+        <Style Selector="^ /template/ ToggleButton#header:pointerover">
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
+        </Style>
+    </ControlTheme>
+
     <!-- ── TEXT STYLES (applied via Theme=) ── -->
     <ControlTheme x:Key="LabelMuted" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{DynamicResource PrimaryFont}"/>

@@ -1,30 +1,243 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d" d:DesignWidth="640" d:DesignHeight="320"
+        xmlns:conv="using:Emutastic.Converters"
+        xmlns:vm="using:Emutastic.ViewModels"
+        xmlns:models="using:Emutastic.Models"
         x:Class="Emutastic.Views.MainWindow"
-        Width="640" Height="320"
-        Title="Emutastic (M2 launcher)">
-    <!-- Throwaway M2 launcher to exercise the emulator vertical slice.
-         The real 1:1 MainWindow shell (library browser, theming) is built in M4. -->
-    <StackPanel Margin="20" Spacing="12">
-        <TextBlock Text="Emutastic — M2 vertical slice" FontSize="20" FontWeight="Bold"/>
-        <TextBlock Text="Pick a libretro core (.so) and a ROM, then Launch." Opacity="0.7"/>
+        x:DataType="vm:MainViewModel"
+        x:CompileBindings="False"
+        Width="1100" Height="720" MinWidth="800" MinHeight="500"
+        Title="Emutastic"
+        Background="{DynamicResource BgPrimaryBrush}"
+        SystemDecorations="None">
 
-        <TextBlock Text="Core (.so):" Margin="0,8,0,0"/>
-        <DockPanel>
-            <Button Name="BrowseCore" Content="Browse…" DockPanel.Dock="Right" Margin="8,0,0,0"/>
-            <TextBox Name="CorePath" PlaceholderText="path to *_libretro.so"/>
-        </DockPanel>
+    <!-- M4c shell: 1:1 main-window clone (title bar + sidebar + flat box-art grid + status banner).
+         List/grouped views = M4c-2; nav/launch/import wiring + slider = M4d. -->
+    <Grid Name="RootGrid" RowDefinitions="38,*,Auto">
 
-        <TextBlock Text="ROM:"/>
-        <DockPanel>
-            <Button Name="BrowseRom" Content="Browse…" DockPanel.Dock="Right" Margin="8,0,0,0"/>
-            <TextBox Name="RomPath" PlaceholderText="path to ROM file"/>
-        </DockPanel>
+        <!-- ══ TITLE BAR ══ -->
+        <Grid Name="CustomTitleBar" Grid.Row="0" ColumnDefinitions="220,*">
+            <Border Grid.Column="0" Background="{DynamicResource BgSecondaryBrush}">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
+                    <Image Width="20" Height="20" Margin="0,0,7,0"
+                           Source="avares://Emutastic/Assets/system_icons/nes_icon.jpg"/>
+                    <TextBlock Text="Emutastic" FontFamily="{DynamicResource PrimaryFont}"
+                               FontSize="13" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center"/>
+                </StackPanel>
+            </Border>
+            <Grid Grid.Column="1" Background="{DynamicResource BgSecondaryBrush}" ColumnDefinitions="*,Auto">
+                <!-- drag zone -->
+                <Border Name="DragZone" Grid.Column="0" Background="Transparent"/>
+                <!-- traffic-light window buttons -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0" Spacing="6">
+                    <Button Name="MinimizeButton" Width="13" Height="13" Padding="0" Cursor="Hand" ToolTip.Tip="Minimize">
+                        <Button.Template><ControlTemplate><Ellipse Name="c" Fill="{DynamicResource TrafficYellowBrush}"/></ControlTemplate></Button.Template>
+                    </Button>
+                    <Button Name="MaximizeButton" Width="13" Height="13" Padding="0" Cursor="Hand" ToolTip.Tip="Maximize">
+                        <Button.Template><ControlTemplate><Ellipse Name="c" Fill="{DynamicResource GreenBrush}"/></ControlTemplate></Button.Template>
+                    </Button>
+                    <Button Name="CloseButton" Width="13" Height="13" Padding="0" Cursor="Hand" ToolTip.Tip="Close">
+                        <Button.Template><ControlTemplate><Ellipse Name="c" Fill="{DynamicResource TrafficRedBrush}"/></ControlTemplate></Button.Template>
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Grid>
 
-        <Button Name="Launch" Content="▶ Launch" HorizontalAlignment="Left" Padding="20,6"/>
-        <TextBlock Name="Status" Foreground="#E03535" TextWrapping="Wrap"/>
-    </StackPanel>
+        <!-- ══ BODY ══ -->
+        <Grid Grid.Row="1" ColumnDefinitions="220,*">
+
+            <!-- ── SIDEBAR ── -->
+            <Border Grid.Column="0" Background="{DynamicResource BgSecondaryBrush}">
+                <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                    <StackPanel Name="SidebarPanel" Margin="0,6,0,12">
+                        <TextBlock Text="LIBRARY" Theme="{DynamicResource LabelMuted}" Margin="16,10,0,4"/>
+                        <Button Theme="{DynamicResource SidebarItemStyle}" Content="All Games"
+                                Command="{Binding NavigateToAllGamesCommand}"/>
+                        <Button Theme="{DynamicResource SidebarItemStyle}" Content="◷  Recently Played"
+                                Command="{Binding NavigateToRecentCommand}"/>
+                        <Button Theme="{DynamicResource SidebarItemStyle}" Content="♡  Favorites"
+                                Command="{Binding NavigateToFavoritesCommand}"/>
+                        <Button Theme="{DynamicResource SidebarItemStyle}" Content="Recently Added"
+                                Command="{Binding NavigateToRecentlyAddedCommand}"/>
+
+                        <Rectangle Height="1" Fill="{DynamicResource BorderSubtleBrush}" Margin="12,8"/>
+                        <TextBlock Text="CONSOLES" Theme="{DynamicResource LabelMuted}" Margin="16,4,0,4"/>
+
+                        <!-- Arcade (top of consoles) -->
+                        <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="Arcade">
+                            <StackPanel Orientation="Horizontal" Spacing="8"><TextBlock Text="🕹" FontSize="16" Width="20" TextAlignment="Center" VerticalAlignment="Center"/><TextBlock Text="Arcade" VerticalAlignment="Center"/></StackPanel></Button>
+
+                        <Expander Theme="{StaticResource SidebarExpander}" Header="ATARI" Margin="6,4,0,0" IsExpanded="True">
+                            <StackPanel>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="Atari2600"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='Atari2600'}"/><TextBlock Text="Atari 2600" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="Atari7800"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='Atari7800'}"/><TextBlock Text="Atari 7800" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="Jaguar"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='Jaguar'}"/><TextBlock Text="Atari Jaguar" VerticalAlignment="Center"/></StackPanel></Button>
+                            </StackPanel>
+                        </Expander>
+
+                        <Expander Theme="{StaticResource SidebarExpander}" Header="NINTENDO" Margin="6,2,0,0" IsExpanded="True">
+                            <StackPanel>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="NES"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='NES'}"/><TextBlock Text="Nintendo (NES)" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="FDS"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='FDS'}"/><TextBlock Text="Famicom Disk System" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="SNES"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='SNES'}"/><TextBlock Text="Super Nintendo" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="N64"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='N64'}"/><TextBlock Text="Nintendo 64" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="GameCube"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='GameCube'}"/><TextBlock Text="GameCube" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="GB"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='GB'}"/><TextBlock Text="Game Boy" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="GBC"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='GBC'}"/><TextBlock Text="Game Boy Color" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="GBA"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='GBA'}"/><TextBlock Text="Game Boy Advance" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="3DS"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='3DS'}"/><TextBlock Text="Nintendo 3DS" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="NDS"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='NDS'}"/><TextBlock Text="Nintendo DS" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="VirtualBoy"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='VirtualBoy'}"/><TextBlock Text="Virtual Boy" VerticalAlignment="Center"/></StackPanel></Button>
+                            </StackPanel>
+                        </Expander>
+
+                        <Expander Theme="{StaticResource SidebarExpander}" Header="SEGA" Margin="6,2,0,0" IsExpanded="True">
+                            <StackPanel>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="SMS"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='SMS'}"/><TextBlock Text="Sega Master System" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="Genesis"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='Genesis'}"/><TextBlock Text="Sega Genesis" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="SegaCD"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='SegaCD'}"/><TextBlock Text="Sega CD" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="Sega32X"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='Sega32X'}"/><TextBlock Text="Sega 32X" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="Saturn"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='Saturn'}"/><TextBlock Text="Sega Saturn" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="GameGear"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='GameGear'}"/><TextBlock Text="Sega Game Gear" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="SG1000"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='SG1000'}"/><TextBlock Text="SG-1000" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="Dreamcast"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='Dreamcast'}"/><TextBlock Text="Dreamcast" VerticalAlignment="Center"/></StackPanel></Button>
+                            </StackPanel>
+                        </Expander>
+
+                        <Expander Theme="{StaticResource SidebarExpander}" Header="SONY" Margin="6,2,0,0" IsExpanded="True">
+                            <StackPanel>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="PS1"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='PS1'}"/><TextBlock Text="PlayStation" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="PSP"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='PSP'}"/><TextBlock Text="PSP" VerticalAlignment="Center"/></StackPanel></Button>
+                            </StackPanel>
+                        </Expander>
+
+                        <Expander Theme="{StaticResource SidebarExpander}" Header="NEC" Margin="6,2,0,0" IsExpanded="True">
+                            <StackPanel>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="TG16"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='TG16'}"/><TextBlock Text="TurboGrafx-16" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="TGCD"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='TGCD'}"/><TextBlock Text="TurboGrafx-CD" VerticalAlignment="Center"/></StackPanel></Button>
+                            </StackPanel>
+                        </Expander>
+
+                        <Expander Theme="{StaticResource SidebarExpander}" Header="SNK" Margin="6,2,0,0" IsExpanded="True">
+                            <StackPanel>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="NeoGeo"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='NeoGeo'}"/><TextBlock Text="Neo Geo" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="NeoCD"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='NeoCD'}"/><TextBlock Text="Neo Geo CD" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="NGP"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='NGP'}"/><TextBlock Text="NeoGeo Pocket" VerticalAlignment="Center"/></StackPanel></Button>
+                            </StackPanel>
+                        </Expander>
+
+                        <Expander Theme="{StaticResource SidebarExpander}" Header="OTHER" Margin="6,2,0,0" IsExpanded="True">
+                            <StackPanel>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="3DO"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='3DO'}"/><TextBlock Text="3DO" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="CDi"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='CDi'}"/><TextBlock Text="Philips CD-i" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="ColecoVision"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='ColecoVision'}"/><TextBlock Text="ColecoVision" VerticalAlignment="Center"/></StackPanel></Button>
+                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="Vectrex"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='Vectrex'}"/><TextBlock Text="Vectrex" VerticalAlignment="Center"/></StackPanel></Button>
+                            </StackPanel>
+                        </Expander>
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+
+            <!-- ── CONTENT ── -->
+            <Grid Grid.Column="1" Background="{DynamicResource ContentBgBrush}" RowDefinitions="52,*">
+
+                <!-- toolbar -->
+                <Grid Grid.Row="0" Margin="20,0" ColumnDefinitions="*,Auto">
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Spacing="10">
+                        <TextBlock Text="{Binding SelectedConsole}" FontFamily="{DynamicResource PrimaryFont}"
+                                   FontSize="18" FontWeight="Bold" Foreground="{DynamicResource TextPrimaryBrush}"
+                                   VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding GameCountText}" Theme="{DynamicResource TextSecondary}" VerticalAlignment="Bottom" Margin="0,0,0,3"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Spacing="8">
+                        <TextBox Name="SearchBox" Width="200" Watermark="Search…" PlaceholderText="Search…"/>
+                    </StackPanel>
+                </Grid>
+
+                <!-- flat box-art grid -->
+                <ListBox Name="GameGridView" Grid.Row="1"
+                         ItemsSource="{Binding Games}"
+                         Background="Transparent" BorderThickness="0"
+                         Padding="{DynamicResource LibraryGridPadding}"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBox.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel Orientation="Horizontal"/>
+                        </ItemsPanelTemplate>
+                    </ListBox.ItemsPanel>
+                    <ListBox.Styles>
+                        <Style Selector="ListBoxItem">
+                            <Setter Property="Padding" Value="0"/>
+                            <Setter Property="Background" Value="Transparent"/>
+                        </Style>
+                    </ListBox.Styles>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="models:Game">
+                            <Border Width="{DynamicResource LibraryCardWidth}" Margin="{DynamicResource LibraryCardMargin}"
+                                    Background="Transparent" Cursor="Hand">
+                                <StackPanel>
+                                    <!-- art -->
+                                    <Border CornerRadius="8" ClipToBounds="True" Background="Transparent">
+                                        <Border.Height>
+                                            <MultiBinding Converter="{StaticResource ConsoleToArtHeight}">
+                                                <Binding Path="Console"/>
+                                                <Binding Path="Width" RelativeSource="{RelativeSource Self}"/>
+                                                <Binding Path="DataContext.IsMixedView" RelativeSource="{RelativeSource AncestorType=ListBox}"/>
+                                            </MultiBinding>
+                                        </Border.Height>
+                                        <Panel>
+                                            <!-- placeholder fill (no art) -->
+                                            <Border IsVisible="{Binding DisplayArtPath, Converter={StaticResource NullOrEmptyToBool}}">
+                                                <Border.Background>
+                                                    <SolidColorBrush Color="{Binding BackgroundColor, Converter={StaticResource StringToColor}}"/>
+                                                </Border.Background>
+                                            </Border>
+                                            <TextBlock Text="{Binding Title}" FontFamily="{DynamicResource PrimaryFont}"
+                                                       FontSize="13" FontWeight="SemiBold" Foreground="#CCFFFFFF"
+                                                       TextWrapping="Wrap" TextAlignment="Center"
+                                                       VerticalAlignment="Center" HorizontalAlignment="Center" Margin="12"
+                                                       IsVisible="{Binding DisplayArtPath, Converter={StaticResource NullOrEmptyToBool}}"/>
+                                            <!-- box art -->
+                                            <Image Source="{Binding DisplayArtPath, Converter={StaticResource PathToImage}}"
+                                                   Stretch="Uniform" HorizontalAlignment="Left" VerticalAlignment="Top"
+                                                   IsVisible="{Binding DisplayArtPath, Converter={StaticResource NotNullOrEmptyToBool}}"/>
+                                            <!-- favorite heart -->
+                                            <TextBlock Text="♥" FontSize="14" Foreground="{DynamicResource FavoriteHeartBrush}"
+                                                       VerticalAlignment="Bottom" HorizontalAlignment="Right" Margin="0,0,8,8"
+                                                       IsVisible="{Binding IsFavorite}"/>
+                                        </Panel>
+                                    </Border>
+                                    <!-- title -->
+                                    <TextBlock Text="{Binding Title, Converter={StaticResource SmartTitleCase}}"
+                                               FontFamily="{DynamicResource PrimaryFont}" FontSize="12" FontWeight="SemiBold"
+                                               Foreground="White" TextAlignment="Center" TextTrimming="CharacterEllipsis"
+                                               MaxHeight="34" Margin="4,8,4,0"/>
+                                    <!-- star rating (grey base + white filled overlay) -->
+                                    <Panel HorizontalAlignment="Center" Margin="0,3,0,0">
+                                        <TextBlock Text="★★★★★" FontSize="11" Foreground="#FF2A2A2A"/>
+                                        <TextBlock Text="{Binding Rating, Converter={StaticResource RatingToFilledStars}}"
+                                                   FontSize="11" Foreground="White" HorizontalAlignment="Left"/>
+                                    </Panel>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </Grid>
+        </Grid>
+
+        <!-- ══ STATUS / IMPORT BANNER ══ -->
+        <Border Grid.Row="2" Background="{DynamicResource BgSecondaryBrush}"
+                BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0"
+                Padding="16,8" IsVisible="{Binding IsBannerVisible}">
+            <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                <TextBlock Text="{Binding BannerText}" Theme="{DynamicResource TextSecondary}" VerticalAlignment="Center"/>
+                <ProgressBar Width="180" Height="6" Minimum="0" Maximum="100"
+                             Value="{Binding BannerProgressPercent}"
+                             IsVisible="{Binding IsProgressBarVisible}"
+                             Foreground="{DynamicResource AccentBrush}"/>
+            </StackPanel>
+        </Border>
+    </Grid>
 </Window>
