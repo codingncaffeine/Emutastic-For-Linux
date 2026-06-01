@@ -766,13 +766,14 @@ public partial class MainWindow : Window
         items.Add(new Separator());
 
         // Deferred to their splinters (disabled stubs).
-        items.Add(new MenuItem { Header = "📝  Notes", IsEnabled = false });           // U7 (notes editor)
+        items.Add(MenuAction("📝  Notes", () => NotesWindow.ShowFor(game, this)));
         items.Add(MenuAction(ManualLauncher.HasUsableManual(game) ? "📖  View Manual" : "📖  Download Manual…",
             () => RunGuarded(() => ManualLauncher.OpenOrDownloadAsync(game, _artworkFetch!))));
-        // Cheats — only when the console's core supports them (upstream gate).
+        // Cheats — only when the console's core supports them (upstream gate). Modal so two
+        // windows can't last-write-wipe the same cheat JSON.
         if (CoreManager.ConsoleCoreMap.TryGetValue(game.Console ?? "", out var cheatCores) && cheatCores.Length > 0
             && CheatSupport.Lookup(cheatCores[0]).Level != CheatSupportLevel.NotSupported)
-            items.Add(MenuAction("🎮  Cheats…", () => new CheatsManagerWindow(game).Show(this)));
+            items.Add(MenuAction("🎮  Cheats…", () => RunGuarded(() => new CheatsManagerWindow(game).ShowDialog(this))));
         if (!game.HasPatch && RomPatcher.SupportedConsoles.Contains(game.Console ?? ""))
             items.Add(new MenuItem { Header = "🧩  Apply ROM Hack…", IsEnabled = false }); // later
 

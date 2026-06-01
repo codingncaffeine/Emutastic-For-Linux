@@ -412,8 +412,9 @@ public partial class GameDetailWindow : Window
         };
         menu.Items.Add(rename);
 
-        // Notes editor lands later in U7; Manual opens via the system PDF viewer (xdg-open).
-        menu.Items.Add(new MenuItem { Header = "Notes…", IsEnabled = false });
+        var notes = new MenuItem { Header = "Notes…" };
+        notes.Click += (_, _) => NotesWindow.ShowFor(_game, this);
+        menu.Items.Add(notes);
         var manual = new MenuItem { Header = ManualLauncher.HasUsableManual(_game) ? "View Manual" : "Download Manual…" };
         manual.Click += (_, _) =>
         {
@@ -427,7 +428,7 @@ public partial class GameDetailWindow : Window
             && CheatSupport.Lookup(cores[0]).Level != CheatSupportLevel.NotSupported)
         {
             var cheats = new MenuItem { Header = "Cheats…" };
-            cheats.Click += (_, _) => new CheatsManagerWindow(_game).Show(this);
+            cheats.Click += (_, _) => _ = new CheatsManagerWindow(_game).ShowDialog(this);
             menu.Items.Add(cheats);
         }
 

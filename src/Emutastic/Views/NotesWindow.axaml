@@ -1,0 +1,30 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Emutastic.Views.NotesWindow"
+        x:CompileBindings="False"
+        WindowDecorations="None" Background="Transparent" TransparencyLevelHint="Transparent"
+        Width="420" Height="380" MinWidth="280" MinHeight="200"
+        WindowStartupLocation="CenterOwner">
+    <Border Background="{DynamicResource BgSecondaryBrush}" BorderBrush="{DynamicResource BorderNormalBrush}"
+            BorderThickness="1" CornerRadius="10" ClipToBounds="True">
+        <Grid RowDefinitions="34,*,Auto">
+            <!-- Title bar (drag + close) -->
+            <Grid Name="TitleBar" Grid.Row="0" Background="{DynamicResource BgTertiaryBrush}" ColumnDefinitions="*,Auto">
+                <TextBlock Name="TitleText" Grid.Column="0" Text="Notes" FontFamily="{DynamicResource PrimaryFont}"
+                           FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}"
+                           VerticalAlignment="Center" Margin="12,0,0,0"/>
+                <Button Name="CloseBtn" Grid.Column="1" Content="✕" Background="Transparent" BorderThickness="0"
+                        Foreground="{DynamicResource TextMutedBrush}" FontSize="12" Padding="10,0" Cursor="Hand"/>
+            </Grid>
+
+            <TextBox Name="Editor" Grid.Row="1" AcceptsReturn="True" AcceptsTab="True" TextWrapping="Wrap"
+                     Background="Transparent" BorderThickness="0" Foreground="{DynamicResource TextPrimaryBrush}"
+                     CaretBrush="{DynamicResource AccentBrush}" FontFamily="monospace" FontSize="13"
+                     Padding="12,8" VerticalContentAlignment="Top"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto"/>
+
+            <TextBlock Name="SaveHint" Grid.Row="2" Text="" FontFamily="{DynamicResource PrimaryFont}" FontSize="10"
+                       Foreground="{DynamicResource TextMutedBrush}" Margin="12,0,0,8"/>
+        </Grid>
+    </Border>
+</Window>

@@ -139,7 +139,8 @@ public partial class CheatsManagerWindow : Window
         CheatService.Save(_game, _cheats);
         Refresh();
         await new ConfirmDialog("Import Cheats",
-            added > 0 ? $"Imported {added} cheat{(added == 1 ? "" : "s")}." : "All matching cheats were already in your list.",
+            added > 0 ? $"Imported {added} cheat{(added == 1 ? "" : "s")} — all disabled by default. Toggle the ones you want."
+                      : "All matching cheats were already in your list.",
             "OK", infoOnly: true).ShowDialog<bool>(this);
     }
 
