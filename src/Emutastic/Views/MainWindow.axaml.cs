@@ -70,10 +70,14 @@ public partial class MainWindow : Window
         // Right-click a console in the left nav → console context menu.
         this.FindControl<StackPanel>("SidebarPanel")!.AddHandler(ContextRequestedEvent, OnConsoleContextRequested);
 
-        // Drag-drop ROM import.
+        // Drag-drop ROM import. NOTE: Avalonia 12.0.4's X11 backend does not implement an XDND
+        // drop target (no XdndAware is set on the window), so external file drops are never
+        // delivered on Linux/X11 — the file-picker import (toolbar "Import") is the working path.
+        // These handlers are correct and will start working once the platform adds X11 DnD.
         DragDrop.SetAllowDrop(this, true);
-        AddHandler(DragDrop.DragOverEvent, OnDragOver);
-        AddHandler(DragDrop.DropEvent, OnDrop);
+        AddHandler(DragDrop.DragEnterEvent, OnDragOver, Avalonia.Interactivity.RoutingStrategies.Bubble, handledEventsToo: true);
+        AddHandler(DragDrop.DragOverEvent, OnDragOver, Avalonia.Interactivity.RoutingStrategies.Bubble, handledEventsToo: true);
+        AddHandler(DragDrop.DropEvent, OnDrop, Avalonia.Interactivity.RoutingStrategies.Bubble, handledEventsToo: true);
 
         // Search box → debounced VM search (scoped to the current console when one is selected).
         var search = this.FindControl<TextBox>("SearchBox")!;
@@ -476,16 +480,18 @@ public partial class MainWindow : Window
 
     private void OnDragOver(object? sender, DragEventArgs e)
     {
-        e.DragEffects = e.DataTransfer.Contains(DataFormat.File) ? DragDropEffects.Copy : DragDropEffects.None;
+        e.DragEffects = e.DataTransfer?.Contains(DataFormat.File) == true ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
     }
 
     private void OnDrop(object? sender, DragEventArgs e)
     {
-        if (!e.DataTransfer.Contains(DataFormat.File)) return;
+        if (e.DataTransfer?.Contains(DataFormat.File) != true) return;
         var items = e.DataTransfer.TryGetFiles();
         if (items == null) return;
         var paths = items.Select(i => i.TryGetLocalPath()).Where(p => !string.IsNullOrEmpty(p)).Cast<string>().ToList();
         if (paths.Count > 0) _importer?.ImportFilesAsync(paths, ImportConsoleHint());
+        e.Handled = true;
     }
 
     // ── Context menu (game card) ─────────────────────────────────────────────
