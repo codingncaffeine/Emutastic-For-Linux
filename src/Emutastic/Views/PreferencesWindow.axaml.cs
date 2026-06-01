@@ -1451,14 +1451,37 @@ public partial class PreferencesWindow : Window
         topRow.Children.Add(dlAllBtn); topRow.Children.Add(dlAllSummary); topRow.Children.Add(updateAllBtn);
         panel.Children.Add(topRow);
 
+        // Overall download progress (matches upstream allProgressBar): a thin bar that fills across
+        // the whole batch — value = (completed*100 + currentCore%) / total.
+        var allProgressBar = new ProgressBar { Height = 4, Minimum = 0, Maximum = 100, Value = 0,
+            IsVisible = false, Margin = new Thickness(0, 0, 0, 12) };
+        panel.Children.Add(allProgressBar);
+
         dlAllBtn.Click += async (_, _) =>
         {
+            var todo = recommended.Where(c => !IsInstalled(c.FileName)).ToList();
+            if (todo.Count == 0) { dlAllSummary.Text = "All recommended cores already installed."; return; }
+
             dlAllBtn.IsEnabled = false; dlAllBtn.Content = "Downloading…";
-            foreach (var entry in recommended.Where(c => !IsInstalled(c.FileName)))
+            allProgressBar.IsVisible = true; allProgressBar.Value = 0;
+            int done = 0, failed = 0;
+            foreach (var entry in todo)
             {
-                try { await _coreDownloader.DownloadAsync(entry, coresFolder, new Progress<int>()); } catch { }
+                int n = done + 1, completed = done;
+                dlAllSummary.Text = $"Downloading {entry.DisplayName}… ({n}/{todo.Count})";
+                var prog = new Progress<int>(p =>
+                {
+                    dlAllSummary.Text = $"Downloading {entry.DisplayName}… {p}%  ({n}/{todo.Count})";
+                    allProgressBar.Value = (completed * 100 + p) / (double)todo.Count;
+                });
+                try { await _coreDownloader.DownloadAsync(entry, coresFolder, prog); }
+                catch (Exception ex) { failed++; System.Diagnostics.Trace.WriteLine($"[Cores] {entry.FileName} failed: {ex.Message}"); }
+                done++;
+                allProgressBar.Value = done * 100 / (double)todo.Count;
             }
             dlAllBtn.IsEnabled = true; dlAllBtn.Content = "Download All Recommended";
+            allProgressBar.Value = 100; allProgressBar.IsVisible = false;
+            dlAllSummary.Text = failed == 0 ? $"Downloaded {done} core(s)." : $"Done — {done - failed} ok, {failed} failed (see Logs/cores.log).";
             BuildCoresPanel();
         };
 
