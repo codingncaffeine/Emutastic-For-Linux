@@ -92,6 +92,7 @@ public partial class PreferencesWindow : Window
         if (target == "PanelCoreOptions") BuildCoreOptionsTab();
         if (target == "PanelMedia") LoadMediaSettings();
         if (target == "PanelBackups") LoadBackupsSettings();
+        if (target == "PanelSystemFiles") BuildBiosPanel();
     }
 
     // Temporary placeholder until the panel's sub-splinter fills it.
@@ -904,6 +905,314 @@ public partial class PreferencesWindow : Window
             System.IO.File.Copy(file, System.IO.Path.Combine(destDir, System.IO.Path.GetFileName(file)), overwrite: true);
         foreach (string dir in System.IO.Directory.GetDirectories(sourceDir))
             CopyDirectoryRecursive(dir, System.IO.Path.Combine(destDir, System.IO.Path.GetFileName(dir)));
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  U5 P4 — System Files (BIOS): DB-driven scan + Category→Console→BIOS
+    //  accordion + drag-drop archive/MD5 importer.
+    // ════════════════════════════════════════════════════════════════════════
+
+    private static readonly (string Category, string[] ConsoleDisplays)[] BiosCategories =
+    {
+        ("Nintendo", new[] { "Famicom Disk System", "Game Boy Advance" }),
+        ("Sega",     new[] { "Sega CD", "Saturn" }),
+        ("Sony",     new[] { "PlayStation" }),
+        ("NEC",      new[] { "TurboGrafx-CD" }),
+        ("Arcade",   new[] { "Neo Geo", "Neo Geo CD" }),
+        ("Other",    new[] { "3DO", "Philips CD-i" }),
+    };
+
+    private bool _biosDndWired;
+
+    private async void BuildBiosPanel()
+    {
+        var panel = this.FindControl<StackPanel>("BiosPanel")!;
+        if (!_biosDndWired)
+        {
+            var host = this.FindControl<Grid>("PanelSystemFiles")!;
+            DragDrop.SetAllowDrop(host, true);
+            host.AddHandler(DragDrop.DragOverEvent, (_, e) =>
+                e.DragEffects = e.DataTransfer.Contains(DataFormat.File) ? DragDropEffects.Copy : DragDropEffects.None);
+            host.AddHandler(DragDrop.DropEvent, (_, e) => _ = OnBiosDropAsync(e));
+            _biosDndWired = true;
+        }
+
+        panel.Children.Clear();
+        panel.Children.Add(new TextBlock { Text = "Scanning…", FontFamily = Font("PrimaryFont"), FontSize = 12,
+            Foreground = Brush("TextMutedBrush"), Margin = new Thickness(2, 8, 0, 0) });
+
+        string sysDir = AppPaths.GetFolder("System");
+        var (existing, romDirs) = await Task.Run(() => BiosScan(sysDir));
+        // Bail if the user navigated away while scanning.
+        if (!this.FindControl<Grid>("PanelSystemFiles")!.IsVisible) return;
+        panel.Children.Clear();
+        RenderBios(panel, sysDir, existing, romDirs);
+    }
+
+    // Port of BuildBiosScan: DB games → per-console ROM dirs (+ their subdirs) → File.Exists set.
+    private static (HashSet<string> Existing, Dictionary<string, string[]> RomDirs) BiosScan(string sysDir)
+    {
+        var romDirs = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            var games = new Services.DatabaseService().GetAllGames();
+            romDirs = games.Where(g => !string.IsNullOrEmpty(g.RomPath))
+                .GroupBy(g => g.Console)
+                .ToDictionary(grp => grp.Key, grp =>
+                {
+                    var baseDirs = grp.Select(g => System.IO.Path.GetDirectoryName(AppPaths.FromStoragePath(g.RomPath)))
+                        .Where(d => !string.IsNullOrEmpty(d)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                    var expanded = new List<string>(baseDirs!);
+                    foreach (var dir in baseDirs) { try { expanded.AddRange(System.IO.Directory.EnumerateDirectories(dir!)); } catch { } }
+                    return expanded.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                }, StringComparer.OrdinalIgnoreCase);
+        }
+        catch { }
+
+        var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var e in Services.KnownBios.All)
+        {
+            string sysPath = System.IO.Path.Combine(sysDir, e.Filename);
+            if (SafeExists(sysPath)) existing.Add(sysPath);
+            if (romDirs.TryGetValue(e.Console, out var dirs))
+            {
+                string leaf = System.IO.Path.GetFileName(e.Filename);
+                foreach (var dir in dirs)
+                {
+                    if (string.IsNullOrEmpty(dir)) continue;
+                    string p = System.IO.Path.Combine(dir, leaf);
+                    if (SafeExists(p)) existing.Add(p);
+                }
+            }
+        }
+        return (existing, romDirs);
+    }
+
+    private static bool SafeExists(string p) { try { return System.IO.File.Exists(p); } catch { return false; } }
+
+    private void RenderBios(StackPanel panel, string sysDir, HashSet<string> existing, Dictionary<string, string[]> romDirs)
+    {
+        bool Has(string path) => existing.Contains(path);
+
+        // Info banner.
+        var accent = Brush("AccentBrush");
+        var banner = new Border
+        {
+            Background = new SolidColorBrush(Color.Parse("#18E03535")), BorderBrush = new SolidColorBrush(Color.Parse("#40E03535")),
+            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(14, 10, 14, 10), Margin = new Thickness(0, 0, 0, 12),
+        };
+        var bs = new StackPanel();
+        bs.Children.Add(new TextBlock { Text = "Where to place BIOS files", FontSize = 12, FontWeight = FontWeight.SemiBold, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextPrimaryBrush"), Margin = new Thickness(0, 0, 0, 4) });
+        bs.Children.Add(new TextBlock { Text = $"System folder (recommended):  {sysDir}", FontSize = 11, FontFamily = "monospace", Foreground = Brush("TextMutedBrush"), TextWrapping = TextWrapping.Wrap });
+        bs.Children.Add(new TextBlock { Text = "Or drop BIOS / SoundFont (.sf2) / MAME romset files anywhere on this panel — they're identified by hash/size and copied into the System folder automatically.", FontSize = 11, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextMutedBrush"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) });
+        banner.Child = bs;
+        panel.Children.Add(banner);
+
+        var byDisplay = Services.KnownBios.All.GroupBy(b => b.ConsoleDisplay).ToDictionary(g => g.Key, g => g.ToList());
+
+        bool FoundFor(Services.BiosEntry e)
+        {
+            if (Has(System.IO.Path.Combine(sysDir, e.Filename))) return true;
+            return romDirs.TryGetValue(e.Console, out var dirs) && dirs.Any(d =>
+                !string.IsNullOrEmpty(d) && Has(System.IO.Path.Combine(d, System.IO.Path.GetFileName(e.Filename))));
+        }
+
+        foreach (var (category, displays) in BiosCategories)
+        {
+            var active = displays.Where(byDisplay.ContainsKey).ToList();
+            if (active.Count == 0) continue;
+            int catFound = active.Sum(d => byDisplay[d].Count(FoundFor));
+            int catTotal = active.Sum(d => byDisplay[d].Count);
+
+            var body = new StackPanel { IsVisible = false, Margin = new Thickness(0, 2, 0, 0) };
+            var header = MakeAccordionHeader(category, $"{active.Count} {(active.Count == 1 ? "system" : "systems")}", catFound, catTotal, body, 14);
+            panel.Children.Add(header);
+            panel.Children.Add(body);
+
+            foreach (var display in active)
+            {
+                var entries = byDisplay[display];
+                foreach (var entry in entries)
+                    body.Children.Add(BuildBiosRow(entry, sysDir, romDirs, display, FoundFor(entry)));
+            }
+        }
+    }
+
+    // A clickable accordion header (chevron + label + summary + found/total badge) that toggles `body`.
+    private Border MakeAccordionHeader(string label, string summary, int found, int total, StackPanel body, double fontSize)
+    {
+        var chevron = new TextBlock { Text = "▸", FontSize = fontSize, Foreground = Brush("TextSecondaryBrush"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) };
+        var grid = new Grid { Cursor = new Cursor(StandardCursorType.Hand), ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto") };
+        Grid.SetColumn(chevron, 0);
+        var lbl = new TextBlock { Text = label, FontSize = fontSize, FontWeight = FontWeight.SemiBold, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextPrimaryBrush"), VerticalAlignment = VerticalAlignment.Center };
+        Grid.SetColumn(lbl, 1);
+        var sum = new TextBlock { Text = summary, FontSize = 11, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextMutedBrush"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) };
+        Grid.SetColumn(sum, 2);
+        var badge = MakeFoundBadge(found, total);
+        Grid.SetColumn(badge, 3);
+        grid.Children.Add(chevron); grid.Children.Add(lbl); grid.Children.Add(sum); grid.Children.Add(badge);
+        var header = new Border { Background = new SolidColorBrush(Color.Parse("#1F1F21")), CornerRadius = new CornerRadius(6), Padding = new Thickness(14, 12, 14, 12), Margin = new Thickness(0, 6, 0, 0), Child = grid };
+        header.PointerPressed += (_, _) => { body.IsVisible = !body.IsVisible; chevron.Text = body.IsVisible ? "▾" : "▸"; };
+        return header;
+    }
+
+    private Border MakeFoundBadge(int found, int total)
+    {
+        string fill = found == total && total > 0 ? "#2230D158" : found > 0 ? "#22FFA500" : "#22888888";
+        string fg   = found == total && total > 0 ? "#30D158"   : found > 0 ? "#FFA500"   : "#888888";
+        return new Border
+        {
+            Background = new SolidColorBrush(Color.Parse(fill)), CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(6, 2, 6, 2), VerticalAlignment = VerticalAlignment.Center,
+            Child = new TextBlock { Text = $"{found}/{total}", FontSize = 10, FontFamily = Font("PrimaryFont"), Foreground = new SolidColorBrush(Color.Parse(fg)) },
+        };
+    }
+
+    private Control BuildBiosRow(Services.BiosEntry entry, string sysDir, Dictionary<string, string[]> romDirs, string consoleDisplay, bool exists)
+    {
+        bool inSys = exists && SafeExists(System.IO.Path.Combine(sysDir, entry.Filename));
+        bool verified = false;
+        string? foundPath = inSys ? System.IO.Path.Combine(sysDir, entry.Filename) : null;
+        if (foundPath == null && exists && romDirs.TryGetValue(entry.Console, out var dirs))
+            foundPath = dirs.Select(d => System.IO.Path.Combine(d, System.IO.Path.GetFileName(entry.Filename))).FirstOrDefault(SafeExists);
+        if (foundPath != null && entry.Md5 != null) verified = VerifyMd5(foundPath, entry.Md5);
+        else if (exists) verified = true; // presence-only
+
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("24,*,Auto"), Margin = new Thickness(12, 0, 0, 0) };
+        var icon = new TextBlock { Text = verified ? "✓" : "⚠", FontSize = 14, FontWeight = FontWeight.Bold, VerticalAlignment = VerticalAlignment.Center,
+            Foreground = new SolidColorBrush(Color.Parse(verified ? "#30D158" : "#E03535")) };
+        Grid.SetColumn(icon, 0);
+
+        string descText = entry.Description;
+        if (!exists) descText += (descText.Length > 0 ? " — " : "") + "Missing";
+        else if (entry.Md5 != null && !verified) descText += (descText.Length > 0 ? " — " : "") + "Hash mismatch";
+        else if (!inSys) descText += (descText.Length > 0 ? " — " : "") + "found in game folder";
+        var info = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        info.Children.Add(new TextBlock { Text = System.IO.Path.GetFileName(entry.Filename), FontSize = 13, FontFamily = "monospace", Foreground = Brush("TextPrimaryBrush") });
+        info.Children.Add(new TextBlock { Text = descText, FontSize = 11, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextSecondaryBrush"), TextWrapping = TextWrapping.Wrap });
+        Grid.SetColumn(info, 1);
+
+        var row = new Border { Background = new SolidColorBrush(Color.Parse("#1A1A1C")), CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(12, 8, 14, 8), Margin = new Thickness(12, 2, 0, 2), Child = grid };
+        grid.Children.Add(icon); grid.Children.Add(info);
+        return row;
+    }
+
+    private static bool VerifyMd5(string path, string expectedMd5)
+    {
+        try { return string.Equals(ComputeMd5(path), expectedMd5, StringComparison.OrdinalIgnoreCase); }
+        catch { return false; }
+    }
+
+    private static string? ComputeMd5(string path)
+    {
+        try
+        {
+            using var md5 = System.Security.Cryptography.MD5.Create();
+            using var fs = System.IO.File.OpenRead(path);
+            return Convert.ToHexString(md5.ComputeHash(fs)).ToLowerInvariant();
+        }
+        catch { return null; }
+    }
+
+    // ── Drag-drop BIOS importer ──
+    private async Task OnBiosDropAsync(DragEventArgs e)
+    {
+        if (!e.DataTransfer.Contains(DataFormat.File)) return;
+        var items = e.DataTransfer.TryGetFiles();
+        if (items == null) return;
+        var paths = items.Select(i => i.TryGetLocalPath()).Where(p => !string.IsNullOrEmpty(p)).Cast<string>().ToList();
+        if (paths.Count == 0) return;
+
+        string sysDir = AppPaths.GetFolder("System");
+        var messages = new List<string>();
+        var result = await Task.Run(() =>
+        {
+            int imported = 0, skipped = 0;
+            foreach (var src in paths)
+            {
+                if (!System.IO.File.Exists(src)) { skipped++; continue; }
+                ProcessDroppedFile(src, sysDir, messages, ref imported, ref skipped);
+            }
+            return (imported, skipped);
+        });
+
+        if (result.imported > 0) BuildBiosPanel(); // rescan + repaint
+        string summary = result.imported > 0
+            ? $"Imported {result.imported} file{(result.imported == 1 ? "" : "s")}" + (result.skipped > 0 ? $" ({result.skipped} skipped)" : "")
+            : "No BIOS files recognized";
+        await new ConfirmDialog("BIOS drop", summary + (messages.Count > 0 ? "\n\n" + string.Join("\n", messages) : ""), "OK", infoOnly: true).ShowDialog<bool>(this);
+    }
+
+    private static void ProcessDroppedFile(string src, string sysDir, List<string> messages, ref int imported, ref int skipped)
+    {
+        long size;
+        try { size = new System.IO.FileInfo(src).Length; } catch { skipped++; return; }
+        string srcName = System.IO.Path.GetFileName(src);
+        string srcExt = System.IO.Path.GetExtension(srcName);
+        bool isArchive = srcExt.Equals(".zip", StringComparison.OrdinalIgnoreCase) || srcExt.Equals(".7z", StringComparison.OrdinalIgnoreCase) || srcExt.Equals(".rar", StringComparison.OrdinalIgnoreCase);
+        bool anyHashed = Services.KnownBios.All.Any(b => b.Md5 != null);
+
+        if (isArchive)
+        {
+            int extractedHere = 0;
+            try
+            {
+                using var archive = Services.Archives.RomArchive.Open(src);
+                foreach (var entry in archive.Entries)
+                {
+                    if (entry.IsDirectory || string.IsNullOrEmpty(entry.Key)) continue;
+                    string entryName = System.IO.Path.GetFileName(entry.Key);
+                    if (string.IsNullOrEmpty(entryName)) continue;
+                    string? entryMd5 = null;
+                    if (anyHashed)
+                    {
+                        try { using var ms = entry.OpenEntryStream(); using var md5 = System.Security.Cryptography.MD5.Create(); entryMd5 = Convert.ToHexString(md5.ComputeHash(ms)).ToLowerInvariant(); } catch { }
+                    }
+                    var match = MatchKnownBios(entryName, entry.Size, entryMd5);
+                    if (match == null) continue;
+                    try { using var es = entry.OpenEntryStream(); CopyEntryToSystem(match, es, sysDir); messages.Add($"✓ {srcName} → {System.IO.Path.GetFileName(match.Filename)} ({match.ConsoleDisplay})"); imported++; extractedHere++; }
+                    catch (Exception ex) { messages.Add($"⚠ {srcName}:{entryName}: {ex.Message}"); skipped++; }
+                }
+            }
+            catch (Exception ex) { messages.Add($"⚠ {srcName}: archive open failed ({ex.Message})"); }
+            if (extractedHere > 0) return; // else fall through (archive IS the BIOS, e.g. neogeo.zip)
+        }
+
+        string? fileMd5 = anyHashed ? ComputeMd5(src) : null;
+        var fileMatch = MatchKnownBios(srcName, size, fileMd5);
+        string destPath; string label;
+        if (fileMatch != null) { destPath = System.IO.Path.Combine(sysDir, fileMatch.Filename); label = $"{System.IO.Path.GetFileName(fileMatch.Filename)} → {fileMatch.ConsoleDisplay}"; }
+        else if (srcExt.Equals(".sf2", StringComparison.OrdinalIgnoreCase)) { destPath = System.IO.Path.Combine(sysDir, srcName); label = $"{srcName} → SoundFont"; }
+        else { messages.Add($"• {srcName}: not a recognized BIOS"); skipped++; return; }
+        try
+        {
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(destPath)!);
+            System.IO.File.Copy(src, destPath, overwrite: true);
+            messages.Add($"✓ {label}"); imported++;
+        }
+        catch (Exception ex) { messages.Add($"⚠ {srcName}: {ex.Message}"); skipped++; }
+    }
+
+    private static Services.BiosEntry? MatchKnownBios(string entryName, long size, string? md5)
+    {
+        if (md5 != null)
+        {
+            var hashMatch = Services.KnownBios.All.FirstOrDefault(b => b.Md5 != null && string.Equals(b.Md5, md5, StringComparison.OrdinalIgnoreCase));
+            if (hashMatch != null) return hashMatch;
+        }
+        var sizeMatch = Services.KnownBios.All.FirstOrDefault(b =>
+            string.Equals(System.IO.Path.GetFileName(b.Filename), entryName, StringComparison.OrdinalIgnoreCase) && (b.ExpectedSize == 0 || b.ExpectedSize == size));
+        if (sizeMatch != null) return sizeMatch;
+        return Services.KnownBios.All.FirstOrDefault(b => string.Equals(System.IO.Path.GetFileName(b.Filename), entryName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static void CopyEntryToSystem(Services.BiosEntry match, System.IO.Stream source, string sysDir)
+    {
+        string destPath = System.IO.Path.Combine(sysDir, match.Filename);
+        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(destPath)!);
+        using var dest = System.IO.File.Create(destPath);
+        source.CopyTo(dest);
     }
 
     private IBrush? Brush(string key) => this.TryFindResource(key, out var v) ? v as IBrush : null;
