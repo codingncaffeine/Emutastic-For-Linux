@@ -36,6 +36,8 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
+        Platform.WindowResize.Enable(this);   // edge/corner resize for the borderless window
+
         this.FindControl<Button>("MinimizeButton")!.Click += (_, _) => WindowState = WindowState.Minimized;
         this.FindControl<Button>("MaximizeButton")!.Click += (_, _) => ToggleMaximize();
         this.FindControl<Button>("CloseButton")!.Click += (_, _) => Close();

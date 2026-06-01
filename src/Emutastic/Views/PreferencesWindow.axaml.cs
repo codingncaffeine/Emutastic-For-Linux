@@ -34,6 +34,8 @@ public partial class PreferencesWindow : Window
     {
         InitializeComponent();
 
+        Platform.WindowResize.Enable(this);   // edge/corner resize for the borderless window
+
         // Custom chrome.
         this.FindControl<Grid>("CustomTitleBar")!.PointerPressed += (_, e) =>
         {
