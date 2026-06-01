@@ -351,8 +351,11 @@ public partial class MainWindow : Window
     // is reserved for range-select, so it never opens the card.
     private void OnGameTapped(object? sender, TappedEventArgs e)
     {
-        if (e.KeyModifiers.HasFlag(KeyModifiers.Shift)) return;
-        if (e.Source is Control c && c.DataContext is Game g) OpenGameDetail(g);
+        // Shift/Ctrl are multi-select gestures (handled by the ListBox) — don't open detail.
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Shift) || e.KeyModifiers.HasFlag(KeyModifiers.Control)) return;
+        var node = e.Source as Control;
+        while (node != null && node.DataContext is not Game) node = node.Parent as Control;
+        if (node?.DataContext is Game g) OpenGameDetail(g);
     }
 
     private void OpenSelectedDetail()
@@ -442,8 +445,40 @@ public partial class MainWindow : Window
         var node = e.Source as Control;
         while (node != null && node.DataContext is not Game) node = node.Parent as Control;
         if (node?.DataContext is not Game g) return;
-        BuildGameContextMenu(g).Open(node);
+
+        // If a multi-selection is active and this game is part of it, show the bulk menu.
+        var selected = SelectedGames();
+        ContextMenu menu = selected.Count > 1 && selected.Contains(g)
+            ? BuildMultiSelectContextMenu(selected)
+            : BuildGameContextMenu(g);
+        menu.Open(node);
         e.Handled = true;
+    }
+
+    // Games selected in whichever view is visible (grid or list).
+    private List<Game> SelectedGames()
+    {
+        var list = this.FindControl<DataGrid>("GameListView");
+        if (list is { IsVisible: true }) return list.SelectedItems.OfType<Game>().ToList();
+        return this.FindControl<ListBox>("GameGridView")?.SelectedItems?.OfType<Game>().ToList() ?? new List<Game>();
+    }
+
+    private ContextMenu BuildMultiSelectContextMenu(List<Game> games)
+    {
+        var menu = new ContextMenu();
+        var del = MenuAction($"🗑  Delete Selected ({games.Count})", () => RunGuarded(async () =>
+        {
+            bool ok = await new ConfirmDialog("Delete Games",
+                $"Delete {games.Count} games? Save states will not be removed.", "Delete", danger: true).ShowDialog<bool>(this);
+            if (!ok) return;
+            await Task.Run(() => _db!.DeleteGames(games.Select(g => g.Id)));
+            foreach (var g in games) _vm!.RemoveGame(g);
+            this.FindControl<ListBox>("GameGridView")?.SelectedItems?.Clear();
+            await _vm!.FilterGamesAsync();
+        }));
+        del.Foreground = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#FF5F57"));
+        menu.Items.Add(del);
+        return menu;
     }
 
     private static MenuItem MenuAction(string header, Action onClick, bool enabled = true)

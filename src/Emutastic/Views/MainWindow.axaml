@@ -216,6 +216,7 @@
                 <!-- flat box-art grid -->
                 <ListBox Name="GameGridView"
                          ItemsSource="{Binding Games}"
+                         SelectionMode="Multiple"
                          Background="Transparent" BorderThickness="0"
                          Padding="{DynamicResource LibraryGridPadding}"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">
