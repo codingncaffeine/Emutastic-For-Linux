@@ -1,0 +1,18 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Emutastic.Views.RenameWindow"
+        x:CompileBindings="False"
+        Width="380" SizeToContent="Height" CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource BgPrimaryBrush}"
+        Title="Rename Game">
+    <StackPanel Margin="20" Spacing="14">
+        <TextBlock Text="Rename game" FontFamily="{DynamicResource PrimaryFont}" FontSize="15" FontWeight="Bold"
+                   Foreground="{DynamicResource TextPrimaryBrush}"/>
+        <TextBox Name="TitleBox"/>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+            <Button Name="CancelButton" Content="Cancel" Theme="{DynamicResource SecondaryButtonStyle}"/>
+            <Button Name="OkButton" Content="Rename" Theme="{DynamicResource PrimaryButtonStyle}"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

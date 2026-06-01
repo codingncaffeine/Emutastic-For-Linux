@@ -1,0 +1,19 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Emutastic.Views.ConfirmDialog"
+        x:CompileBindings="False"
+        Width="400" SizeToContent="Height" CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource BgPrimaryBrush}"
+        Title="Confirm">
+    <StackPanel Margin="20" Spacing="16">
+        <TextBlock Name="TitleText" FontFamily="{DynamicResource PrimaryFont}" FontSize="15" FontWeight="Bold"
+                   Foreground="{DynamicResource TextPrimaryBrush}"/>
+        <TextBlock Name="MessageText" TextWrapping="Wrap" FontFamily="{DynamicResource PrimaryFont}" FontSize="13"
+                   Foreground="{DynamicResource TextSecondaryBrush}"/>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+            <Button Name="CancelButton" Content="Cancel" Theme="{DynamicResource SecondaryButtonStyle}"/>
+            <Button Name="ConfirmButton" Content="OK" Theme="{DynamicResource PrimaryButtonStyle}"/>
+        </StackPanel>
+    </StackPanel>
+</Window>
