@@ -2,8 +2,39 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="Emutastic.App"
              xmlns:local="using:Emutastic"
-             RequestedThemeVariant="Default">
-             <!-- "Default" ThemeVariant follows system theme variant. "Dark" or "Light" are other available options. -->
+             xmlns:conv="using:Emutastic.Converters"
+             RequestedThemeVariant="Dark">
+
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceInclude Source="avares://Emutastic/Themes/DarkTheme.axaml"/>
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- Converter instances (keyed) — mirrors upstream App.xaml's converter block. -->
+            <conv:PathToImageConverter x:Key="PathToImage"/>
+            <conv:SmartTitleCaseConverter x:Key="SmartTitleCase"/>
+            <conv:ConsoleToArtHeightConverter x:Key="ConsoleToArtHeight"/>
+            <conv:ConsoleToCardHeightConverter x:Key="ConsoleToCardHeight"/>
+            <conv:ConsoleTagToIconConverter x:Key="ConsoleTagToIcon"/>
+            <conv:RatingToStarsConverter x:Key="RatingToStars"/>
+            <conv:RatingToFilledStarsConverter x:Key="RatingToFilledStars"/>
+            <conv:LastPlayedToMediumDateConverter x:Key="LastPlayedToMediumDate"/>
+            <conv:ZeroToBlankConverter x:Key="ZeroToBlank"/>
+            <conv:StringToColorConverter x:Key="StringToColor"/>
+            <conv:InverseBoolConverter x:Key="InverseBool"/>
+            <conv:StringNotEmptyToBoolConverter x:Key="StringNotEmptyToBool"/>
+            <conv:CountIsZeroToBoolConverter x:Key="CountIsZeroToBool"/>
+            <conv:NullOrEmptyToBoolConverter x:Key="NullOrEmptyToBool"/>
+            <conv:NotNullOrEmptyToBoolConverter x:Key="NotNullOrEmptyToBool"/>
+            <conv:BoolToVisibilityConverter x:Key="BoolToVisibility"/>
+
+            <!-- Library layout resources (runtime-tuned by the spacing/size sliders in M4d). -->
+            <x:Double x:Key="LibraryCardWidth">148</x:Double>
+            <Thickness x:Key="LibraryGridPadding">28</Thickness>
+            <Thickness x:Key="LibraryCardMargin">0,0,20,20</Thickness>
+        </ResourceDictionary>
+    </Application.Resources>
 
     <Application.Styles>
         <FluentTheme />
