@@ -259,6 +259,49 @@
         </Style>
     </ControlTheme>
 
+    <!-- ── TOOLBAR TAB TOGGLE (Library / Save States / Screenshots / Achievements) ──
+         Flat segment with an accent underline + brighter text when selected. -->
+    <ControlTheme x:Key="TabToggle" TargetType="ToggleButton">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}"/>
+        <Setter Property="FontFamily" Value="{DynamicResource PrimaryFont}"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="Padding" Value="16,7"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Border Name="b" Background="{TemplateBinding Background}" BorderBrush="Transparent"
+                        BorderThickness="0,0,0,2" Padding="{TemplateBinding Padding}">
+                    <ContentPresenter Content="{TemplateBinding Content}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+            </ControlTemplate>
+        </Setter>
+        <Style Selector="^:pointerover"><Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/></Style>
+        <Style Selector="^:checked"><Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/></Style>
+        <Style Selector="^:checked /template/ Border#b"><Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/></Style>
+    </ControlTheme>
+
+    <!-- ── VIEW-MODE TOGGLE (grid / list) ── small icon segment, accent when active. -->
+    <ControlTheme x:Key="ViewToggle" TargetType="ToggleButton">
+        <Setter Property="Background" Value="{DynamicResource BgTertiaryBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
+        <Setter Property="FontSize" Value="14"/>
+        <Setter Property="Width" Value="30"/>
+        <Setter Property="Height" Value="26"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Border Name="b" Background="{TemplateBinding Background}" CornerRadius="5" Margin="1,0">
+                    <ContentPresenter Content="{TemplateBinding Content}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+            </ControlTemplate>
+        </Setter>
+        <Style Selector="^:pointerover /template/ Border#b"><Setter Property="Background" Value="{DynamicResource BgQuaternaryBrush}"/></Style>
+        <Style Selector="^:checked /template/ Border#b"><Setter Property="Background" Value="{DynamicResource AccentBrush}"/></Style>
+        <Style Selector="^:checked"><Setter Property="Foreground" Value="White"/></Style>
+    </ControlTheme>
+
     <!-- ── TEXT STYLES (applied via Theme=) ── -->
     <ControlTheme x:Key="LabelMuted" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{DynamicResource PrimaryFont}"/>

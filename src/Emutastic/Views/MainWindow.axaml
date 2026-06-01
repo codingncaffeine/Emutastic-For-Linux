@@ -135,26 +135,59 @@
                                 <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="Vectrex"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='Vectrex'}"/><TextBlock Text="Vectrex" VerticalAlignment="Center"/></StackPanel></Button>
                             </StackPanel>
                         </Expander>
+
+                        <Rectangle Height="1" Fill="{DynamicResource BorderSubtleBrush}" Margin="12,10,12,0"/>
+                        <TextBlock Text="OPTIONS" Theme="{DynamicResource LabelMuted}" Margin="16,8,0,4"/>
+                        <Button Name="PreferencesButton" Theme="{DynamicResource SidebarItemStyle}" Content="⚙  Preferences"/>
+                        <Button Name="ImportButton" Theme="{DynamicResource SidebarItemStyle}" Content="↓  Import ROMs"/>
                     </StackPanel>
                 </ScrollViewer>
             </Border>
 
             <!-- ── CONTENT ── -->
-            <Grid Grid.Column="1" Background="{DynamicResource ContentBgBrush}" RowDefinitions="52,*">
+            <Grid Grid.Column="1" Background="{DynamicResource ContentBgBrush}" RowDefinitions="44,*">
 
-                <!-- toolbar -->
-                <Grid Grid.Row="0" Margin="20,0" ColumnDefinitions="*,Auto">
-                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Spacing="10">
-                        <TextBlock Text="{Binding SelectedConsole}" FontFamily="{DynamicResource PrimaryFont}"
-                                   FontSize="18" FontWeight="Bold" Foreground="{DynamicResource TextPrimaryBrush}"
-                                   VerticalAlignment="Center"/>
-                        <TextBlock Text="{Binding GameCountText}" Theme="{DynamicResource TextSecondary}" VerticalAlignment="Bottom" Margin="0,0,0,3"/>
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Spacing="8">
-                        <TextBox Name="SearchBox" Width="200" PlaceholderText="Search…"/>
-                        <Button Name="ImportButton" Theme="{DynamicResource SecondaryButtonStyle}" Content="＋ Import"/>
-                    </StackPanel>
-                </Grid>
+                <!-- toolbar: [view toggles] | [tabs] | [search] (matches upstream layout) -->
+                <Border Grid.Row="0" Background="{DynamicResource BgSecondaryBrush}"
+                        BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,1">
+                    <Grid ColumnDefinitions="Auto,*,Auto" Margin="12,0">
+                        <!-- LEFT: grid/list view toggles -->
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                            <ToggleButton Name="ViewGrid" Theme="{StaticResource ViewToggle}" Content="▦" IsChecked="True" Tag="Grid" ToolTip.Tip="Grid view"/>
+                            <ToggleButton Name="ViewList" Theme="{StaticResource ViewToggle}" Content="☰" Tag="List" ToolTip.Tip="List view"/>
+                        </StackPanel>
+
+                        <!-- CENTER: Library / Save States / Screenshots / Achievements tabs -->
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <ToggleButton Name="TabLibrary" Theme="{StaticResource TabToggle}" Content="Library" IsChecked="True" Tag="Library"/>
+                            <ToggleButton Name="TabSaveStates" Theme="{StaticResource TabToggle}" Content="Save States" Tag="SaveStates"/>
+                            <ToggleButton Name="TabScreenshots" Theme="{StaticResource TabToggle}" Content="Screenshots" Tag="Screenshots"/>
+                            <ToggleButton Name="TabAchievements" Theme="{StaticResource TabToggle}" Content="Achievements" Tag="Achievements"/>
+                        </StackPanel>
+
+                        <!-- RIGHT: recessed search field -->
+                        <Border Grid.Column="2" Width="180" Height="26" CornerRadius="14" Padding="10,0" VerticalAlignment="Center"
+                                Background="{DynamicResource BgTertiaryBrush}" BorderBrush="{DynamicResource BorderNormalBrush}" BorderThickness="1">
+                            <Grid ColumnDefinitions="Auto,*,Auto">
+                                <TextBlock Grid.Column="0" Text="⌕" FontSize="13" Foreground="{DynamicResource TextMutedBrush}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBox Name="SearchBox" Grid.Column="1" Background="Transparent" BorderThickness="0" Padding="0" MinHeight="0"
+                                         Foreground="{DynamicResource TextPrimaryBrush}" CaretBrush="{DynamicResource AccentBrush}"
+                                         FontFamily="{DynamicResource PrimaryFont}" FontSize="12"
+                                         VerticalAlignment="Center" VerticalContentAlignment="Center" PlaceholderText="Search games…"/>
+                                <Button Name="SearchClear" Grid.Column="2" Content="✕" Background="Transparent" BorderThickness="0"
+                                        Padding="4,0" FontSize="11" Foreground="{DynamicResource TextMutedBrush}" Cursor="Hand"
+                                        IsVisible="False" ToolTip.Tip="Clear search (Esc)"/>
+                            </Grid>
+                        </Border>
+                    </Grid>
+                </Border>
+
+                <!-- empty-library placeholder -->
+                <TextBlock Grid.Row="1" Text="No games yet — drag ROMs here, or click ＋ Import"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           FontFamily="{DynamicResource PrimaryFont}" FontSize="15"
+                           Foreground="{DynamicResource TextMutedBrush}"
+                           IsVisible="{Binding Games.Count, Converter={StaticResource CountIsZeroToBool}}"/>
 
                 <!-- flat box-art grid -->
                 <ListBox Name="GameGridView" Grid.Row="1"

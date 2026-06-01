@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
@@ -57,11 +59,63 @@ public partial class MainWindow : Window
         AddHandler(DragDrop.DragOverEvent, OnDragOver);
         AddHandler(DragDrop.DropEvent, OnDrop);
 
+        // Search box → debounced VM search (scoped to the current console when one is selected).
+        var search = this.FindControl<TextBox>("SearchBox")!;
+        var searchClear = this.FindControl<Button>("SearchClear")!;
+        search.TextChanged += (_, _) =>
+        {
+            searchClear.IsVisible = !string.IsNullOrEmpty(search.Text);
+            if (_vm == null) return;
+            string? scope = !_vm.IsMixedView && _vm.SelectedConsole != "All Games" ? _vm.SelectedConsole : null;
+            _ = _vm.SearchGames(search.Text ?? "", scope)
+                   .ContinueWith(t => { if (t.IsFaulted) System.Diagnostics.Trace.WriteLine($"search faulted: {t.Exception}"); },
+                                 System.Threading.Tasks.TaskScheduler.Default);
+        };
+        search.KeyDown += (_, e) => { if (e.Key == Key.Escape) search.Text = ""; };
+        searchClear.Click += (_, _) => search.Text = "";
+
+        // Toolbar tabs (Library active; Save States/Screenshots/Achievements land in U3/U8).
+        foreach (var name in new[] { "TabLibrary", "TabSaveStates", "TabScreenshots", "TabAchievements" })
+            this.FindControl<ToggleButton>(name)!.Click += OnTabClick;
+
+        // View-mode toggles (grid live; list view lands in U2).
+        this.FindControl<ToggleButton>("ViewGrid")!.Click += OnViewToggle;
+        this.FindControl<ToggleButton>("ViewList")!.Click += OnViewToggle;
+
         Opened += OnOpened;
     }
 
     private void ToggleMaximize() =>
         WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+
+    // Tab strip: keep one checked; Library shows the grid, the others land in U3/U8 (status note for now).
+    private void OnTabClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not ToggleButton clicked) return;
+        foreach (var name in new[] { "TabLibrary", "TabSaveStates", "TabScreenshots", "TabAchievements" })
+        {
+            var tab = this.FindControl<ToggleButton>(name)!;
+            tab.IsChecked = ReferenceEquals(tab, clicked);
+        }
+        if ((clicked.Tag as string) != "Library")
+            _vm?.SetStatus($"{clicked.Content} view is coming soon.", autoClear: true);
+    }
+
+    // View-mode toggle: grid is live; list view lands in U2.
+    private void OnViewToggle(object? sender, RoutedEventArgs e)
+    {
+        if ((sender as ToggleButton)?.Tag as string == "List")
+        {
+            this.FindControl<ToggleButton>("ViewList")!.IsChecked = false;
+            this.FindControl<ToggleButton>("ViewGrid")!.IsChecked = true;
+            _vm?.SetStatus("List view is coming soon.", autoClear: true);
+        }
+        else
+        {
+            this.FindControl<ToggleButton>("ViewGrid")!.IsChecked = true;
+            this.FindControl<ToggleButton>("ViewList")!.IsChecked = false;
+        }
+    }
 
     private void OnOpened(object? sender, EventArgs e)
     {
@@ -82,9 +136,20 @@ public partial class MainWindow : Window
         WireImportEvents();
         DataContext = _vm;
 
-        // Wire the Import button (added to the toolbar).
+        // Apply the saved/default theme palette into Application.Resources (enables Light/OLED/Midnight;
+        // for Dark this matches the static DarkTheme.axaml values).
+        try
+        {
+            string? themeId = App.Configuration?.GetThemeConfiguration()?.ActiveThemeId;
+            ThemeService.Instance.LoadAndApplyTheme(string.IsNullOrEmpty(themeId) ? "builtin.dark" : themeId);
+        }
+        catch { /* theme apply is best-effort; static dark palette is the fallback */ }
+
+        // Sidebar OPTIONS buttons.
         var importBtn = this.FindControl<Button>("ImportButton");
-        if (importBtn != null) importBtn.Click += async (_, _) => await PickAndImportAsync();
+        if (importBtn != null) importBtn.Click += (_, _) => RunGuarded(PickAndImportAsync);
+        var prefsBtn = this.FindControl<Button>("PreferencesButton");
+        if (prefsBtn != null) prefsBtn.Click += (_, _) => _vm?.SetStatus("Preferences is coming soon.", autoClear: true);
 
         Task.Run(() =>
         {
