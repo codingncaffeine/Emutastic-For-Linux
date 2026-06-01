@@ -34,6 +34,17 @@ namespace Emutastic
             Console.WriteLine($"games: before={before}, after insert={all.Count}");
             Console.WriteLine($"  inserted: id={inserted?.Id}, title='{inserted?.Title}', console={inserted?.Console}");
 
+            // M4b: verify MainViewModel loads + filters games from the DB (no Avalonia/art decode).
+            try
+            {
+                var vm = new ViewModels.MainViewModel(db);
+                vm.Reload();
+                vm.SelectedConsole = "All Games";
+                vm.FilterGamesAsync().GetAwaiter().GetResult();
+                Console.WriteLine($"MainViewModel: Reload+Filter -> Games.Count={vm.Games.Count}, countText='{vm.GameCountText}'");
+            }
+            catch (Exception ex) { Console.WriteLine($"  VM check error: {ex.Message}"); }
+
             if (inserted != null)
             {
                 db.DeleteGame(inserted.Id);
