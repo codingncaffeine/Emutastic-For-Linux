@@ -216,7 +216,6 @@ namespace Emutastic.Views
 
             if (willPause)
             {
-                host.IsVisible = true;
                 _pauseRunner ??= new PauseEffects.PauseEffectRunner(host);
                 var cfg = App.Configuration?.GetThemeConfiguration();
                 string id = cfg?.PauseEffect ?? "none";
@@ -224,6 +223,9 @@ namespace Emutastic.Views
                 var entry = PauseEffects.PauseEffectRegistry.Find(id);
                 if (entry != null && entry.Id != PauseEffects.PauseEffectRegistry.NoneId)
                 {
+                    // Only show the host when an effect actually runs — otherwise its 30% shade
+                    // would dim the frozen frame (and, since the runner no-ops for "none", never clear).
+                    host.IsVisible = true;
                     var inst = entry.Factory();
                     if (entry.IsPixel) _pauseRunner.Start((PauseEffects.IPixelPauseEffect)inst, intensity);
                     else _pauseRunner.Start((PauseEffects.IPauseEffect)inst, intensity);
@@ -233,9 +235,10 @@ namespace Emutastic.Views
             }
             else
             {
-                _pauseRunner?.Stop();   // fades out, then hides the host itself
+                _pauseRunner?.Stop();      // fades out, then hides the host itself
+                host.IsVisible = false;    // belt-and-braces for the "none" path (runner never showed it)
                 if (glyph != null) glyph.Text = "⏸";
-                ShowHud();              // restart the auto-hide countdown
+                ShowHud();                 // restart the auto-hide countdown
             }
         }
 

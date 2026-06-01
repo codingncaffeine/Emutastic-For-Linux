@@ -144,6 +144,9 @@ namespace Emutastic.Emulator
             double next = sw.Elapsed.TotalMilliseconds;
             while (_running)
             {
+                // Reset is honored even while paused (so the pill's Reset isn't dead when paused).
+                if (_resetRequested) { _resetRequested = false; try { _core!.Reset(); } catch (Exception ex) { Trace.WriteLine($"[Emu] reset threw: {ex}"); } }
+
                 // Paused: stop advancing the core (frame stays frozen, audio drains to silence) but
                 // keep the thread alive + responsive. Cheap idle wait; resync timing on resume.
                 if (_paused)
@@ -152,7 +155,6 @@ namespace Emutastic.Emulator
                     next = sw.Elapsed.TotalMilliseconds;
                     continue;
                 }
-                if (_resetRequested) { _resetRequested = false; try { _core!.Reset(); } catch (Exception ex) { Trace.WriteLine($"[Emu] reset threw: {ex}"); } }
                 _input.Poll();
                 try { _core!.Run(); } catch (Exception ex) { Trace.WriteLine($"[Emu] retro_run threw: {ex}"); break; }
 
