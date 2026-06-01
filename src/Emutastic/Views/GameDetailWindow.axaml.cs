@@ -412,9 +412,15 @@ public partial class GameDetailWindow : Window
         };
         menu.Items.Add(rename);
 
-        // Notes / Manual land in U7 (disabled stubs).
+        // Notes editor lands later in U7; Manual opens via the system PDF viewer (xdg-open).
         menu.Items.Add(new MenuItem { Header = "Notes…", IsEnabled = false });
-        menu.Items.Add(new MenuItem { Header = "Manual…", IsEnabled = false });
+        var manual = new MenuItem { Header = ManualLauncher.HasUsableManual(_game) ? "View Manual" : "Download Manual…" };
+        manual.Click += (_, _) =>
+        {
+            var fetch = (this.Owner as MainWindow)?.ArtworkFetch;
+            if (fetch != null) _ = ManualLauncher.OpenOrDownloadAsync(_game, fetch);
+        };
+        menu.Items.Add(manual);
 
         // Cheats — shown only when this console's core actually supports cheats (upstream gate).
         if (CoreManager.ConsoleCoreMap.TryGetValue(_game.Console ?? "", out var cores) && cores.Length > 0

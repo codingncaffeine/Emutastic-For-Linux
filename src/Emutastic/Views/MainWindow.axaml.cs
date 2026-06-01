@@ -31,6 +31,7 @@ public partial class MainWindow : Window
     private CoreManager? _coreManager;
     private ImportService? _importer;
     private ArtworkFetchService? _artworkFetch;
+    public ArtworkFetchService? ArtworkFetch => _artworkFetch;   // detail card reaches this via Owner
 
     public MainWindow()
     {
@@ -765,8 +766,9 @@ public partial class MainWindow : Window
         items.Add(new Separator());
 
         // Deferred to their splinters (disabled stubs).
-        items.Add(new MenuItem { Header = "📝  Notes", IsEnabled = false });           // U7
-        items.Add(new MenuItem { Header = "📖  Manual", IsEnabled = false });          // U7
+        items.Add(new MenuItem { Header = "📝  Notes", IsEnabled = false });           // U7 (notes editor)
+        items.Add(MenuAction(ManualLauncher.HasUsableManual(game) ? "📖  View Manual" : "📖  Download Manual…",
+            () => RunGuarded(() => ManualLauncher.OpenOrDownloadAsync(game, _artworkFetch!))));
         // Cheats — only when the console's core supports them (upstream gate).
         if (CoreManager.ConsoleCoreMap.TryGetValue(game.Console ?? "", out var cheatCores) && cheatCores.Length > 0
             && CheatSupport.Lookup(cheatCores[0]).Level != CheatSupportLevel.NotSupported)
