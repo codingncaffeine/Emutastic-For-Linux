@@ -358,7 +358,79 @@
                     </ScrollViewer>
                 </Grid>
                 <Grid Name="PanelAchievements" IsVisible="False"/>
-                <Grid Name="PanelMedia" IsVisible="False"/>
+                <Grid Name="PanelMedia" IsVisible="False">
+                    <ScrollViewer Margin="32,24,32,24" VerticalScrollBarVisibility="Auto">
+                        <StackPanel MaxWidth="560" HorizontalAlignment="Left">
+                            <TextBlock Text="MEDIA FOLDERS" Theme="{StaticResource PrefLabel}"/>
+                            <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,0,0,16"/>
+                            <TextBlock TextWrapping="Wrap" FontSize="12" FontFamily="{DynamicResource PrimaryFont}" Margin="0,0,0,24"
+                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                       Text="Choose where screenshots and recordings are saved. Per-console / per-game subfolders are still created inside your chosen directory."/>
+
+                            <!-- Screenshots folder -->
+                            <TextBlock Text="Screenshots" FontSize="14" FontWeight="SemiBold" FontFamily="{DynamicResource PrimaryFont}"
+                                       Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,0,0,4"/>
+                            <TextBlock Name="ScreenshotsDefaultText" FontSize="11" FontFamily="{DynamicResource PrimaryFont}"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                            <Grid ColumnDefinitions="*,Auto,Auto">
+                                <Border Grid.Column="0" Background="{DynamicResource BgTertiaryBrush}" BorderBrush="{DynamicResource BorderNormalBrush}"
+                                        BorderThickness="1" CornerRadius="6" Padding="10,8">
+                                    <TextBlock Name="ScreenshotsFolderText" Text="Default" Foreground="{DynamicResource TextSecondaryBrush}"
+                                               FontSize="12" FontFamily="{DynamicResource PrimaryFont}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                </Border>
+                                <Button Name="BrowseScreenshotsBtn" Grid.Column="1" Content="Browse…" Theme="{StaticResource PrefSecondaryBtn}" Margin="8,0,0,0"/>
+                                <Button Name="ClearScreenshotsBtn" Grid.Column="2" Content="Clear" Theme="{StaticResource PrefSecondaryBtn}" Margin="4,0,0,0"/>
+                            </Grid>
+
+                            <TextBlock Text="Screenshot hotkey" FontSize="13" FontWeight="SemiBold" FontFamily="{DynamicResource PrimaryFont}"
+                                       Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,18,0,4"/>
+                            <Grid ColumnDefinitions="*,Auto">
+                                <Border Grid.Column="0" Background="{DynamicResource BgTertiaryBrush}" BorderBrush="{DynamicResource BorderNormalBrush}"
+                                        BorderThickness="1" CornerRadius="6" Padding="10,8">
+                                    <TextBox Name="ScreenshotHotkeyBox" Background="Transparent" BorderThickness="0" IsReadOnly="True"
+                                             Foreground="{DynamicResource TextPrimaryBrush}" FontSize="12" FontFamily="{DynamicResource PrimaryFont}"
+                                             Text="F12 (default)" ToolTip.Tip="Click here and press a key to set the screenshot hotkey."/>
+                                </Border>
+                                <Button Name="ResetHotkeyBtn" Grid.Column="1" Content="Reset" Theme="{StaticResource PrefSecondaryBtn}" Margin="8,0,0,0"/>
+                            </Grid>
+
+                            <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,24,0,16"/>
+
+                            <!-- Recordings folder -->
+                            <TextBlock Text="Recordings" FontSize="14" FontWeight="SemiBold" FontFamily="{DynamicResource PrimaryFont}"
+                                       Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,0,0,4"/>
+                            <TextBlock Name="RecordingsDefaultText" FontSize="11" FontFamily="{DynamicResource PrimaryFont}"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                            <Grid ColumnDefinitions="*,Auto,Auto">
+                                <Border Grid.Column="0" Background="{DynamicResource BgTertiaryBrush}" BorderBrush="{DynamicResource BorderNormalBrush}"
+                                        BorderThickness="1" CornerRadius="6" Padding="10,8">
+                                    <TextBlock Name="RecordingsFolderText" Text="Default" Foreground="{DynamicResource TextSecondaryBrush}"
+                                               FontSize="12" FontFamily="{DynamicResource PrimaryFont}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                </Border>
+                                <Button Name="BrowseRecordingsBtn" Grid.Column="1" Content="Browse…" Theme="{StaticResource PrefSecondaryBtn}" Margin="8,0,0,0"/>
+                                <Button Name="ClearRecordingsBtn" Grid.Column="2" Content="Clear" Theme="{StaticResource PrefSecondaryBtn}" Margin="4,0,0,0"/>
+                            </Grid>
+
+                            <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,24,0,16"/>
+
+                            <!-- Recording quality (capture lands with the emulator/ffmpeg splinter) -->
+                            <TextBlock Text="RECORDING QUALITY" Theme="{StaticResource PrefLabel}"/>
+                            <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,0,0,16"/>
+                            <Grid ColumnDefinitions="160,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" >
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="Quality" VerticalAlignment="Center" FontSize="13" FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,0,0,8"/>
+                                <ComboBox Name="RecQualityCombo" Grid.Row="0" Grid.Column="1" Width="200" HorizontalAlignment="Left" Theme="{StaticResource DarkComboBox}" Margin="0,0,0,8"/>
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="Output scale" VerticalAlignment="Center" FontSize="13" FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,0,0,8"/>
+                                <ComboBox Name="RecScaleCombo" Grid.Row="1" Grid.Column="1" Width="200" HorizontalAlignment="Left" Theme="{StaticResource DarkComboBox}" Margin="0,0,0,8"/>
+                                <TextBlock Grid.Row="2" Grid.Column="0" Text="Encoder" VerticalAlignment="Center" FontSize="13" FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,0,0,8"/>
+                                <ComboBox Name="RecEncoderCombo" Grid.Row="2" Grid.Column="1" Width="200" HorizontalAlignment="Left" Theme="{StaticResource DarkComboBox}" Margin="0,0,0,8"/>
+                                <TextBlock Grid.Row="3" Grid.Column="0" Text="Audio bitrate" VerticalAlignment="Center" FontSize="13" FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,0,0,8"/>
+                                <ComboBox Name="RecAudioBitrateCombo" Grid.Row="3" Grid.Column="1" Width="200" HorizontalAlignment="Left" Theme="{StaticResource DarkComboBox}" Margin="0,0,0,8"/>
+                                <CheckBox Name="RecHighChromaCheck" Grid.Row="4" Grid.Column="1" Content="High chroma (4:4:4) — sharper text, larger files"
+                                          Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12"/>
+                            </Grid>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
                 <Grid Name="PanelBackups" IsVisible="False"/>
                 <Grid Name="PanelAbout" IsVisible="False">
                     <ScrollViewer Margin="32,24,32,24" VerticalScrollBarVisibility="Auto">

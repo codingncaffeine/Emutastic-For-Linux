@@ -66,6 +66,7 @@ public partial class PreferencesWindow : Window
         WireSnaps();
         this.FindControl<Button>("CoreOptionsResetBtn")!.Click += (_, _) => CoreOptionsReset();
         this.FindControl<Button>("CoreOptionsSaveBtn")!.Click += (_, _) => CoreOptionsSave();
+        WireMedia();
     }
 
     protected override void OnClosed(EventArgs e)
@@ -88,6 +89,7 @@ public partial class PreferencesWindow : Window
         if (target == "PanelLibrary") LoadLibrarySettings();
         if (target == "PanelSnaps") LoadSnapsSettings();
         if (target == "PanelCoreOptions") BuildCoreOptionsTab();
+        if (target == "PanelMedia") LoadMediaSettings();
     }
 
     // Temporary placeholder until the panel's sub-splinter fills it.
@@ -679,6 +681,114 @@ public partial class PreferencesWindow : Window
         if (string.IsNullOrEmpty(_selectedCoreOptionsName)) return;
         _coreOptions.SaveValues(_selectedCoreOptionsName, _pendingCoreOptionValues);
     }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  U5 P2 — Media panel (screenshot/recording folders + hotkey + rec quality).
+    //  Recording capture itself lands with the emulator/ffmpeg splinter; the
+    //  encoder list is Linux/ffmpeg-oriented (Auto / x264 / VAAPI / NVENC).
+    // ════════════════════════════════════════════════════════════════════════
+
+    private bool _loadingMedia;
+    private static readonly string[] RecQualities = { "Low", "Medium", "High", "Lossless" };
+    private static readonly string[] RecEncoders  = { "Auto", "x264", "VAAPI", "NVENC" };
+    private static readonly int[] RecAudioRates   = { 128, 192, 256, 320 };
+
+    private void WireMedia()
+    {
+        this.FindControl<Button>("BrowseScreenshotsBtn")!.Click += (_, _) => _ = PickMediaFolderAsync(true);
+        this.FindControl<Button>("BrowseRecordingsBtn")!.Click  += (_, _) => _ = PickMediaFolderAsync(false);
+        this.FindControl<Button>("ClearScreenshotsBtn")!.Click  += (_, _) => ClearMediaFolder(true);
+        this.FindControl<Button>("ClearRecordingsBtn")!.Click   += (_, _) => ClearMediaFolder(false);
+        this.FindControl<Button>("ResetHotkeyBtn")!.Click       += (_, _) => SetScreenshotHotkey("");
+        this.FindControl<TextBox>("ScreenshotHotkeyBox")!.KeyDown += (_, e) =>
+        {
+            if (e.Key is Key.Tab or Key.Escape) return;
+            SetScreenshotHotkey(e.Key.ToString());
+            e.Handled = true;
+        };
+        foreach (var name in new[] { "RecQualityCombo", "RecScaleCombo", "RecEncoderCombo", "RecAudioBitrateCombo" })
+            this.FindControl<ComboBox>(name)!.SelectionChanged += (_, _) => SaveRecordingSettings();
+        this.FindControl<CheckBox>("RecHighChromaCheck")!.IsCheckedChanged += (_, _) => SaveRecordingSettings();
+    }
+
+    private void LoadMediaSettings()
+    {
+        _loadingMedia = true;
+        var prefs = App.Configuration?.GetUserPreferences() ?? new Configuration.UserPreferences();
+
+        this.FindControl<TextBlock>("ScreenshotsDefaultText")!.Text = $"Default: {System.IO.Path.Combine(AppPaths.DataRoot, "Screenshots")}";
+        this.FindControl<TextBlock>("RecordingsDefaultText")!.Text  = $"Default: {System.IO.Path.Combine(AppPaths.DataRoot, "Recordings")}";
+        SetFolderText("ScreenshotsFolderText", prefs.ScreenshotsFolder);
+        SetFolderText("RecordingsFolderText", prefs.RecordingsFolder);
+        this.FindControl<TextBox>("ScreenshotHotkeyBox")!.Text = string.IsNullOrEmpty(prefs.ScreenshotKey) ? "F12 (default)" : prefs.ScreenshotKey;
+
+        var rec = App.Configuration?.GetRecordingConfiguration() ?? new Configuration.RecordingConfiguration();
+        PopulateCombo("RecQualityCombo", RecQualities, rec.Quality, "High");
+        PopulateCombo("RecScaleCombo", new[] { "1x", "2x", "3x", "4x" }, $"{Math.Clamp(rec.OutputScale, 1, 4)}x", "2x");
+        PopulateCombo("RecEncoderCombo", RecEncoders, RecEncoders.Contains(rec.Encoder) ? rec.Encoder : "Auto", "Auto");
+        PopulateCombo("RecAudioBitrateCombo", new[] { "128 kbps", "192 kbps", "256 kbps", "320 kbps" }, $"{rec.AudioBitrateKbps} kbps", "192 kbps");
+        this.FindControl<CheckBox>("RecHighChromaCheck")!.IsChecked = rec.HighChroma;
+        _loadingMedia = false;
+    }
+
+    private void PopulateCombo(string name, string[] items, string selected, string fallback)
+    {
+        var combo = this.FindControl<ComboBox>(name)!;
+        if (combo.Items.Count == 0) foreach (var i in items) combo.Items.Add(new ComboBoxItem { Content = i });
+        combo.SelectedItem = combo.Items.OfType<ComboBoxItem>().FirstOrDefault(c => (string?)c.Content == selected)
+            ?? combo.Items.OfType<ComboBoxItem>().FirstOrDefault(c => (string?)c.Content == fallback);
+    }
+
+    private void SetFolderText(string name, string path)
+    {
+        var tb = this.FindControl<TextBlock>(name)!;
+        bool set = !string.IsNullOrEmpty(path);
+        tb.Text = set ? path : "Default";
+        tb.Foreground = Brush(set ? "TextPrimaryBrush" : "TextSecondaryBrush");
+    }
+
+    private async Task PickMediaFolderAsync(bool screenshots)
+    {
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        { Title = screenshots ? "Select screenshots folder" : "Select recordings folder", AllowMultiple = false });
+        string? path = folders.Count > 0 ? folders[0].TryGetLocalPath() : null;
+        if (string.IsNullOrEmpty(path)) return;
+        var prefs = App.Configuration!.GetUserPreferences();
+        if (screenshots) { prefs.ScreenshotsFolder = path; AppPaths.SetScreenshotsFolder(path); SetFolderText("ScreenshotsFolderText", path); }
+        else             { prefs.RecordingsFolder = path; AppPaths.SetRecordingsFolder(path); SetFolderText("RecordingsFolderText", path); }
+        App.Configuration!.SetUserPreferences(prefs); App.Configuration!.ScheduleSave();
+    }
+
+    private void ClearMediaFolder(bool screenshots)
+    {
+        var prefs = App.Configuration!.GetUserPreferences();
+        if (screenshots) { prefs.ScreenshotsFolder = ""; AppPaths.SetScreenshotsFolder(""); SetFolderText("ScreenshotsFolderText", ""); }
+        else             { prefs.RecordingsFolder = ""; AppPaths.SetRecordingsFolder(""); SetFolderText("RecordingsFolderText", ""); }
+        App.Configuration!.SetUserPreferences(prefs); App.Configuration!.ScheduleSave();
+    }
+
+    private void SetScreenshotHotkey(string keyName)
+    {
+        var prefs = App.Configuration!.GetUserPreferences();
+        prefs.ScreenshotKey = keyName;
+        App.Configuration!.SetUserPreferences(prefs); App.Configuration!.ScheduleSave();
+        this.FindControl<TextBox>("ScreenshotHotkeyBox")!.Text = string.IsNullOrEmpty(keyName) ? "F12 (default)" : keyName;
+    }
+
+    private void SaveRecordingSettings()
+    {
+        if (_loadingMedia) return;
+        var rec = App.Configuration!.GetRecordingConfiguration();
+        rec.Quality = ComboText("RecQualityCombo") ?? "High";
+        rec.OutputScale = int.TryParse((ComboText("RecScaleCombo") ?? "2x").TrimEnd('x'), out var s) ? s : 2;
+        rec.Encoder = ComboText("RecEncoderCombo") ?? "Auto";
+        rec.AudioBitrateKbps = int.TryParse((ComboText("RecAudioBitrateCombo") ?? "192 kbps").Split(' ')[0], out var b) ? b : 192;
+        rec.HighChroma = this.FindControl<CheckBox>("RecHighChromaCheck")!.IsChecked == true;
+        App.Configuration!.SetRecordingConfiguration(rec); App.Configuration!.ScheduleSave();
+    }
+
+    private string? ComboText(string name) =>
+        (this.FindControl<ComboBox>(name)!.SelectedItem as ComboBoxItem)?.Content as string;
 
     private IBrush? Brush(string key) => this.TryFindResource(key, out var v) ? v as IBrush : null;
     private FontFamily Font(string key) => this.TryFindResource(key, out var v) && v is FontFamily f ? f : FontFamily.Default;
