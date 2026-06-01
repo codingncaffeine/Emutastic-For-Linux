@@ -918,7 +918,7 @@ public partial class PreferencesWindow : Window
         ("Sega",     new[] { "Sega CD", "Saturn" }),
         ("Sony",     new[] { "PlayStation" }),
         ("NEC",      new[] { "TurboGrafx-CD" }),
-        ("Arcade",   new[] { "Neo Geo", "Neo Geo CD" }),
+        ("Arcade",   new[] { "Neo Geo" }),   // NeoCD entries exist for launch pre-flight only (upstream hides them here)
         ("Other",    new[] { "3DO", "Philips CD-i" }),
     };
 
@@ -942,15 +942,16 @@ public partial class PreferencesWindow : Window
             Foreground = Brush("TextMutedBrush"), Margin = new Thickness(2, 8, 0, 0) });
 
         string sysDir = AppPaths.GetFolder("System");
-        var (existing, romDirs) = await Task.Run(() => BiosScan(sysDir));
+        var (existing, verified, romDirs) = await Task.Run(() => BiosScan(sysDir));
         // Bail if the user navigated away while scanning.
         if (!this.FindControl<Grid>("PanelSystemFiles")!.IsVisible) return;
         panel.Children.Clear();
-        RenderBios(panel, sysDir, existing, romDirs);
+        RenderBios(panel, sysDir, existing, verified, romDirs);
     }
 
-    // Port of BuildBiosScan: DB games → per-console ROM dirs (+ their subdirs) → File.Exists set.
-    private static (HashSet<string> Existing, Dictionary<string, string[]> RomDirs) BiosScan(string sysDir)
+    // Port of BuildBiosScan: DB games → per-console ROM dirs (+ their subdirs) → File.Exists set,
+    // plus MD5 verification computed here (off-thread) so per-row render never hashes on the UI thread.
+    private static (HashSet<string> Existing, HashSet<string> Verified, Dictionary<string, string[]> RomDirs) BiosScan(string sysDir)
     {
         var romDirs = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
         try
@@ -970,27 +971,29 @@ public partial class PreferencesWindow : Window
         catch { }
 
         var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var verified = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void Note(Services.BiosEntry e, string path)
+        {
+            if (!SafeExists(path)) return;
+            existing.Add(path);
+            if (e.Md5 == null || VerifyMd5(path, e.Md5)) verified.Add(path);  // hashing stays off the UI thread
+        }
         foreach (var e in Services.KnownBios.All)
         {
-            string sysPath = System.IO.Path.Combine(sysDir, e.Filename);
-            if (SafeExists(sysPath)) existing.Add(sysPath);
+            Note(e, System.IO.Path.Combine(sysDir, e.Filename));
             if (romDirs.TryGetValue(e.Console, out var dirs))
             {
                 string leaf = System.IO.Path.GetFileName(e.Filename);
                 foreach (var dir in dirs)
-                {
-                    if (string.IsNullOrEmpty(dir)) continue;
-                    string p = System.IO.Path.Combine(dir, leaf);
-                    if (SafeExists(p)) existing.Add(p);
-                }
+                    if (!string.IsNullOrEmpty(dir)) Note(e, System.IO.Path.Combine(dir, leaf));
             }
         }
-        return (existing, romDirs);
+        return (existing, verified, romDirs);
     }
 
     private static bool SafeExists(string p) { try { return System.IO.File.Exists(p); } catch { return false; } }
 
-    private void RenderBios(StackPanel panel, string sysDir, HashSet<string> existing, Dictionary<string, string[]> romDirs)
+    private void RenderBios(StackPanel panel, string sysDir, HashSet<string> existing, HashSet<string> verified, Dictionary<string, string[]> romDirs)
     {
         bool Has(string path) => existing.Contains(path);
 
@@ -1004,7 +1007,8 @@ public partial class PreferencesWindow : Window
         var bs = new StackPanel();
         bs.Children.Add(new TextBlock { Text = "Where to place BIOS files", FontSize = 12, FontWeight = FontWeight.SemiBold, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextPrimaryBrush"), Margin = new Thickness(0, 0, 0, 4) });
         bs.Children.Add(new TextBlock { Text = $"System folder (recommended):  {sysDir}", FontSize = 11, FontFamily = "monospace", Foreground = Brush("TextMutedBrush"), TextWrapping = TextWrapping.Wrap });
-        bs.Children.Add(new TextBlock { Text = "Or drop BIOS / SoundFont (.sf2) / MAME romset files anywhere on this panel — they're identified by hash/size and copied into the System folder automatically.", FontSize = 11, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextMutedBrush"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) });
+        bs.Children.Add(new TextBlock { Text = "Alternatively, place a BIOS file in the same folder as the ROMs for that system — it will be found automatically.", FontSize = 11, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextMutedBrush"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) });
+        bs.Children.Add(new TextBlock { Text = "Or just drag and drop BIOS / MT-32 ROM / .sf2 SoundFont files anywhere on this panel — they're identified by hash/size and copied here automatically.", FontSize = 11, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextMutedBrush"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) });
         banner.Child = bs;
         panel.Children.Add(banner);
 
@@ -1033,7 +1037,7 @@ public partial class PreferencesWindow : Window
             {
                 var entries = byDisplay[display];
                 foreach (var entry in entries)
-                    body.Children.Add(BuildBiosRow(entry, sysDir, romDirs, display, FoundFor(entry)));
+                    body.Children.Add(BuildBiosRow(entry, sysDir, romDirs, verified, FoundFor(entry)));
             }
         }
     }
@@ -1068,34 +1072,54 @@ public partial class PreferencesWindow : Window
         };
     }
 
-    private Control BuildBiosRow(Services.BiosEntry entry, string sysDir, Dictionary<string, string[]> romDirs, string consoleDisplay, bool exists)
+    private Control BuildBiosRow(Services.BiosEntry entry, string sysDir, Dictionary<string, string[]> romDirs, HashSet<string> verifiedSet, bool exists)
     {
-        bool inSys = exists && SafeExists(System.IO.Path.Combine(sysDir, entry.Filename));
-        bool verified = false;
-        string? foundPath = inSys ? System.IO.Path.Combine(sysDir, entry.Filename) : null;
+        string sysPath = System.IO.Path.Combine(sysDir, entry.Filename);
+        bool inSys = exists && SafeExists(sysPath);
+        string? foundPath = inSys ? sysPath : null;
         if (foundPath == null && exists && romDirs.TryGetValue(entry.Console, out var dirs))
             foundPath = dirs.Select(d => System.IO.Path.Combine(d, System.IO.Path.GetFileName(entry.Filename))).FirstOrDefault(SafeExists);
-        if (foundPath != null && entry.Md5 != null) verified = VerifyMd5(foundPath, entry.Md5);
-        else if (exists) verified = true; // presence-only
+        bool verified = foundPath != null && verifiedSet.Contains(foundPath);   // computed off-thread in BiosScan
 
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("24,*,Auto"), Margin = new Thickness(12, 0, 0, 0) };
+        // 5 columns (upstream layout): status icon · filename · description · size · MD5 (click to reveal).
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("24,Auto,*,Auto,Auto"), Margin = new Thickness(0) };
         var icon = new TextBlock { Text = verified ? "✓" : "⚠", FontSize = 14, FontWeight = FontWeight.Bold, VerticalAlignment = VerticalAlignment.Center,
             Foreground = new SolidColorBrush(Color.Parse(verified ? "#30D158" : "#E03535")) };
         Grid.SetColumn(icon, 0);
+
+        var filename = new TextBlock { Text = System.IO.Path.GetFileName(entry.Filename), FontSize = 13, FontFamily = "monospace",
+            MinWidth = 200, Foreground = Brush("TextPrimaryBrush"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 16, 0) };
+        Grid.SetColumn(filename, 1);
 
         string descText = entry.Description;
         if (!exists) descText += (descText.Length > 0 ? " — " : "") + "Missing";
         else if (entry.Md5 != null && !verified) descText += (descText.Length > 0 ? " — " : "") + "Hash mismatch";
         else if (!inSys) descText += (descText.Length > 0 ? " — " : "") + "found in game folder";
-        var info = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        info.Children.Add(new TextBlock { Text = System.IO.Path.GetFileName(entry.Filename), FontSize = 13, FontFamily = "monospace", Foreground = Brush("TextPrimaryBrush") });
-        info.Children.Add(new TextBlock { Text = descText, FontSize = 11, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextSecondaryBrush"), TextWrapping = TextWrapping.Wrap });
-        Grid.SetColumn(info, 1);
+        var desc = new TextBlock { Text = descText, FontSize = 12, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextSecondaryBrush"),
+            VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
+        Grid.SetColumn(desc, 2);
 
-        var row = new Border { Background = new SolidColorBrush(Color.Parse("#1A1A1C")), CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(12, 8, 14, 8), Margin = new Thickness(12, 2, 0, 2), Child = grid };
-        grid.Children.Add(icon); grid.Children.Add(info);
-        return row;
+        if (entry.ExpectedSize > 0)
+        {
+            var size = new TextBlock { Text = $"{entry.ExpectedSize / 1024} KB", FontSize = 11, FontFamily = Font("PrimaryFont"),
+                Foreground = Brush("TextMutedBrush"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0) };
+            Grid.SetColumn(size, 3);
+            grid.Children.Add(size);
+        }
+        if (entry.Md5 != null)
+        {
+            bool revealed = false;
+            var md5 = new TextBlock { Text = $"MD5: {entry.Md5[..8]}…", FontSize = 11, FontFamily = "monospace", Cursor = new Cursor(StandardCursorType.Hand),
+                Foreground = Brush("TextMutedBrush"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0) };
+            ToolTip.SetTip(md5, "Click to reveal the full MD5");
+            md5.PointerPressed += (_, _) => { revealed = !revealed; md5.Text = revealed ? $"MD5: {entry.Md5}" : $"MD5: {entry.Md5[..8]}…"; };
+            Grid.SetColumn(md5, 4);
+            grid.Children.Add(md5);
+        }
+        grid.Children.Add(icon); grid.Children.Add(filename); grid.Children.Add(desc);
+
+        return new Border { Background = new SolidColorBrush(Color.Parse("#1F1F21")), CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(12, 8, 12, 8), Margin = new Thickness(12, 0, 0, 4), Child = grid };
     }
 
     private static bool VerifyMd5(string path, string expectedMd5)
