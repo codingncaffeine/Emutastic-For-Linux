@@ -366,7 +366,7 @@ public partial class GameDetailWindow : Window
         }
         try
         {
-            var emu = new EmulatorWindow(new EmulatorSession(corePath, romPath));
+            var emu = new EmulatorWindow(new EmulatorSession(corePath, romPath, _game.Console ?? ""));
             // The emulator session mutates _game's play stats; refresh the pills when it
             // closes so the still-open card reflects the latest play/last-played numbers.
             emu.Closed += (_, _) => { if (IsVisible) RefreshStats(); };

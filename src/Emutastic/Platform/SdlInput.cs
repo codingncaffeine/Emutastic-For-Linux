@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using Emutastic.Configuration;
+using Emutastic.Services;
 
 namespace Emutastic.Platform
 {
@@ -69,6 +71,18 @@ namespace Emutastic.Platform
         private readonly bool[] _kbd = new bool[JOYPAD_COUNT];
         private bool _initialized;
 
+        // ── Per-console configured mappings (from the Preferences → Controls panel). ──
+        // _ctrlMap[port][libretroId] = raw control id to read (0..20 SDL button, 100/101 trigger,
+        // 110..117 stick dir), or -1 if unmapped. A null port entry ⇒ fall back to the default
+        // _retroToSdl mapping. _kbdRetro maps an Avalonia Key name (Key.ToString()) → libretro id
+        // for player 1; consulted by EmulatorWindow before its built-in KeyMap.
+        private readonly int[]?[] _ctrlMap = new int[4][];
+        private readonly Dictionary<string, int> _kbdRetro = new(StringComparer.OrdinalIgnoreCase);
+
+        // SDL_GamepadAxis indices + thresholds (mirror ControllerManager's raw id space).
+        const int AXIS_LEFTX = 0, AXIS_LEFTY = 1, AXIS_RIGHTX = 2, AXIS_RIGHTY = 3, AXIS_LTRIG = 4, AXIS_RTRIG = 5;
+        const short STICK_THRESHOLD = 18000, TRIG_THRESHOLD = 12000;
+
         // Cheap ctor (no SDL calls) so the XAML designer can construct an EmulatorSession
         // without a working SDL3 library. SDL is initialized lazily in Initialize().
         public SdlInput() { }
@@ -80,6 +94,75 @@ namespace Emutastic.Platform
             _initialized = true;
             SDL_InitSubSystem(SDL_INIT_GAMEPAD);
             Refresh();
+        }
+
+        /// <summary>
+        /// Load the per-console input mappings saved by the Controls panel. Builds, for each player
+        /// port, a libretro-id → raw-control-id table from <c>ControllerMappings</c>, and a key-name →
+        /// libretro-id table from player 1's <c>KeyboardMappings</c>. Ports with no controller mappings
+        /// keep the built-in default. Safe to call with a null service (leaves defaults in place).
+        /// </summary>
+        public void LoadConfiguration(string console, IConfigurationService? cfg)
+        {
+            Array.Clear(_ctrlMap, 0, _ctrlMap.Length);
+            _kbdRetro.Clear();
+            if (cfg == null || string.IsNullOrEmpty(console)) return;
+
+            for (int port = 0; port < 4; port++)
+            {
+                var config = cfg.GetInputConfiguration($"{console}_P{port + 1}");
+                // Player 1 legacy fallback: pre-per-player saves used the bare console key.
+                if (port == 0 && config.ControllerMappings.Count == 0 && config.KeyboardMappings.Count == 0)
+                    config = cfg.GetInputConfiguration(console);
+
+                if (config.ControllerMappings.Count > 0)
+                {
+                    var map = new int[JOYPAD_COUNT];
+                    for (int i = 0; i < JOYPAD_COUNT; i++) map[i] = -1;
+                    foreach (var m in config.ControllerMappings)
+                    {
+                        uint libretroId = LibretroInput.GetButtonId(m.ButtonName, console);
+                        if (libretroId < JOYPAD_COUNT && int.TryParse(m.InputIdentifier, out var rawId))
+                            map[libretroId] = rawId;
+                    }
+                    _ctrlMap[port] = map;
+                }
+
+                if (port == 0)
+                    foreach (var m in config.KeyboardMappings)
+                    {
+                        uint libretroId = LibretroInput.GetButtonId(m.ButtonName, console);
+                        if (libretroId < JOYPAD_COUNT && !string.IsNullOrEmpty(m.InputIdentifier))
+                            _kbdRetro[m.InputIdentifier] = (int)libretroId;
+                    }
+            }
+        }
+
+        /// <summary>Configured player-1 libretro id for an Avalonia Key name, or -1 if not bound.</summary>
+        public int KeyboardRetroId(string keyName) => _kbdRetro.TryGetValue(keyName, out var id) ? id : -1;
+
+        /// <summary>True if the Controls panel has a saved player-1 keyboard mapping (else use defaults).</summary>
+        public bool HasKeyboardConfig => _kbdRetro.Count > 0;
+
+        // Read a raw control id (0..20 SDL button, 100/101 trigger, 110..117 stick dir) on a pad.
+        private bool ReadRawControl(IntPtr h, int rawId)
+        {
+            if (rawId < 0) return false;
+            if (rawId < 21) return SDL_GetGamepadButton(h, rawId);
+            switch (rawId)
+            {
+                case 100: return SDL_GetGamepadAxis(h, AXIS_LTRIG) > TRIG_THRESHOLD;
+                case 101: return SDL_GetGamepadAxis(h, AXIS_RTRIG) > TRIG_THRESHOLD;
+                case 110: return SDL_GetGamepadAxis(h, AXIS_LEFTX)  < -STICK_THRESHOLD;
+                case 111: return SDL_GetGamepadAxis(h, AXIS_LEFTX)  >  STICK_THRESHOLD;
+                case 112: return SDL_GetGamepadAxis(h, AXIS_LEFTY)  < -STICK_THRESHOLD;
+                case 113: return SDL_GetGamepadAxis(h, AXIS_LEFTY)  >  STICK_THRESHOLD;
+                case 114: return SDL_GetGamepadAxis(h, AXIS_RIGHTX) < -STICK_THRESHOLD;
+                case 115: return SDL_GetGamepadAxis(h, AXIS_RIGHTX) >  STICK_THRESHOLD;
+                case 116: return SDL_GetGamepadAxis(h, AXIS_RIGHTY) < -STICK_THRESHOLD;
+                case 117: return SDL_GetGamepadAxis(h, AXIS_RIGHTY) >  STICK_THRESHOLD;
+                default:  return false;
+            }
         }
 
         public int GamepadCount => _pads.Count;
@@ -130,11 +213,20 @@ namespace Emutastic.Platform
 
             bool pressed = false;
 
-            // gamepad for this player slot
+            // gamepad for this player slot — configured mapping if present, else the default.
             if (port < (uint)_pads.Count)
             {
-                int sdlBtn = _retroToSdl[(int)id];
-                if (sdlBtn >= 0 && SDL_GetGamepadButton(_pads[(int)port].handle, sdlBtn)) pressed = true;
+                IntPtr h = _pads[(int)port].handle;
+                var map = port < 4 ? _ctrlMap[(int)port] : null;
+                if (map != null)
+                {
+                    if (ReadRawControl(h, map[(int)id])) pressed = true;
+                }
+                else
+                {
+                    int sdlBtn = _retroToSdl[(int)id];
+                    if (sdlBtn >= 0 && SDL_GetGamepadButton(h, sdlBtn)) pressed = true;
+                }
             }
 
             // keyboard fallback only for player 1

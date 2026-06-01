@@ -38,6 +38,31 @@ public partial class PreferencesWindow : Window
         ("NavAbout",        "PanelAbout"),
     };
 
+    // Only one Preferences window at a time — a second would spin up a second SDL gamepad poller.
+    private static PreferencesWindow? _open;
+
+    /// <summary>Open Preferences (reusing the existing window if already open), optionally landing on
+    /// the Controls panel with <paramref name="console"/> preselected.</summary>
+    public static void OpenOrFocus(Window owner, string? console = null)
+    {
+        if (_open != null)
+        {
+            if (!string.IsNullOrEmpty(console)) _open.SelectConsole(console);
+            _open.Activate();
+            return;
+        }
+        _open = new PreferencesWindow(console);
+        _open.Show(owner);
+    }
+
+    /// <summary>Reselect the Controls system combo (and reload its mappings) for a console tag.</summary>
+    public void SelectConsole(string tag)
+    {
+        var combo = this.FindControl<ComboBox>("SystemComboBox");
+        var match = combo?.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (i.Tag as string) == tag);
+        if (match != null) combo!.SelectedItem = match;   // SelectionChanged → LoadConsole
+    }
+
     public PreferencesWindow() : this(null) { }
 
     public PreferencesWindow(string? initialConsole)
@@ -84,6 +109,7 @@ public partial class PreferencesWindow : Window
     {
         _windowCts.Cancel();
         _ctrl?.Dispose();
+        if (ReferenceEquals(_open, this)) _open = null;
         base.OnClosed(e);
     }
 
@@ -1577,8 +1603,8 @@ public partial class PreferencesWindow : Window
 
     private Services.ControllerManager? _ctrl;
     private bool _controlsInit;
-    private string _currentConsole = "NES";
-    private int _currentPlayer;
+    private string _currentConsole = "SNES";
+    private int _currentPlayer = 1;             // 1-based (matches upstream + the runtime config key)
     private bool _isKeyboardMode = true;
     private int _waitingRowIndex = -1;
     private bool _suppressControlsAutoSave;
@@ -1604,7 +1630,7 @@ public partial class PreferencesWindow : Window
 
         var playerCombo = this.FindControl<ComboBox>("PlayerComboBox")!;
         playerCombo.SelectedIndex = 0;
-        playerCombo.SelectionChanged += (_, _) => { _currentPlayer = Math.Max(0, playerCombo.SelectedIndex); StopWaiting(); LoadConsole(_currentConsole); };
+        playerCombo.SelectionChanged += (_, _) => { _currentPlayer = playerCombo.SelectedIndex + 1; StopWaiting(); LoadConsole(_currentConsole); };
 
         var slotCombo = this.FindControl<ComboBox>("ControllerSlotComboBox")!;
         slotCombo.SelectionChanged += (_, _) =>
@@ -1691,6 +1717,9 @@ public partial class PreferencesWindow : Window
             img.Source = new Bitmap(AssetLoader.Open(uri));
         }
         catch { img.Source = null; }
+        // Upstream shrinks the over-zoomed FDS diagram to 0.7× (reference PreferencesWindow.xaml.cs:213).
+        img.RenderTransformOrigin = RelativePoint.Center;
+        img.RenderTransform = _currentConsole == "FDS" ? new ScaleTransform(0.7, 0.7) : null;
     }
 
     private void RebuildButtonsPanel(Configuration.ControllerDefinition def)
@@ -1752,6 +1781,8 @@ public partial class PreferencesWindow : Window
 
     private void StartWaiting(int rowIndex)
     {
+        var saveBtn = this.FindControl<Button>("SaveControlsBtn");
+        if (saveBtn != null) saveBtn.Content = "Save";   // clear a prior "Saved" once the user edits again
         int prev = _waitingRowIndex;
         _waitingRowIndex = rowIndex;
         if (_ctrl != null) _ctrl.RawMode = true;
@@ -1804,14 +1835,20 @@ public partial class PreferencesWindow : Window
         var config = App.Configuration!.GetInputConfiguration(ConfigKey);
         var source = _isKeyboardMode ? config.KeyboardMappings : config.ControllerMappings;
         foreach (var m in source)
+        {
+            // Chord mappings ("A+B") can't be authored here yet (capture deferred), but must survive a
+            // load/save round-trip — preserve the raw identifier instead of parsing it to None.
+            bool isChord = !string.IsNullOrEmpty(m.InputIdentifier) && m.InputIdentifier.Contains('+');
             _ctrlMappings[m.ButtonName] = new Services.InputMapping
             {
                 ConsoleName = _currentConsole, ButtonName = m.ButtonName,
                 InputType = _isKeyboardMode ? Services.InputType.Keyboard : Services.InputType.Controller,
-                Key = _isKeyboardMode && Enum.TryParse<Key>(m.InputIdentifier, out var k) ? k : Key.None,
-                ControllerButtonId = !_isKeyboardMode && uint.TryParse(m.InputIdentifier, out var bid) ? bid : 0,
+                Key = _isKeyboardMode && !isChord && Enum.TryParse<Key>(m.InputIdentifier, out var k) ? k : Key.None,
+                ControllerButtonId = !_isKeyboardMode && !isChord && uint.TryParse(m.InputIdentifier, out var bid) ? bid : 0,
                 DisplayText = m.DisplayName,
+                ChordIdentifier = isChord ? m.InputIdentifier : null,
             };
+        }
         _suppressControlsAutoSave = true;
         int slot = config.ControllerSlot;
         this.FindControl<ComboBox>("ControllerSlotComboBox")!.SelectedIndex = (slot >= 0 && slot <= 3) ? slot + 1 : 0;
@@ -1824,15 +1861,17 @@ public partial class PreferencesWindow : Window
         if (_isKeyboardMode)
         {
             config.KeyboardMappings.Clear();
-            foreach (var m in _ctrlMappings.Values.Where(m => m.InputType == Services.InputType.Keyboard && m.Key != Key.None))
-                config.KeyboardMappings.Add(new Configuration.ButtonMapping { ButtonName = m.ButtonName, InputIdentifier = m.Key.ToString(),
+            foreach (var m in _ctrlMappings.Values.Where(m => m.InputType == Services.InputType.Keyboard && (m.Key != Key.None || !string.IsNullOrEmpty(m.ChordIdentifier))))
+                config.KeyboardMappings.Add(new Configuration.ButtonMapping { ButtonName = m.ButtonName,
+                    InputIdentifier = string.IsNullOrEmpty(m.ChordIdentifier) ? m.Key.ToString() : m.ChordIdentifier!,
                     InputType = Configuration.InputType.Keyboard, DisplayName = m.DisplayText });
         }
         else
         {
             config.ControllerMappings.Clear();
             foreach (var m in _ctrlMappings.Values.Where(m => m.InputType == Services.InputType.Controller))
-                config.ControllerMappings.Add(new Configuration.ButtonMapping { ButtonName = m.ButtonName, InputIdentifier = m.ControllerButtonId.ToString(),
+                config.ControllerMappings.Add(new Configuration.ButtonMapping { ButtonName = m.ButtonName,
+                    InputIdentifier = string.IsNullOrEmpty(m.ChordIdentifier) ? m.ControllerButtonId.ToString() : m.ChordIdentifier!,
                     InputType = Configuration.InputType.Controller, DisplayName = m.DisplayText });
         }
         App.Configuration!.SetInputConfiguration(ConfigKey, config);

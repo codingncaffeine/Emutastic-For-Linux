@@ -269,7 +269,7 @@ public partial class MainWindow : Window
         var importBtn = this.FindControl<Button>("ImportButton");
         if (importBtn != null) importBtn.Click += (_, _) => RunGuarded(PickAndImportAsync);
         var prefsBtn = this.FindControl<Button>("PreferencesButton");
-        if (prefsBtn != null) prefsBtn.Click += (_, _) => new PreferencesWindow().Show(this);
+        if (prefsBtn != null) prefsBtn.Click += (_, _) => PreferencesWindow.OpenOrFocus(this);
         var newCollBtn = this.FindControl<Button>("NewCollectionButton");
         if (newCollBtn != null) newCollBtn.Click += (_, _) => NewCollection();
         RefreshCollectionsSidebar();
@@ -443,7 +443,7 @@ public partial class MainWindow : Window
         }
         try
         {
-            new EmulatorWindow(new EmulatorSession(corePath, romPath)).Show();
+            new EmulatorWindow(new EmulatorSession(corePath, romPath, game.Console ?? "")).Show();
         }
         catch (Exception ex)
         {
@@ -606,7 +606,7 @@ public partial class MainWindow : Window
         }
 
         // Edit Controls — opens Preferences on the Controls panel with this console preselected.
-        var editControls = MenuAction("🎮  Edit Controls…", () => new PreferencesWindow(console).Show(this));
+        var editControls = MenuAction("🎮  Edit Controls…", () => PreferencesWindow.OpenOrFocus(this, console));
         menu.Items.Insert(0, editControls);
         menu.Items.Insert(1, new Separator());
         return menu;

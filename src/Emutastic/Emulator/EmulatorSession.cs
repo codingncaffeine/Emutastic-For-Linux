@@ -66,10 +66,13 @@ namespace Emutastic.Emulator
         public string CoreName => _core?.CoreName ?? "?";
         public SdlInput Input => _input;
 
-        public EmulatorSession(string corePath, string romPath)
+        private readonly string _console;
+
+        public EmulatorSession(string corePath, string romPath, string console = "")
         {
             _corePath = corePath;
             _romPath = romPath;
+            _console = console;
             _input = new SdlInput();
 
             _envCb = Environment_cb;
@@ -88,6 +91,7 @@ namespace Emutastic.Emulator
             try
             {
                 _input.Initialize();
+                _input.LoadConfiguration(_console, App.Configuration);   // honor the Controls-panel bindings
                 // Free the previous session's deferred core handle before dlopen'ing a fresh one
                 // (prevents the stale-globals 2nd-launch failure for mupen64/dolphin/ppsspp-class cores).
                 LibretroCore.FreeStaleDll();

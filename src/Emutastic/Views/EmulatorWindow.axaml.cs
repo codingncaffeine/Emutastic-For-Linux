@@ -113,13 +113,25 @@ namespace Emutastic.Views
         protected override void OnKeyDown(KeyEventArgs e)
         {
             base.OnKeyDown(e);
-            if (KeyMap.TryGetValue(e.Key, out int id)) { _session.Input.SetKeyboardButton(id, true); e.Handled = true; }
+            if (ResolveRetroKey(e.Key, out int id)) { _session.Input.SetKeyboardButton(id, true); e.Handled = true; }
         }
 
         protected override void OnKeyUp(KeyEventArgs e)
         {
             base.OnKeyUp(e);
-            if (KeyMap.TryGetValue(e.Key, out int id)) { _session.Input.SetKeyboardButton(id, false); e.Handled = true; }
+            if (ResolveRetroKey(e.Key, out int id)) { _session.Input.SetKeyboardButton(id, false); e.Handled = true; }
+        }
+
+        // Prefer the player-1 keyboard bindings saved in the Controls panel; fall back to the
+        // built-in defaults when this console has no configured keyboard mapping.
+        private bool ResolveRetroKey(Key key, out int id)
+        {
+            if (_session.Input.HasKeyboardConfig)
+            {
+                id = _session.Input.KeyboardRetroId(key.ToString());
+                return id >= 0;
+            }
+            return KeyMap.TryGetValue(key, out id);
         }
 
         private void OnClosed(object? sender, EventArgs e)
