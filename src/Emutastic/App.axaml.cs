@@ -17,6 +17,23 @@ public partial class App : Application
     /// </summary>
     public static IConfigurationService? Configuration { get; internal set; }
 
+    /// <summary>
+    /// Push the saved library-layout settings (grid padding, card width, card spacing) into the
+    /// app-level DynamicResources the box-art grid binds to. Called at startup and live whenever
+    /// the Theme panel's Layout sliders move, so the grid re-lays out immediately.
+    /// </summary>
+    public static void ApplyLibraryLayout()
+    {
+        var t = Configuration?.GetThemeConfiguration();
+        if (t == null || Current == null) return;
+        int padding = System.Math.Clamp(t.GridPadding, 8, 64);
+        int cardW   = System.Math.Clamp(t.CardWidth, 148, 280);
+        int spacing = System.Math.Clamp(t.CardSpacing, 4, 96);
+        Current.Resources["LibraryGridPadding"] = new Thickness(padding);
+        Current.Resources["LibraryCardWidth"]   = (double)cardW;
+        Current.Resources["LibraryCardMargin"]  = new Thickness(0, 0, spacing, spacing);
+    }
+
     public override void Initialize()
     {
         AvaloniaXamlLoader.Load(this);

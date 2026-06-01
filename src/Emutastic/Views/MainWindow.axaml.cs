@@ -261,6 +261,10 @@ public partial class MainWindow : Window
         }
         catch { /* theme apply is best-effort; static dark palette is the fallback */ }
 
+        // Library layout (Preferences → Theme → Layout): push saved padding/card-size/spacing into
+        // the grid's DynamicResources before first layout.
+        App.ApplyLibraryLayout();
+
         // Grid background image (Preferences → Theme): apply now + on change.
         ThemeService.Instance.BackgroundImageChanged += (_, _) => Dispatcher.UIThread.Post(ApplyBackgroundImage);
         ApplyBackgroundImage();

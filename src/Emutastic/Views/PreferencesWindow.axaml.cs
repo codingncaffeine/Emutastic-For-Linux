@@ -312,6 +312,24 @@ public partial class PreferencesWindow : Window
                 Services.ThemeService.Instance.RaiseBackgroundImageChanged();
             }
         };
+
+        // Layout sliders — clamp, label, persist, and push into the grid resources live.
+        WireLayoutSlider("PaddingSlider", "PaddingValueLabel", 8, 64, (c, v) => c.GridPadding = v);
+        WireLayoutSlider("CardSizeSlider", "CardSizeValueLabel", 148, 280, (c, v) => c.CardWidth = v);
+        WireLayoutSlider("SpacingSlider", "SpacingValueLabel", 4, 96, (c, v) => c.CardSpacing = v);
+    }
+
+    private void WireLayoutSlider(string slider, string label, int min, int max, Action<Configuration.ThemeConfiguration, int> set)
+    {
+        var s = this.FindControl<Slider>(slider)!;
+        s.PropertyChanged += (_, e) =>
+        {
+            if (_suppressLayoutChange || e.Property.Name != nameof(Slider.Value)) return;
+            int v = System.Math.Clamp((int)s.Value, min, max);
+            this.FindControl<TextBlock>(label)!.Text = v.ToString();
+            UpdateThemeConfig(c => set(c, v));
+            App.ApplyLibraryLayout();   // live re-layout of the box-art grid
+        };
     }
 
     private bool _suppressBgChange;
@@ -388,6 +406,25 @@ public partial class PreferencesWindow : Window
 
         BuildThemeSwatches(activeId);
         LoadBackgroundSettings();
+        LoadLayoutSettings();
+    }
+
+    private bool _suppressLayoutChange;
+    private void LoadLayoutSettings()
+    {
+        var cfg = App.Configuration?.GetThemeConfiguration();
+        if (cfg == null) return;
+        _suppressLayoutChange = true;
+        int padding = System.Math.Clamp(cfg.GridPadding, 8, 64);
+        int cardW   = System.Math.Clamp(cfg.CardWidth, 148, 280);
+        int spacing = System.Math.Clamp(cfg.CardSpacing, 4, 96);
+        this.FindControl<Slider>("PaddingSlider")!.Value = padding;
+        this.FindControl<TextBlock>("PaddingValueLabel")!.Text = padding.ToString();
+        this.FindControl<Slider>("CardSizeSlider")!.Value = cardW;
+        this.FindControl<TextBlock>("CardSizeValueLabel")!.Text = cardW.ToString();
+        this.FindControl<Slider>("SpacingSlider")!.Value = spacing;
+        this.FindControl<TextBlock>("SpacingValueLabel")!.Text = spacing.ToString();
+        _suppressLayoutChange = false;
     }
 
     private void ApplyTheme(string id)
