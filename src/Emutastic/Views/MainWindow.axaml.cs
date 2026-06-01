@@ -246,7 +246,7 @@ public partial class MainWindow : Window
         var importBtn = this.FindControl<Button>("ImportButton");
         if (importBtn != null) importBtn.Click += (_, _) => RunGuarded(PickAndImportAsync);
         var prefsBtn = this.FindControl<Button>("PreferencesButton");
-        if (prefsBtn != null) prefsBtn.Click += (_, _) => _vm?.SetStatus("Preferences is coming soon.", autoClear: true);
+        if (prefsBtn != null) prefsBtn.Click += (_, _) => new PreferencesWindow().Show(this);
 
         Task.Run(() =>
         {
