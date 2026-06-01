@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         Icon="/Assets/banners and icons/emutastic-logo.png"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:pe="using:Emutastic.Views.PauseEffects"
         x:Class="Emutastic.Views.PreferencesWindow"
         x:CompileBindings="False"
         Title="Preferences"
@@ -348,6 +349,41 @@
                             <TextBlock Text="Image fit" FontSize="13" FontFamily="{DynamicResource PrimaryFont}"
                                        Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,14,0,4"/>
                             <ComboBox Name="BgStretchCombo" Width="180" Theme="{StaticResource DarkComboBox}" HorizontalAlignment="Left"/>
+
+                            <!-- ══ PAUSE EFFECT ══ -->
+                            <TextBlock Text="PAUSE EFFECT" Theme="{StaticResource PrefLabel}" Margin="0,28,0,4"/>
+                            <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,0,0,16"/>
+
+                            <StackPanel Margin="0,0,0,16">
+                                <TextBlock Text="Animated overlay while paused" FontSize="13"
+                                           FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextPrimaryBrush}"/>
+                                <TextBlock Text="A subtle animation drawn on top of the paused game frame. Set to None to disable."
+                                           FontSize="11" FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextSecondaryBrush}"
+                                           Margin="0,2,0,8" TextWrapping="Wrap"/>
+                                <ComboBox Name="PauseEffectCombo" Width="220" Theme="{StaticResource DarkComboBox}" HorizontalAlignment="Left"/>
+                            </StackPanel>
+
+                            <StackPanel Margin="0,0,0,12">
+                                <TextBlock Text="Intensity" FontSize="13" FontFamily="{DynamicResource PrimaryFont}"
+                                           Foreground="{DynamicResource TextPrimaryBrush}"/>
+                                <TextBlock Text="Density and speed multiplier (e.g. snowflake count, particle count)." FontSize="11"
+                                           FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextSecondaryBrush}"
+                                           Margin="0,2,0,8" TextWrapping="Wrap"/>
+                                <Grid ColumnDefinitions="*,44" Margin="0,4,0,0">
+                                    <Slider Name="PauseEffectIntensitySlider" Grid.Column="0" Minimum="50" Maximum="200"
+                                            TickFrequency="10" IsSnapToTickEnabled="True" VerticalAlignment="Center"/>
+                                    <TextBlock Name="PauseEffectIntensityValueLabel" Grid.Column="1" Text="100%" FontSize="12"
+                                               FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextSecondaryBrush}"
+                                               VerticalAlignment="Center" HorizontalAlignment="Right"/>
+                                </Grid>
+                            </StackPanel>
+
+                            <Border Background="#FF101015" BorderBrush="{DynamicResource BorderNormalBrush}" BorderThickness="1"
+                                    CornerRadius="4" Height="120" Margin="0,0,0,8" ClipToBounds="True">
+                                <pe:PauseEffectHost Name="PauseEffectPreview"/>
+                            </Border>
+                            <TextBlock Text="Preview" FontSize="11" FontFamily="{DynamicResource PrimaryFont}"
+                                       Foreground="{DynamicResource TextMutedBrush}" Margin="0,0,0,16"/>
 
                             <!-- ══ LAYOUT ══ -->
                             <TextBlock Text="LAYOUT" Theme="{StaticResource PrefLabel}" Margin="0,28,0,4"/>

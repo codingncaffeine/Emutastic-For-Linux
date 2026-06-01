@@ -110,6 +110,7 @@ public partial class PreferencesWindow : Window
         _windowCts.Cancel();
         _ctrl?.Dispose();
         if (ReferenceEquals(_open, this)) _open = null;
+        _pauseRunner?.Dispose();
         base.OnClosed(e);
     }
 
@@ -122,6 +123,8 @@ public partial class PreferencesWindow : Window
             var grid = this.FindControl<Grid>(panel);
             if (grid != null) grid.IsVisible = panel == target;
         }
+        // Stop the pause-effect preview's frame timer whenever we leave the Theme panel.
+        if (target != "PanelTheme") _pauseRunner?.Stop(immediate: true);
         if (target == "PanelAbout") LoadAboutSettings();
         if (target == "PanelTheme") LoadThemeSettings();
         if (target == "PanelLibrary") LoadLibrarySettings();
@@ -317,6 +320,67 @@ public partial class PreferencesWindow : Window
         WireLayoutSlider("PaddingSlider", "PaddingValueLabel", 8, 64, (c, v) => c.GridPadding = v);
         WireLayoutSlider("CardSizeSlider", "CardSizeValueLabel", 148, 280, (c, v) => c.CardWidth = v);
         WireLayoutSlider("SpacingSlider", "SpacingValueLabel", 4, 96, (c, v) => c.CardSpacing = v);
+
+        // Pause-effect picker + intensity (live preview restarts on change).
+        var pauseCombo = this.FindControl<ComboBox>("PauseEffectCombo")!;
+        foreach (var entry in PauseEffects.PauseEffectRegistry.All)
+            pauseCombo.Items.Add(new ComboBoxItem { Content = entry.DisplayName, Tag = entry.Id });
+        pauseCombo.SelectionChanged += (_, _) =>
+        {
+            if (_suppressPauseChange) return;
+            if (pauseCombo.SelectedItem is ComboBoxItem { Tag: string id })
+            {
+                UpdateThemeConfig(c => c.PauseEffect = id);
+                RestartPausePreview();
+            }
+        };
+        var intensity = this.FindControl<Slider>("PauseEffectIntensitySlider")!;
+        intensity.PropertyChanged += (_, e) =>
+        {
+            if (_suppressPauseChange || e.Property.Name != nameof(Slider.Value)) return;
+            int pct = System.Math.Clamp((int)intensity.Value, 50, 200);
+            this.FindControl<TextBlock>("PauseEffectIntensityValueLabel")!.Text = $"{pct}%";
+            UpdateThemeConfig(c => c.PauseEffectIntensity = pct / 100.0);
+            RestartPausePreview();
+        };
+    }
+
+    private bool _suppressPauseChange;
+    private PauseEffects.PauseEffectRunner? _pauseRunner;
+
+    private void LoadPauseSettings()
+    {
+        var cfg = App.Configuration?.GetThemeConfiguration();
+        if (cfg == null) return;
+        _suppressPauseChange = true;
+        var combo = this.FindControl<ComboBox>("PauseEffectCombo")!;
+        combo.SelectedItem = combo.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string?)i.Tag == cfg.PauseEffect)
+            ?? combo.Items.OfType<ComboBoxItem>().FirstOrDefault();
+        int pct = System.Math.Clamp((int)System.Math.Round(cfg.PauseEffectIntensity * 100), 50, 200);
+        this.FindControl<Slider>("PauseEffectIntensitySlider")!.Value = pct;
+        this.FindControl<TextBlock>("PauseEffectIntensityValueLabel")!.Text = $"{pct}%";
+        _suppressPauseChange = false;
+    }
+
+    // (Re)start the live preview with the saved effect + intensity. "none" stops it.
+    private void RestartPausePreview()
+    {
+        var host = this.FindControl<PauseEffects.PauseEffectHost>("PauseEffectPreview");
+        if (host == null) return;
+        _pauseRunner ??= new PauseEffects.PauseEffectRunner(host);
+
+        var cfg = App.Configuration?.GetThemeConfiguration();
+        string id = cfg?.PauseEffect ?? "none";
+        double intensity = System.Math.Clamp(cfg?.PauseEffectIntensity ?? 1.0, 0.5, 2.0);
+        var entry = PauseEffects.PauseEffectRegistry.Find(id);
+        if (entry == null || entry.Id == PauseEffects.PauseEffectRegistry.NoneId)
+        {
+            _pauseRunner.Stop(immediate: true);
+            return;
+        }
+        var inst = entry.Factory();
+        if (entry.IsPixel) _pauseRunner.Start((PauseEffects.IPixelPauseEffect)inst, intensity);
+        else _pauseRunner.Start((PauseEffects.IPauseEffect)inst, intensity);
     }
 
     private void WireLayoutSlider(string slider, string label, int min, int max, Action<Configuration.ThemeConfiguration, int> set)
@@ -407,6 +471,8 @@ public partial class PreferencesWindow : Window
         BuildThemeSwatches(activeId);
         LoadBackgroundSettings();
         LoadLayoutSettings();
+        LoadPauseSettings();
+        RestartPausePreview();   // animate the preview while the Theme panel is open
     }
 
     private bool _suppressLayoutChange;

@@ -144,7 +144,7 @@ namespace Emutastic.Configuration
         public int GridPadding { get; set; } = 28;
         /// <summary>Right + bottom gap between game cards in pixels — used as the
         /// fallback when a console hasn't been individually tuned via the
-        /// toolbar slider. Clamped 4–48 by the UI.</summary>
+        /// toolbar slider. Clamped 4–96 by the UI.</summary>
         public int CardSpacing { get; set; } = 20;
         /// <summary>
         /// Per-console card-spacing override. Key = console id ("PS1", "SNES",
@@ -162,6 +162,10 @@ namespace Emutastic.Configuration
         /// Applied on next launch.
         /// </summary>
         public bool UseWindowsChrome { get; set; } = false;
+        /// <summary>Animated pause-overlay effect id (PauseEffectRegistry; "none" = paused frame only).</summary>
+        public string PauseEffect { get; set; } = "none";
+        /// <summary>Pause-effect density/speed multiplier (0.5–2.0).</summary>
+        public double PauseEffectIntensity { get; set; } = 1.0;
         /// <summary>Active theme ID (e.g. "builtin.dark", "builtin.light").</summary>
         public string ActiveThemeId { get; set; } = "builtin.dark";
         /// <summary>Optional path to a background image displayed behind the game grid.</summary>
