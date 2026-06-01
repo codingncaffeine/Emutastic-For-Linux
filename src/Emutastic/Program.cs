@@ -18,6 +18,11 @@ sealed class Program
             Emutastic.SelfTest.RunLibrary(args.Length > 1 ? args[1] : null);
             return;
         }
+        if (args.Length >= 3 && args[0] == "--selftest-import")
+        {
+            Emutastic.SelfTest.RunImport(args[1], args[2]);
+            return;
+        }
 
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }

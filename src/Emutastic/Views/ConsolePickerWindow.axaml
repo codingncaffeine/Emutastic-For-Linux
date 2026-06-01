@@ -1,0 +1,17 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Emutastic.Views.ConsolePickerWindow"
+        x:CompileBindings="False"
+        Width="420" SizeToContent="Height"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource BgPrimaryBrush}"
+        Title="Pick a system">
+    <StackPanel Margin="20" Spacing="14">
+        <TextBlock Name="Msg" TextWrapping="Wrap" FontFamily="{DynamicResource PrimaryFont}"
+                   Foreground="{DynamicResource TextPrimaryBrush}" FontSize="13"/>
+        <StackPanel Name="ButtonsPanel" Spacing="6"/>
+        <Button Name="CancelButton" Content="Cancel" HorizontalAlignment="Right"
+                Theme="{DynamicResource SecondaryButtonStyle}"/>
+    </StackPanel>
+</Window>

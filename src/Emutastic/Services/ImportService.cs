@@ -123,6 +123,8 @@ namespace Emutastic.Services
         private async Task ProcessImportQueueAsync()
         {
             IsImporting = true;
+          try
+          {
 
             // Bump generation so stale artwork tasks from a previous drain don't touch our counters.
             Interlocked.Increment(ref _drainGeneration);
@@ -223,8 +225,15 @@ namespace Emutastic.Services
             }
 
             ProgressChanged?.Invoke(_progressTotal, _progressTotal);
+          }
+          finally
+          {
+            // Always clear the importing flag + signal drain, even if a scan/bundle step threw —
+            // otherwise the UI banner stays stuck on "Importing…" forever (the worker is
+            // fire-and-forget and never awaited, so a fault would be invisible).
             IsImporting = false;
             ImportQueueDrained?.Invoke();
+          }
         }
 
         /// <summary>

@@ -11,6 +11,44 @@ namespace Emutastic
     // library round-trip work at runtime (no Avalonia, no network).
     internal static class SelfTest
     {
+        // U1a: import a ROM via ImportService end-to-end + resolve its core (the GUI calls these).
+        public static void RunImport(string corePath, string romPath)
+        {
+            Console.WriteLine("=== U1a import self-test ===");
+            App.Configuration = new Emutastic.Configuration.JsonConfigurationService();
+
+            // Place the core in the cores folder so CoreManager can resolve it.
+            string coresDir = AppPaths.GetCoresFolder();
+            string destCore = System.IO.Path.Combine(coresDir, System.IO.Path.GetFileName(corePath));
+            if (!System.IO.File.Exists(destCore)) System.IO.File.Copy(corePath, destCore);
+            Console.WriteLine($"core placed: {destCore}");
+
+            var db = new DatabaseService();
+            var coreManager = new CoreManager(App.Configuration);
+            var importer = new ImportService(db, coreManager, App.Configuration);
+
+            using var drained = new System.Threading.ManualResetEventSlim(false);
+            importer.ImportQueueDrained += () => drained.Set();
+            importer.StatusChanged += m => Console.WriteLine($"  [import] {m}");
+
+            importer.ImportFilesAsync(new[] { romPath }, "NES");
+            bool ok = drained.Wait(TimeSpan.FromSeconds(40));
+            Console.WriteLine($"import drained={ok}");
+
+            var games = db.GetAllGames();
+            var g = games.FirstOrDefault(x => x.RomPath.Contains(System.IO.Path.GetFileNameWithoutExtension(romPath)));
+            Console.WriteLine($"games in library={games.Count}, imported='{g?.Title}' console={g?.Console}");
+            if (g != null)
+            {
+                string? resolved = coreManager.GetCorePathForGame(g);
+                Console.WriteLine($"GetCorePathForGame -> {resolved}  exists={System.IO.File.Exists(resolved ?? "")}");
+                db.DeleteGame(g.Id); // cleanup
+                Console.WriteLine(resolved != null && System.IO.File.Exists(resolved)
+                    ? "=== PASS (import + core resolution) ===" : "=== FAIL (core not resolved) ===");
+            }
+            else Console.WriteLine("=== FAIL (game not imported) ===");
+        }
+
         public static void RunLibrary(string? romPath)
         {
             Console.WriteLine("=== M3 library self-test ===");

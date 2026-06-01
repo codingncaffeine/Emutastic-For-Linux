@@ -88,6 +88,9 @@ namespace Emutastic.Emulator
             try
             {
                 _input.Initialize();
+                // Free the previous session's deferred core handle before dlopen'ing a fresh one
+                // (prevents the stale-globals 2nd-launch failure for mupen64/dolphin/ppsspp-class cores).
+                LibretroCore.FreeStaleDll();
                 _core = new LibretroCore(_corePath);
                 // System (BIOS) and save dirs follow XDG/portable layout (AppPaths creates them);
                 // core-assets default to the core's own folder.

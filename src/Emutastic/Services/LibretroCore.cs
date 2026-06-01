@@ -185,6 +185,20 @@ namespace Emutastic.Services
         /// </summary>
         public IntPtr DeferredFreeHandle { get; private set; } = IntPtr.Zero;
 
+        // The previous session's deferred-free handle (mupen64/parallel_n64/dolphin/ppsspp), published
+        // by Dispose(). FreeStaleDll() must be called BEFORE loading a fresh core so the prior .so's
+        // refcount actually reaches zero and its globals reset — otherwise a 2nd in-session launch of a
+        // deferred-free core re-uses the still-mapped library and fails retro_init. (Linux equivalent of
+        // upstream EmulatorWindow.FreeStaleDll.)
+        private static IntPtr _staleHandle = IntPtr.Zero;
+
+        /// <summary>Frees the previous session's deferred core handle, if any. Call before loading a core.</summary>
+        public static void FreeStaleDll()
+        {
+            var h = System.Threading.Interlocked.Exchange(ref _staleHandle, IntPtr.Zero);
+            if (h != IntPtr.Zero) { try { NativeMethods.FreeLibrary(h); } catch { } }
+        }
+
         // Libretro function pointer delegates
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate void retro_init_t();
@@ -799,7 +813,12 @@ namespace Emutastic.Services
                                      || dllName.Contains("parallel_n64")
                                      || dllName.Contains("ppsspp");
                 if (deferFreeLibrary)
+                {
                     DeferredFreeHandle = handle;
+                    // Publish for the next launch's FreeStaleDll() so the handle is eventually freed
+                    // (after this session's GL teardown) rather than leaked or freed too early.
+                    _staleHandle = handle;
+                }
                 else
                     try { NativeMethods.FreeLibrary(handle); } catch { }
             }

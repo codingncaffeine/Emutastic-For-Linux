@@ -9,7 +9,7 @@
         Width="1100" Height="720" MinWidth="800" MinHeight="500"
         Title="Emutastic"
         Background="{DynamicResource BgPrimaryBrush}"
-        SystemDecorations="None">
+        WindowDecorations="None">
 
     <!-- M4c shell: 1:1 main-window clone (title bar + sidebar + flat box-art grid + status banner).
          List/grouped views = M4c-2; nav/launch/import wiring + slider = M4d. -->
@@ -151,7 +151,8 @@
                         <TextBlock Text="{Binding GameCountText}" Theme="{DynamicResource TextSecondary}" VerticalAlignment="Bottom" Margin="0,0,0,3"/>
                     </StackPanel>
                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Spacing="8">
-                        <TextBox Name="SearchBox" Width="200" Watermark="Search…" PlaceholderText="Search…"/>
+                        <TextBox Name="SearchBox" Width="200" PlaceholderText="Search…"/>
+                        <Button Name="ImportButton" Theme="{DynamicResource SecondaryButtonStyle}" Content="＋ Import"/>
                     </StackPanel>
                 </Grid>
 

@@ -173,7 +173,7 @@ namespace Emutastic.Services
         private void ApplyColors(ThemeColors colors)
         {
             var defaults = GetDefaultColors();
-            var res = Application.Current.Resources;
+            var res = Application.Current!.Resources;
 
             void Set(string tokenName, string? value, string? fallback)
             {
