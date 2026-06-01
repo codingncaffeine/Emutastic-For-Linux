@@ -59,13 +59,23 @@ public partial class MainWindow : Window
         // Manual WPF-Extended-style selection (Avalonia's Multiple mode accumulates on plain
         // click, which we don't want): tunnel the press so we drive selection + detail ourselves.
         grid.AddHandler(PointerPressedEvent, OnGamePointerPressed, RoutingStrategies.Tunnel);
-        grid.KeyDown += (_, e) => { if (e.Key == Key.Enter) { OpenSelectedDetail(); e.Handled = true; } };
+        grid.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter) { OpenSelectedDetail(); e.Handled = true; }
+            else if (e.Key == Key.A && e.KeyModifiers.HasFlag(KeyModifiers.Control)) { grid.SelectAll(); e.Handled = true; }
+            else if (e.Key == Key.Delete) { RunGuarded(() => DeleteGamesWithConfirmAsync(SelectedGames())); e.Handled = true; }
+        };
         grid.AddHandler(ContextRequestedEvent, OnGameContextRequested);
 
         // List view (DataGrid) shares the launch + context-menu gestures.
         var list = this.FindControl<DataGrid>("GameListView")!;
         list.DoubleTapped += (_, _) => OpenSelectedDetail();   // list rows: double-click → open detail
-        list.KeyDown += (_, e) => { if (e.Key == Key.Enter) { OpenSelectedDetail(); e.Handled = true; } };
+        list.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter) { OpenSelectedDetail(); e.Handled = true; }
+            else if (e.Key == Key.A && e.KeyModifiers.HasFlag(KeyModifiers.Control)) { list.SelectAll(); e.Handled = true; }
+            else if (e.Key == Key.Delete) { RunGuarded(() => DeleteGamesWithConfirmAsync(SelectedGames())); e.Handled = true; }
+        };
         list.AddHandler(ContextRequestedEvent, OnGameContextRequested);
 
         // Right-click a console in the left nav → console context menu.
@@ -258,6 +268,12 @@ public partial class MainWindow : Window
         // lost, then re-fetches the rest silently (subsequent attempts bump ArtworkAttempts).
         // Matches upstream's startup call; the method self-delays 500ms so the window renders first.
         _ = _artworkFetch.RetryMissingArtworkAsync();
+
+        // Apply the saved ScreenScraper thread allowance at startup (upstream MainWindow). Without
+        // this, CurrentMaxThreads stays 1 until the user re-runs Test Login, so the metadata/3D-art
+        // fetch paths run single-threaded — the cause of slow art downloads on a paid (e.g. 6-thread) account.
+        var snapCfg = App.Configuration?.GetSnapConfiguration();
+        if (snapCfg != null) Services.ScreenScraperService.SetMaxThreads(snapCfg.ScreenScraperMaxThreads);
 
         // Warm LibVLC off the UI thread so the first detail-card snap video doesn't
         // pay the multi-second native init on the dispatcher.
@@ -543,22 +559,28 @@ public partial class MainWindow : Window
     private ContextMenu BuildMultiSelectContextMenu(List<Game> games)
     {
         var menu = new ContextMenu();
-        var del = MenuAction($"🗑  Delete Selected ({games.Count})", () => RunGuarded(async () =>
-        {
-            bool ok = await new ConfirmDialog("Delete Games",
-                $"Delete {games.Count} games? Save states will not be removed.", "Delete", danger: true).ShowDialog<bool>(this);
-            if (!ok) return;
-            await Task.Run(() => _db!.DeleteGames(games.Select(g => g.Id)));
-            foreach (var g in games) _vm!.RemoveGame(g);
-            var listV = this.FindControl<DataGrid>("GameListView");
-            if (listV is { IsVisible: true }) listV.SelectedItems.Clear();
-            else this.FindControl<ListBox>("GameGridView")?.SelectedItems?.Clear();
-            _selectionAnchor = null;
-            await _vm!.FilterGamesAsync();
-        }));
+        var del = MenuAction($"🗑  Delete Selected ({games.Count})",
+            () => RunGuarded(() => DeleteGamesWithConfirmAsync(games)));
         del.Foreground = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#FF5F57"));
         menu.Items.Add(del);
         return menu;
+    }
+
+    // Confirm + delete a set of games (shared by the context menu and the Delete key).
+    private async Task DeleteGamesWithConfirmAsync(List<Game> games)
+    {
+        if (games.Count == 0) return;
+        bool ok = await new ConfirmDialog("Delete Games",
+            $"Delete {games.Count} game{(games.Count == 1 ? "" : "s")}? Save states will not be removed.",
+            "Delete", danger: true).ShowDialog<bool>(this);
+        if (!ok) return;
+        await Task.Run(() => _db!.DeleteGames(games.Select(g => g.Id)));
+        foreach (var g in games) _vm!.RemoveGame(g);
+        var listV = this.FindControl<DataGrid>("GameListView");
+        if (listV is { IsVisible: true }) listV.SelectedItems.Clear();
+        else this.FindControl<ListBox>("GameGridView")?.SelectedItems?.Clear();
+        _selectionAnchor = null;
+        await _vm!.FilterGamesAsync();
     }
 
     private static MenuItem MenuAction(string header, Action onClick, bool enabled = true)
