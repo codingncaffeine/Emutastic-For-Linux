@@ -433,8 +433,13 @@ public partial class MainWindow : Window
     // ── Context menu (game card) ─────────────────────────────────────────────
     private void OnGameContextRequested(object? sender, ContextRequestedEventArgs e)
     {
-        if ((e.Source as Control)?.DataContext is not Game g) return;
-        BuildGameContextMenu(g).Open((Control)e.Source!);
+        // Walk up from the hit visual to the card that carries the Game — the right-click
+        // can land on a nested element (image, rating panel, text run) whose own DataContext
+        // isn't the Game, so checking only e.Source missed the menu entirely.
+        var node = e.Source as Control;
+        while (node != null && node.DataContext is not Game) node = node.Parent as Control;
+        if (node?.DataContext is not Game g) return;
+        BuildGameContextMenu(g).Open(node);
         e.Handled = true;
     }
 

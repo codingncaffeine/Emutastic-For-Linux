@@ -1258,9 +1258,14 @@ public partial class PreferencesWindow : Window
 
     private readonly Services.CoreDownloadService _coreDownloader = new();
     private readonly Dictionary<string, TextBlock> _coreUpdatePills = new();
+    private bool _coresBuilding;
 
     private async void BuildCoresPanel()
     {
+        // Guard against overlapping rebuilds (a download completing while the user clicks a
+        // preferred ●/○ both call this within the off-thread scan window → doubled panel).
+        if (_coresBuilding) return;
+        _coresBuilding = true;
         var panel = this.FindControl<StackPanel>("CoresListPanel")!;
         panel.Children.Clear();
         _coreUpdatePills.Clear();
@@ -1273,7 +1278,7 @@ public partial class PreferencesWindow : Window
             try { foreach (var f in System.IO.Directory.EnumerateFiles(coresFolder, "*.so")) set.Add(System.IO.Path.GetFileName(f)); } catch { }
             return set;
         });
-        if (!this.FindControl<Grid>("PanelCores")!.IsVisible) return;
+        if (!this.FindControl<Grid>("PanelCores")!.IsVisible) { _coresBuilding = false; return; }
         bool IsInstalled(string dll) => installed.Contains(dll);
         panel.Children.Clear();
 
@@ -1332,6 +1337,7 @@ public partial class PreferencesWindow : Window
         _ = DecorateCoreUpdatesAsync(coresFolder, updateAllBtn);
 
         AppendExtrasSection(panel);
+        _coresBuilding = false;
     }
 
     // ── P6: Extras — DAT downloads (the Linux-relevant part of upstream's Extras).
@@ -1512,7 +1518,8 @@ public partial class PreferencesWindow : Window
             "prosystem" => "ProSystem", "flycast" => "Flycast (Dreamcast)", "virtualjaguar" => "Virtual Jaguar",
             "bluemsx" => "blueMSX", "vecx" => "Vecx", "opera" => "Opera (3DO)", "same_cdi" => "SAME CDi",
             "fbneo" => "FBNeo (Final Burn Neo)", "geolith" => "Geolith (Neo Geo)",
-            _ => name,
+            "mame2003_plus" => "MAME 2003-Plus", "mednafen_psx_hw" => "Mednafen PSX HW (Beetle)",
+            _ => name.Length == 0 ? name : char.ToUpper(name[0]) + name[1..].Replace("_", " "),
         };
     }
 
