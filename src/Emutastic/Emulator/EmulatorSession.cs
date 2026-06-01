@@ -111,6 +111,7 @@ namespace Emutastic.Emulator
                 _audio = new SdlAudio((int)Math.Round(_sampleRate));
 
                 _running = true;
+                System.Threading.Interlocked.Increment(ref _activeCount);
                 _thread = new Thread(RunLoop) { IsBackground = true, Name = "EmuLoop" };
                 _thread.Start();
                 return true;
@@ -260,8 +261,14 @@ namespace Emutastic.Emulator
         private UIntPtr AudioBatch_cb(IntPtr data, UIntPtr frames) { _audio?.QueueBatch(data, (int)frames); return frames; }
         private void InputPoll_cb() { /* SdlInput.Poll already called at top of the loop */ }
 
+        // Number of live emulator sessions. The Controls-panel ControllerManager checks this so it
+        // doesn't call SDL_PumpEvents concurrently with the emu loop (SDL pumping isn't multi-thread safe).
+        private static int _activeCount;
+        public static bool AnyActive => System.Threading.Volatile.Read(ref _activeCount) > 0;
+
         public void Dispose()
         {
+            if (_running) System.Threading.Interlocked.Decrement(ref _activeCount);
             _running = false;
             // The emu thread must fully exit retro_run before we free the core / SDL handles it
             // calls into (video/audio/input callbacks). For software cores retro_run returns in
