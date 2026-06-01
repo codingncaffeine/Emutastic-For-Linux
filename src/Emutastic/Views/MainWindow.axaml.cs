@@ -52,14 +52,14 @@ public partial class MainWindow : Window
 
         // Launch on double-click / Enter from the library grid.
         var grid = this.FindControl<ListBox>("GameGridView")!;
-        grid.DoubleTapped += (_, _) => LaunchSelected();
-        grid.KeyDown += (_, e) => { if (e.Key == Key.Enter) { LaunchSelected(); e.Handled = true; } };
+        grid.Tapped += OnGameTapped;                       // single-click → open detail (upstream UX)
+        grid.KeyDown += (_, e) => { if (e.Key == Key.Enter) { OpenSelectedDetail(); e.Handled = true; } };
         grid.AddHandler(ContextRequestedEvent, OnGameContextRequested);
 
         // List view (DataGrid) shares the launch + context-menu gestures.
         var list = this.FindControl<DataGrid>("GameListView")!;
-        list.DoubleTapped += (_, _) => LaunchSelected();
-        list.KeyDown += (_, e) => { if (e.Key == Key.Enter) { LaunchSelected(); e.Handled = true; } };
+        list.DoubleTapped += (_, _) => OpenSelectedDetail();   // list rows: double-click → open detail
+        list.KeyDown += (_, e) => { if (e.Key == Key.Enter) { OpenSelectedDetail(); e.Handled = true; } };
         list.AddHandler(ContextRequestedEvent, OnGameContextRequested);
 
         // Drag-drop ROM import.
@@ -267,6 +267,39 @@ public partial class MainWindow : Window
     private void LaunchSelected()
     {
         if (SelectedGame() is Game g) LaunchGame(g);
+    }
+
+    // ── Game detail card (U4) ───────────────────────────────────────────────
+    private GameDetailWindow? _openDetailWindow;
+
+    // Single-click a box-art card → open its detail window (upstream UX). Shift+click
+    // is reserved for range-select, so it never opens the card.
+    private void OnGameTapped(object? sender, TappedEventArgs e)
+    {
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Shift)) return;
+        if (e.Source is Control c && c.DataContext is Game g) OpenGameDetail(g);
+    }
+
+    private void OpenSelectedDetail()
+    {
+        if (SelectedGame() is Game g) OpenGameDetail(g);
+    }
+
+    private void OpenGameDetail(Game game)
+    {
+        _openDetailWindow?.Close();
+        var win = _openDetailWindow = new GameDetailWindow(game);
+        win.Closed += async (_, _) =>
+        {
+            _openDetailWindow = null;
+            // If the game was removed via the detail card's "Remove from Library", refresh.
+            if (_db != null && !_db.GameExists(game.Id))
+            {
+                _vm?.RemoveGame(game);
+                if (_vm != null) await _vm.FilterGamesAsync();
+            }
+        };
+        win.Show(this);
     }
 
     private void LaunchGame(Game game)

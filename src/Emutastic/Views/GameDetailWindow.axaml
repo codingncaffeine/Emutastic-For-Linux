@@ -1,0 +1,173 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Emutastic.Views.GameDetailWindow"
+        x:CompileBindings="False"
+        WindowDecorations="None"
+        Background="Transparent"
+        TransparencyLevelHint="Transparent"
+        CanResize="False"
+        ShowInTaskbar="False"
+        Width="520" Height="740"
+        WindowStartupLocation="CenterOwner">
+
+    <!-- Dark overlay background + centered modal card -->
+    <Panel>
+        <Border Name="Overlay" Background="#99000000"/>
+
+        <!-- Modal card -->
+        <Border Name="ModalCard"
+                Background="{DynamicResource BgSecondaryBrush}"
+                BorderBrush="{DynamicResource BorderNormalBrush}"
+                BorderThickness="1"
+                CornerRadius="14"
+                Width="460"
+                VerticalAlignment="Center"
+                HorizontalAlignment="Center">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="40" OffsetX="0" OffsetY="0" Opacity="0.8" Color="{DynamicResource ShadowColor}"/>
+            </Border.Effect>
+            <Grid RowDefinitions="345,*,Auto">
+
+                <!-- Art area (460×345 = 4:3) -->
+                <Border Grid.Row="0" CornerRadius="14,14,0,0" ClipToBounds="True">
+                    <Panel>
+                        <!-- Background color from game -->
+                        <Border Name="ArtBackground">
+                            <Border.Background>
+                                <SolidColorBrush Color="{DynamicResource BgTertiaryColor}"/>
+                            </Border.Background>
+                        </Border>
+
+                        <!-- Video rendered via LibVLC (U4b) → WriteableBitmap -->
+                        <Image Name="VideoImage" Stretch="UniformToFill" IsVisible="False"
+                               RenderOptions.BitmapInterpolationMode="LowQuality"/>
+
+                        <!-- Cover art / screenshot — stays visible until video is ready -->
+                        <Image Name="HeaderImage" Stretch="UniformToFill" IsVisible="False"
+                               RenderOptions.BitmapInterpolationMode="HighQuality"/>
+
+                        <!-- Gradient overlay -->
+                        <Border>
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                                    <GradientStop Color="#44FFFFFF" Offset="0"/>
+                                    <GradientStop Color="#00FFFFFF" Offset="0.5"/>
+                                    <GradientStop Color="#88000000" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.Background>
+                        </Border>
+
+                        <!-- Game title as placeholder -->
+                        <TextBlock Name="ArtPlaceholderText"
+                                   FontFamily="{DynamicResource PrimaryFont}" FontSize="22" FontWeight="Bold"
+                                   Foreground="#AAFFFFFF" TextWrapping="Wrap" TextAlignment="Center"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" Margin="32"/>
+
+                        <!-- Close button -->
+                        <Border Name="CloseButton" Background="#66000000" CornerRadius="12" Width="24" Height="24"
+                                HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,12,12,0" Cursor="Hand">
+                            <TextBlock Text="✕" FontSize="11" Foreground="White"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+
+                        <!-- Favorite badge -->
+                        <Border Name="FavoriteBadge" Background="#44000000" CornerRadius="12" Width="24" Height="24"
+                                HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,12,42,0" IsVisible="False">
+                            <TextBlock Text="♥" FontSize="11" Foreground="{DynamicResource FavoriteHeartBrush}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+
+                        <!-- Console tag -->
+                        <Border Background="#88000000" CornerRadius="6" Padding="10,4"
+                                HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="16,0,0,16">
+                            <TextBlock Name="ConsoleTag" FontFamily="{DynamicResource PrimaryFont}"
+                                       FontSize="11" FontWeight="SemiBold" Foreground="White"/>
+                        </Border>
+                    </Panel>
+                </Border>
+
+                <!-- Info area (scrolls so RA / description can grow without pushing out the buttons) -->
+                <ScrollViewer Grid.Row="1" Margin="24,20,24,0"
+                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel>
+                        <!-- Title -->
+                        <TextBlock Name="GameTitle" FontFamily="{DynamicResource PrimaryFont}" FontSize="20"
+                                   FontWeight="Bold" Foreground="{DynamicResource TextPrimaryBrush}" TextWrapping="Wrap"/>
+
+                        <!-- Meta pills (left) + stats pills (right) -->
+                        <Grid Margin="0,10,0,0" ColumnDefinitions="*,Auto">
+                            <WrapPanel Name="MetadataPanel" Grid.Column="0">
+                                <Border Name="YearPill" Background="{DynamicResource BgTertiaryBrush}"
+                                        CornerRadius="4" Padding="8,3" Margin="0,0,6,6" IsVisible="False">
+                                    <TextBlock Name="GameYear" FontFamily="{DynamicResource PrimaryFont}"
+                                               FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                </Border>
+                                <Border Name="DeveloperPill" Background="{DynamicResource BgTertiaryBrush}"
+                                        CornerRadius="4" Padding="8,3" Margin="0,0,6,6" IsVisible="False">
+                                    <TextBlock Name="GameDeveloper" FontFamily="{DynamicResource PrimaryFont}"
+                                               FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}"
+                                               MaxWidth="170" TextTrimming="CharacterEllipsis"/>
+                                </Border>
+                                <Border Name="GenrePill" Background="{DynamicResource BgTertiaryBrush}"
+                                        CornerRadius="4" Padding="8,3" Margin="0,0,6,6" IsVisible="False">
+                                    <TextBlock Name="GameGenre" FontFamily="{DynamicResource PrimaryFont}"
+                                               FontSize="11" Foreground="{DynamicResource TextMutedBrush}"/>
+                                </Border>
+                            </WrapPanel>
+
+                            <StackPanel Name="StatsPanel" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
+                                <Border Name="PlayedPill" Background="{DynamicResource BgTertiaryBrush}"
+                                        CornerRadius="4" Padding="8,3" Margin="6,0,0,6">
+                                    <TextBlock Name="StatPlayed" FontFamily="{DynamicResource PrimaryFont}"
+                                               FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                </Border>
+                                <Border Name="PlayTimePill" Background="{DynamicResource BgTertiaryBrush}"
+                                        CornerRadius="4" Padding="8,3" Margin="6,0,0,6">
+                                    <TextBlock Name="StatPlayTime" FontFamily="{DynamicResource PrimaryFont}"
+                                               FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                </Border>
+                                <Border Name="LastPlayedPill" Background="{DynamicResource BgTertiaryBrush}"
+                                        CornerRadius="4" Padding="8,3" Margin="6,0,0,6">
+                                    <TextBlock Name="StatLastPlayed" FontFamily="{DynamicResource PrimaryFont}"
+                                               FontSize="11" Foreground="{DynamicResource TextMutedBrush}"/>
+                                </Border>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- Description (scrolls within a bounded height) -->
+                        <ScrollViewer Name="GameDescriptionScroll" MaxHeight="72" Margin="0,4,0,0"
+                                      VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                                      IsVisible="False">
+                            <TextBlock Name="GameDescription" FontFamily="{DynamicResource PrimaryFont}" FontSize="12"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" LineHeight="18"/>
+                        </ScrollViewer>
+
+                        <!-- RetroAchievements section (lands in U8; hidden for now) -->
+                        <StackPanel Name="RASection" Margin="0,18,0,0" IsVisible="False">
+                            <Grid Margin="0,0,0,6" ColumnDefinitions="Auto,*,Auto">
+                                <TextBlock Grid.Column="0" Text="ACHIEVEMENTS" FontFamily="{DynamicResource PrimaryFont}"
+                                           FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource TextMutedBrush}"
+                                           VerticalAlignment="Center"/>
+                                <TextBlock Name="RAProgressLabel" Grid.Column="2" FontFamily="{DynamicResource PrimaryFont}"
+                                           FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center"/>
+                            </Grid>
+                            <ProgressBar Name="RAProgress" Height="6" Minimum="0" Maximum="100" Value="0"
+                                         Background="{DynamicResource BgTertiaryBrush}" Foreground="{DynamicResource AccentBrush}"
+                                         BorderThickness="0"/>
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Action buttons (pinned bottom) -->
+                <Grid Grid.Row="2" Margin="24,16,24,24" ColumnDefinitions="*,Auto,Auto">
+                    <Button Grid.Column="0" Name="PlayButton" Content="▶   Play Now" Theme="{StaticResource PlayButtonStyle}"
+                            Height="42" Margin="0,0,8,0" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+                    <Button Grid.Column="1" Name="FavoriteButton" Content="♡  Favorite" Theme="{StaticResource SecondaryButtonStyle}"
+                            Height="42" Margin="0,0,8,0"/>
+                    <Button Grid.Column="2" Name="MoreButton" Content="⋯" Theme="{StaticResource SecondaryButtonStyle}"
+                            Height="42" Width="42"/>
+                </Grid>
+            </Grid>
+        </Border>
+    </Panel>
+</Window>
