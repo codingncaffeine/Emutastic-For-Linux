@@ -123,9 +123,9 @@
                            FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextPrimaryBrush}"
                            VerticalAlignment="Center" Margin="14,0,0,0"/>
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Spacing="6" Margin="0,0,12,0">
-                    <Button Name="MinimizeButton" Background="{DynamicResource TrafficYellowBrush}" Theme="{StaticResource WinBtn}" ToolTip.Tip="Minimize"/>
-                    <Button Name="MaximizeButton" Background="{DynamicResource GreenBrush}" Theme="{StaticResource WinBtn}" ToolTip.Tip="Maximize"/>
-                    <Button Name="CloseButton" Background="{DynamicResource TrafficRedBrush}" Theme="{StaticResource WinBtn}" ToolTip.Tip="Close"/>
+                    <Button Name="MinimizeButton" Theme="{DynamicResource ActiveMinButton}" ToolTip.Tip="Minimize"/>
+                    <Button Name="MaximizeButton" Theme="{DynamicResource ActiveMaxButton}" ToolTip.Tip="Maximize"/>
+                    <Button Name="CloseButton" Theme="{DynamicResource ActiveCloseButton}" ToolTip.Tip="Close"/>
                 </StackPanel>
             </Grid>
 
@@ -432,6 +432,23 @@
                                                FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextSecondaryBrush}"
                                                VerticalAlignment="Center" HorizontalAlignment="Right"/>
                                 </Grid>
+                            </StackPanel>
+
+                            <!-- ══ WINDOW STYLE ══ -->
+                            <TextBlock Text="WINDOW STYLE" Theme="{StaticResource PrefLabel}" Margin="0,28,0,4"/>
+                            <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,0,0,16"/>
+
+                            <StackPanel Margin="0,0,0,4">
+                                <TextBlock Text="Title-bar buttons" FontSize="13" FontFamily="{DynamicResource PrimaryFont}"
+                                           Foreground="{DynamicResource TextPrimaryBrush}"/>
+                                <TextBlock Text="Look of the minimize / maximize / close buttons across the app." FontSize="11"
+                                           FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextSecondaryBrush}"
+                                           Margin="0,2,0,8" TextWrapping="Wrap"/>
+                                <ComboBox Name="WindowStyleCombo" Width="220" Theme="{StaticResource DarkComboBox}" HorizontalAlignment="Left">
+                                    <ComboBoxItem Content="macOS" Tag="macOS"/>
+                                    <ComboBoxItem Content="Windows 11" Tag="Windows11"/>
+                                    <ComboBoxItem Content="Linux (native)" Tag="Linux"/>
+                                </ComboBox>
                             </StackPanel>
 
                             <TextBlock Name="ThemeStatusText" FontSize="11" FontFamily="{DynamicResource PrimaryFont}"

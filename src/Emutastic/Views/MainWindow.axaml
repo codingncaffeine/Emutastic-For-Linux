@@ -31,17 +31,11 @@
             <Grid Grid.Column="1" Background="{DynamicResource BgSecondaryBrush}" ColumnDefinitions="*,Auto">
                 <!-- drag zone -->
                 <Border Name="DragZone" Grid.Column="0" Background="Transparent"/>
-                <!-- traffic-light window buttons -->
+                <!-- window buttons — style (mac / Win11 / Linux) swaps via Active*Button -->
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0" Spacing="6">
-                    <Button Name="MinimizeButton" Width="13" Height="13" Padding="0" Cursor="Hand" ToolTip.Tip="Minimize">
-                        <Button.Template><ControlTemplate><Ellipse Name="c" Fill="{DynamicResource TrafficYellowBrush}"/></ControlTemplate></Button.Template>
-                    </Button>
-                    <Button Name="MaximizeButton" Width="13" Height="13" Padding="0" Cursor="Hand" ToolTip.Tip="Maximize">
-                        <Button.Template><ControlTemplate><Ellipse Name="c" Fill="{DynamicResource GreenBrush}"/></ControlTemplate></Button.Template>
-                    </Button>
-                    <Button Name="CloseButton" Width="13" Height="13" Padding="0" Cursor="Hand" ToolTip.Tip="Close">
-                        <Button.Template><ControlTemplate><Ellipse Name="c" Fill="{DynamicResource TrafficRedBrush}"/></ControlTemplate></Button.Template>
-                    </Button>
+                    <Button Name="MinimizeButton" Padding="0" Theme="{DynamicResource ActiveMinButton}" ToolTip.Tip="Minimize"/>
+                    <Button Name="MaximizeButton" Padding="0" Theme="{DynamicResource ActiveMaxButton}" ToolTip.Tip="Maximize"/>
+                    <Button Name="CloseButton" Padding="0" Theme="{DynamicResource ActiveCloseButton}" ToolTip.Tip="Close"/>
                 </StackPanel>
             </Grid>
         </Grid>

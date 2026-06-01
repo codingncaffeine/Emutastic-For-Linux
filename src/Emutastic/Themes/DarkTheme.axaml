@@ -529,4 +529,85 @@
         <Setter Property="FontSize" Value="12"/>
     </ControlTheme>
 
+    <!-- ══ Window title-bar buttons — 3 swappable styles (Preferences → Theme → Window Style) ══
+         App.ApplyWindowButtonStyle points Active{Min,Max,Close}Button at one of these sets; the
+         title bars bind Theme="{DynamicResource Active*Button}" so the choice applies live. ── -->
+
+    <!-- macOS traffic-lights (the default look) -->
+    <ControlTheme x:Key="MacMinButton" TargetType="Button">
+        <Setter Property="Width" Value="13"/><Setter Property="Height" Value="13"/><Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template"><ControlTemplate><Ellipse Fill="{DynamicResource TrafficYellowBrush}"/></ControlTemplate></Setter>
+        <Style Selector="^:pointerover"><Setter Property="Opacity" Value="0.8"/></Style>
+    </ControlTheme>
+    <ControlTheme x:Key="MacMaxButton" TargetType="Button">
+        <Setter Property="Width" Value="13"/><Setter Property="Height" Value="13"/><Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template"><ControlTemplate><Ellipse Fill="{DynamicResource GreenBrush}"/></ControlTemplate></Setter>
+        <Style Selector="^:pointerover"><Setter Property="Opacity" Value="0.8"/></Style>
+    </ControlTheme>
+    <ControlTheme x:Key="MacCloseButton" TargetType="Button">
+        <Setter Property="Width" Value="13"/><Setter Property="Height" Value="13"/><Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template"><ControlTemplate><Ellipse Fill="{DynamicResource TrafficRedBrush}"/></ControlTemplate></Setter>
+        <Style Selector="^:pointerover"><Setter Property="Opacity" Value="0.8"/></Style>
+    </ControlTheme>
+
+    <!-- Windows 11 — flat square buttons with glyphs; gray hover, red close hover -->
+    <ControlTheme x:Key="Win11MinButton" TargetType="Button">
+        <Setter Property="Width" Value="40"/><Setter Property="Height" Value="28"/><Setter Property="Cursor" Value="Arrow"/>
+        <Setter Property="Template"><ControlTemplate>
+            <Border Name="bg" Background="Transparent" CornerRadius="0">
+                <TextBlock Name="g" Text="&#x2212;" FontSize="14" Foreground="{DynamicResource TextPrimaryBrush}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border></ControlTemplate></Setter>
+        <Style Selector="^:pointerover /template/ Border#bg"><Setter Property="Background" Value="#22FFFFFF"/></Style>
+    </ControlTheme>
+    <ControlTheme x:Key="Win11MaxButton" TargetType="Button">
+        <Setter Property="Width" Value="40"/><Setter Property="Height" Value="28"/><Setter Property="Cursor" Value="Arrow"/>
+        <Setter Property="Template"><ControlTemplate>
+            <Border Name="bg" Background="Transparent" CornerRadius="0">
+                <TextBlock Name="g" Text="&#x25A1;" FontSize="13" Foreground="{DynamicResource TextPrimaryBrush}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border></ControlTemplate></Setter>
+        <Style Selector="^:pointerover /template/ Border#bg"><Setter Property="Background" Value="#22FFFFFF"/></Style>
+    </ControlTheme>
+    <ControlTheme x:Key="Win11CloseButton" TargetType="Button">
+        <Setter Property="Width" Value="40"/><Setter Property="Height" Value="28"/><Setter Property="Cursor" Value="Arrow"/>
+        <Setter Property="Template"><ControlTemplate>
+            <Border Name="bg" Background="Transparent" CornerRadius="0">
+                <TextBlock Name="g" Text="&#x2715;" FontSize="12" Foreground="{DynamicResource TextPrimaryBrush}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border></ControlTemplate></Setter>
+        <Style Selector="^:pointerover /template/ Border#bg"><Setter Property="Background" Value="#E81123"/></Style>
+        <Style Selector="^:pointerover /template/ TextBlock#g"><Setter Property="Foreground" Value="White"/></Style>
+    </ControlTheme>
+
+    <!-- Linux-native (Adwaita/Breeze-ish) — round buttons with a subtle fill + glyph -->
+    <ControlTheme x:Key="LinuxMinButton" TargetType="Button">
+        <Setter Property="Width" Value="24"/><Setter Property="Height" Value="24"/><Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template"><ControlTemplate>
+            <Border Name="bg" Background="#26FFFFFF" CornerRadius="12">
+                <TextBlock Name="g" Text="&#x2212;" FontSize="13" Foreground="{DynamicResource TextPrimaryBrush}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border></ControlTemplate></Setter>
+        <Style Selector="^:pointerover /template/ Border#bg"><Setter Property="Background" Value="#40FFFFFF"/></Style>
+    </ControlTheme>
+    <ControlTheme x:Key="LinuxMaxButton" TargetType="Button">
+        <Setter Property="Width" Value="24"/><Setter Property="Height" Value="24"/><Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template"><ControlTemplate>
+            <Border Name="bg" Background="#26FFFFFF" CornerRadius="12">
+                <TextBlock Name="g" Text="&#x25A1;" FontSize="12" Foreground="{DynamicResource TextPrimaryBrush}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border></ControlTemplate></Setter>
+        <Style Selector="^:pointerover /template/ Border#bg"><Setter Property="Background" Value="#40FFFFFF"/></Style>
+    </ControlTheme>
+    <ControlTheme x:Key="LinuxCloseButton" TargetType="Button">
+        <Setter Property="Width" Value="24"/><Setter Property="Height" Value="24"/><Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template"><ControlTemplate>
+            <Border Name="bg" Background="#26FFFFFF" CornerRadius="12">
+                <TextBlock Name="g" Text="&#x2715;" FontSize="11" Foreground="{DynamicResource TextPrimaryBrush}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border></ControlTemplate></Setter>
+        <Style Selector="^:pointerover /template/ Border#bg"><Setter Property="Background" Value="#E04B4B"/></Style>
+        <Style Selector="^:pointerover /template/ TextBlock#g"><Setter Property="Foreground" Value="White"/></Style>
+    </ControlTheme>
+
 </ResourceDictionary>

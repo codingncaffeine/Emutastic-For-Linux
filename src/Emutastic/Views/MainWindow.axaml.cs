@@ -264,6 +264,7 @@ public partial class MainWindow : Window
         // Library layout (Preferences → Theme → Layout): push saved padding/card-size/spacing into
         // the grid's DynamicResources before first layout.
         App.ApplyLibraryLayout();
+        App.ApplyWindowButtonStyle(App.Configuration?.GetThemeConfiguration()?.WindowButtonStyle);
 
         // Grid background image (Preferences → Theme): apply now + on change.
         ThemeService.Instance.BackgroundImageChanged += (_, _) => Dispatcher.UIThread.Post(ApplyBackgroundImage);

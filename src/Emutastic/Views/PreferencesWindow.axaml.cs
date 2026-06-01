@@ -334,6 +334,17 @@ public partial class PreferencesWindow : Window
                 RestartPausePreview();
             }
         };
+        var styleCombo = this.FindControl<ComboBox>("WindowStyleCombo")!;
+        styleCombo.SelectionChanged += (_, _) =>
+        {
+            if (_suppressPauseChange) return;   // shared load guard for the Theme panel
+            if (styleCombo.SelectedItem is ComboBoxItem { Tag: string style })
+            {
+                UpdateThemeConfig(c => c.WindowButtonStyle = style);
+                App.ApplyWindowButtonStyle(style);   // live, app-wide
+            }
+        };
+
         var intensity = this.FindControl<Slider>("PauseEffectIntensitySlider")!;
         intensity.PropertyChanged += (_, e) =>
         {
@@ -361,6 +372,10 @@ public partial class PreferencesWindow : Window
         int pct = System.Math.Clamp((int)System.Math.Round(cfg.PauseEffectIntensity * 100), 50, 200);
         this.FindControl<Slider>("PauseEffectIntensitySlider")!.Value = pct;
         this.FindControl<TextBlock>("PauseEffectIntensityValueLabel")!.Text = $"{pct}%";
+
+        var styleCombo = this.FindControl<ComboBox>("WindowStyleCombo")!;
+        styleCombo.SelectedItem = styleCombo.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string?)i.Tag == cfg.WindowButtonStyle)
+            ?? styleCombo.Items.OfType<ComboBoxItem>().FirstOrDefault();
         _suppressPauseChange = false;
     }
 

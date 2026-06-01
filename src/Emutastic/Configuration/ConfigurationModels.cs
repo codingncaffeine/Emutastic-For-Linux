@@ -162,6 +162,8 @@ namespace Emutastic.Configuration
         /// Applied on next launch.
         /// </summary>
         public bool UseWindowsChrome { get; set; } = false;
+        /// <summary>Title-bar min/max/close button style: "macOS" | "Windows11" | "Linux".</summary>
+        public string WindowButtonStyle { get; set; } = "macOS";
         /// <summary>Animated pause-overlay effect id (PauseEffectRegistry; "none" = paused frame only).</summary>
         public string PauseEffect { get; set; } = "none";
         /// <summary>Pause-effect density/speed multiplier (0.5–2.0).</summary>
