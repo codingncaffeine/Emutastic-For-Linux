@@ -42,8 +42,12 @@ sealed class Program
 
     // Avalonia configuration, don't remove; also used by visual designer.
     public static AppBuilder BuildAvaloniaApp()
+        // X11 + Skia explicitly (Linux target). We don't reference Avalonia.Desktop — see the
+        // vendored-Avalonia note in the csproj — so UsePlatformDetect() isn't available here.
         => AppBuilder.Configure<App>()
-            .UsePlatformDetect()
+            .UseX11()
+            .UseSkia()
+            .UseHarfBuzz()
 #if DEBUG
             .WithDeveloperTools()
 #endif

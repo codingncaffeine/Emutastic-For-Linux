@@ -18,11 +18,18 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Avalonia" Version="12.0.4" />
+    <!-- VENDORED: Avalonia 12.1.999 built from PR #20926 (Linux X11 drag-and-drop). Served from the
+         local feed in nuget.config. Avalonia.Desktop is intentionally NOT referenced — it drags in
+         macOS-only Avalonia.Native (can't build on Linux); we use Avalonia.X11 + Avalonia.Skia and
+         bootstrap with UseX11().UseSkia() in Program.cs. Revert to the released package + drop the
+         local feed when official Avalonia 12.1 ships. See memory: avalonia-x11-dnd-gap. -->
+    <PackageReference Include="Avalonia" Version="12.1.999" />
+    <PackageReference Include="Avalonia.X11" Version="12.1.999" />
+    <PackageReference Include="Avalonia.Skia" Version="12.1.999" />
+    <PackageReference Include="Avalonia.HarfBuzz" Version="12.1.999" />
     <PackageReference Include="Avalonia.Controls.DataGrid" Version="12.0.0" />
-    <PackageReference Include="Avalonia.Desktop" Version="12.0.4" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.4" />
-    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.0.4" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.999" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.999" />
     <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.1">
       <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
       <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
@@ -34,4 +41,9 @@
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="SharpCompress" Version="0.49.1" />
   </ItemGroup>
+
+  <!-- Forcing function: surfaces on every build so we don't forget the vendored Avalonia. -->
+  <Target Name="WarnVendoredAvalonia" BeforeTargets="Build">
+    <Warning Text="Using a VENDORED Avalonia 12.1.999 from PR #20926 (Linux drag-drop). When official Avalonia 12.1 ships: remove the avalonia-pr20926 source in nuget.config, repin these packages to the released version, and restore Avalonia.Desktop + UsePlatformDetect() if desired. See memory: avalonia-x11-dnd-gap." />
+  </Target>
 </Project>
