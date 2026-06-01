@@ -64,6 +64,8 @@ public partial class PreferencesWindow : Window
         WireTheme();
         WireLibrary();
         WireSnaps();
+        this.FindControl<Button>("CoreOptionsResetBtn")!.Click += (_, _) => CoreOptionsReset();
+        this.FindControl<Button>("CoreOptionsSaveBtn")!.Click += (_, _) => CoreOptionsSave();
     }
 
     protected override void OnClosed(EventArgs e)
@@ -85,6 +87,7 @@ public partial class PreferencesWindow : Window
         if (target == "PanelTheme") LoadThemeSettings();
         if (target == "PanelLibrary") LoadLibrarySettings();
         if (target == "PanelSnaps") LoadSnapsSettings();
+        if (target == "PanelCoreOptions") BuildCoreOptionsTab();
     }
 
     // Temporary placeholder until the panel's sub-splinter fills it.
@@ -554,6 +557,127 @@ public partial class PreferencesWindow : Window
             label.Foreground = Brush("AccentBrush");
         }
         finally { btn.IsEnabled = true; }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  U5 P1 — Core Options panel (per-core option schemas captured at launch)
+    // ════════════════════════════════════════════════════════════════════════
+
+    private readonly Services.CoreOptionsService _coreOptions = new();
+    private string _selectedCoreOptionsName = "";
+    private Dictionary<string, string> _pendingCoreOptionValues = new();
+
+    private void BuildCoreOptionsTab()
+    {
+        var coreList = this.FindControl<StackPanel>("CoreOptionsCoreList")!;
+        var optList  = this.FindControl<StackPanel>("CoreOptionsOptionList")!;
+        var resetBtn = this.FindControl<Button>("CoreOptionsResetBtn")!;
+        var saveBtn  = this.FindControl<Button>("CoreOptionsSaveBtn")!;
+        coreList.Children.Clear();
+        optList.Children.Clear();
+        resetBtn.IsEnabled = false;
+        saveBtn.IsEnabled = false;
+        _selectedCoreOptionsName = "";
+        _pendingCoreOptionValues = new();
+
+        var cores = _coreOptions.GetCoresWithSchema();
+        if (cores.Count == 0)
+        {
+            optList.Children.Add(new TextBlock
+            {
+                Text = "No core options have been discovered yet.\n\nLaunch a game for any system — options are captured automatically the first time a core loads.",
+                FontSize = 12, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextMutedBrush"),
+                TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 16, 0, 0),
+            });
+            return;
+        }
+
+        // Flat list (manufacturer grouping folds in with ConsoleCategories at the Cores phase).
+        string? first = null;
+        foreach (var (coreName, displayName, consoleName) in cores)
+        {
+            first ??= coreName;
+            string captured = coreName;
+            string label = consoleName.Length > 0 ? $"{displayName} ({consoleName})" : displayName;
+            var btn = new Button
+            {
+                Content = label, HorizontalAlignment = HorizontalAlignment.Stretch,
+                HorizontalContentAlignment = HorizontalAlignment.Left, Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0), Foreground = Brush("TextPrimaryBrush"),
+                FontFamily = Font("PrimaryFont"), FontSize = 12, Padding = new Thickness(10, 8, 10, 8),
+                Cursor = new Cursor(StandardCursorType.Hand),
+            };
+            btn.Click += (_, _) => LoadCoreOptionsForCore(captured);
+            coreList.Children.Add(btn);
+        }
+        if (first != null) LoadCoreOptionsForCore(first);
+    }
+
+    private void LoadCoreOptionsForCore(string coreName)
+    {
+        _selectedCoreOptionsName = coreName;
+        var optList  = this.FindControl<StackPanel>("CoreOptionsOptionList")!;
+        var resetBtn = this.FindControl<Button>("CoreOptionsResetBtn")!;
+        var saveBtn  = this.FindControl<Button>("CoreOptionsSaveBtn")!;
+        optList.Children.Clear();
+
+        var schema = _coreOptions.LoadSchema(coreName);
+        if (schema == null || schema.Options.Count == 0)
+        {
+            optList.Children.Add(new TextBlock
+            {
+                Text = "No options found for this core.", FontSize = 12, FontFamily = Font("PrimaryFont"),
+                Foreground = Brush("TextMutedBrush"), Margin = new Thickness(0, 16, 0, 0),
+            });
+            resetBtn.IsEnabled = false; resetBtn.Content = "Reset to Defaults"; saveBtn.IsEnabled = false;
+            return;
+        }
+
+        _pendingCoreOptionValues = new Dictionary<string, string>(_coreOptions.LoadValues(coreName));
+        resetBtn.IsEnabled = true; resetBtn.Content = $"Reset {schema.DisplayName} to Defaults"; saveBtn.IsEnabled = true;
+
+        optList.Children.Add(new TextBlock
+        {
+            Text = schema.DisplayName, FontSize = 14, FontWeight = FontWeight.SemiBold,
+            FontFamily = Font("PrimaryFont"), Foreground = Brush("TextPrimaryBrush"), Margin = new Thickness(0, 0, 0, 16),
+        });
+
+        var comboTheme = this.TryFindResource("DarkComboBox", out var t) ? t as Avalonia.Styling.ControlTheme : null;
+        var pco = _pendingCoreOptionValues;
+        foreach (var opt in schema.Options)
+        {
+            var section = new StackPanel { Margin = new Thickness(0, 0, 0, 14) };
+            section.Children.Add(new TextBlock
+            {
+                Text = opt.Description, FontSize = 12, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextPrimaryBrush"),
+                TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4),
+            });
+            var combo = new ComboBox { MaxWidth = 400, HorizontalAlignment = HorizontalAlignment.Left };
+            if (comboTheme != null) combo.Theme = comboTheme;
+            foreach (var val in opt.ValidValues) combo.Items.Add(val);
+            string current = pco.TryGetValue(opt.Key, out var sv) ? sv : opt.DefaultValue;
+            combo.SelectedItem = current;
+            if (combo.SelectedItem == null && combo.Items.Count > 0) combo.SelectedIndex = 0;
+            string capturedKey = opt.Key;
+            combo.SelectionChanged += (_, _) => { if (combo.SelectedItem is string v) pco[capturedKey] = v; };
+            section.Children.Add(combo);
+            optList.Children.Add(section);
+        }
+    }
+
+    private void CoreOptionsReset()
+    {
+        if (string.IsNullOrEmpty(_selectedCoreOptionsName)) return;
+        // Wipe saved values so defaults apply on the next launch (never push mid-session — some
+        // cores crash when critical options change while running).
+        _coreOptions.DeleteValues(_selectedCoreOptionsName);
+        LoadCoreOptionsForCore(_selectedCoreOptionsName);
+    }
+
+    private void CoreOptionsSave()
+    {
+        if (string.IsNullOrEmpty(_selectedCoreOptionsName)) return;
+        _coreOptions.SaveValues(_selectedCoreOptionsName, _pendingCoreOptionValues);
     }
 
     private IBrush? Brush(string key) => this.TryFindResource(key, out var v) ? v as IBrush : null;

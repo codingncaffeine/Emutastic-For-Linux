@@ -152,7 +152,33 @@
                 <Grid Name="PanelControls"/>
                 <Grid Name="PanelSystemFiles" IsVisible="False"/>
                 <Grid Name="PanelCores" IsVisible="False"/>
-                <Grid Name="PanelCoreOptions" IsVisible="False"/>
+                <Grid Name="PanelCoreOptions" IsVisible="False" ColumnDefinitions="200,*">
+                    <!-- Left: cores with a saved schema -->
+                    <Border Grid.Column="0" Background="{DynamicResource BgSecondaryBrush}"
+                            BorderBrush="{DynamicResource BorderNormalBrush}" BorderThickness="0,0,1,0">
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Top" Text="CORES" FontSize="10" FontWeight="SemiBold"
+                                       FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextMutedBrush}" Margin="14,14,14,8"/>
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <StackPanel Name="CoreOptionsCoreList" Margin="6,0,6,8"/>
+                            </ScrollViewer>
+                        </DockPanel>
+                    </Border>
+
+                    <!-- Right: options for the selected core -->
+                    <Grid Grid.Column="1" RowDefinitions="*,Auto">
+                        <ScrollViewer Grid.Row="0" Margin="24,16,24,8" VerticalScrollBarVisibility="Auto">
+                            <StackPanel Name="CoreOptionsOptionList"/>
+                        </ScrollViewer>
+                        <Border Grid.Row="1" Background="{DynamicResource BgSecondaryBrush}"
+                                BorderBrush="{DynamicResource BorderNormalBrush}" BorderThickness="0,1,0,0" Padding="24,10">
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+                                <Button Name="CoreOptionsResetBtn" Content="Reset to Defaults" Theme="{StaticResource PrefSecondaryBtn}" IsEnabled="False"/>
+                                <Button Name="CoreOptionsSaveBtn" Content="Save" Theme="{StaticResource PrefActionBtn}" IsEnabled="False"/>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </Grid>
                 <Grid Name="PanelLibrary" IsVisible="False">
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <StackPanel Margin="32,24,32,24" MaxWidth="600" HorizontalAlignment="Left">
