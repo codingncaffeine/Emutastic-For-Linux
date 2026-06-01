@@ -267,6 +267,9 @@ public partial class MainWindow : Window
         if (importBtn != null) importBtn.Click += (_, _) => RunGuarded(PickAndImportAsync);
         var prefsBtn = this.FindControl<Button>("PreferencesButton");
         if (prefsBtn != null) prefsBtn.Click += (_, _) => new PreferencesWindow().Show(this);
+        var newCollBtn = this.FindControl<Button>("NewCollectionButton");
+        if (newCollBtn != null) newCollBtn.Click += (_, _) => NewCollection();
+        RefreshCollectionsSidebar();
 
         Task.Run(() =>
         {
@@ -488,13 +491,24 @@ public partial class MainWindow : Window
         return mi;
     }
 
-    // ── Sidebar console context menu (right-click a console in the left nav) ──
+    // ── Sidebar context menu (right-click a console OR a collection in the left nav) ──
     private void OnConsoleContextRequested(object? sender, ContextRequestedEventArgs e)
     {
-        // Walk up to the console nav Button (CommandParameter carries the console tag).
+        // Walk up to a nav Button: collections carry an int Tag; consoles a string CommandParameter.
         var node = e.Source as Control;
-        while (node != null && !(node is Button b && b.CommandParameter is string)) node = node.Parent as Control;
-        if (node is not Button btn || btn.CommandParameter is not string console || string.IsNullOrEmpty(console)) return;
+        while (node != null && !(node is Button bb && (bb.Tag is int || bb.CommandParameter is string))) node = node.Parent as Control;
+        if (node is not Button btn) return;
+
+        // Collection branch (rename / delete).
+        if (btn.Tag is int collectionId)
+        {
+            string collName = (btn.Content as string)?.Replace("📂  ", "") ?? "Collection";
+            BuildCollectionContextMenu(collectionId, collName).Open(btn);
+            e.Handled = true;
+            return;
+        }
+
+        if (btn.CommandParameter is not string console || string.IsNullOrEmpty(console)) return;
         if (!CoreManager.ConsoleCoreMap.ContainsKey(console)) return;   // real consoles only (not the LIBRARY pseudo-navs)
 
         string display = console;
@@ -549,6 +563,55 @@ public partial class MainWindow : Window
         var editControls = MenuAction("🎮  Edit Controls…", () => new PreferencesWindow().Show(this));
         menu.Items.Insert(0, editControls);
         menu.Items.Insert(1, new Separator());
+        return menu;
+    }
+
+    // ── Collections sidebar ──────────────────────────────────────────────────
+    public void RefreshCollectionsSidebar()
+    {
+        var panel = this.FindControl<StackPanel>("UserCollectionsPanel");
+        if (panel == null || _db == null) return;
+        panel.Children.Clear();
+        var theme = this.TryFindResource("SidebarItemStyle", out var t) ? t as Avalonia.Styling.ControlTheme : null;
+        foreach (var (id, name) in _db.GetAllCollections())
+        {
+            int cid = id;
+            var btn = new Button { Content = $"📂  {name}", Tag = id };
+            if (theme != null) btn.Theme = theme;
+            btn.Click += (_, _) => _vm?.NavigateToCollectionCommand.Execute(cid);
+            panel.Children.Add(btn);
+        }
+    }
+
+    private void NewCollection() => RunGuarded(async () =>
+    {
+        string? name = await new RenameWindow("").ShowDialog<string?>(this);
+        if (string.IsNullOrWhiteSpace(name) || _db == null) return;
+        _db.CreateCollection(name.Trim());
+        RefreshCollectionsSidebar();
+    });
+
+    private ContextMenu BuildCollectionContextMenu(int collectionId, string display)
+    {
+        var menu = new ContextMenu();
+        menu.Items.Add(MenuAction("✏  Rename Collection", () => RunGuarded(async () =>
+        {
+            string? newName = await new RenameWindow(display).ShowDialog<string?>(this);
+            if (string.IsNullOrWhiteSpace(newName) || _db == null) return;
+            _db.RenameCollection(collectionId, newName.Trim());
+            RefreshCollectionsSidebar();
+        })));
+        var del = MenuAction("🗑  Delete Collection", () => RunGuarded(async () =>
+        {
+            bool ok = await new ConfirmDialog("Delete Collection",
+                $"Delete the collection \"{display}\"?\n\nGames will not be removed from your library.",
+                "Delete", danger: true).ShowDialog<bool>(this);
+            if (!ok || _db == null) return;
+            _db.DeleteCollection(collectionId);
+            RefreshCollectionsSidebar();
+        }));
+        del.Foreground = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#FF5F57"));
+        menu.Items.Add(del);
         return menu;
     }
 
@@ -691,8 +754,31 @@ public partial class MainWindow : Window
             _vm!.RefreshGame(game);
         })));
 
-        // Add to Collection — deferred until the collections sidebar lands.
-        items.Add(new MenuItem { Header = "📂  Add to Collection", IsEnabled = false });
+        // Add to Collection — toggle membership per collection (✓ when the game is in it),
+        // plus "New Collection…".
+        var addToColl = new MenuItem { Header = "📂  Add to Collection" };
+        var memberOf = _db!.GetCollectionsForGame(game.Id).Select(c => c.Id).ToHashSet();
+        foreach (var (cid, cname) in _db.GetAllCollections())
+        {
+            int id = cid;
+            bool inIt = memberOf.Contains(cid);
+            addToColl.Items.Add(MenuAction((inIt ? "✓ " : "    ") + cname, () =>
+            {
+                if (inIt) _db!.RemoveGameFromCollection(game.Id, id);
+                else _db!.AddGameToCollection(game.Id, id);
+                _vm?.SetStatus(inIt ? $"Removed from {cname}." : $"Added to {cname}.", autoClear: true);
+            }));
+        }
+        if (addToColl.Items.Count > 0) addToColl.Items.Add(new Separator());
+        addToColl.Items.Add(MenuAction("＋  New Collection…", () => RunGuarded(async () =>
+        {
+            string? name = await new RenameWindow("").ShowDialog<string?>(this);
+            if (string.IsNullOrWhiteSpace(name)) return;
+            int id = _db!.CreateCollection(name.Trim());
+            _db.AddGameToCollection(game.Id, id);
+            RefreshCollectionsSidebar();
+        })));
+        items.Add(addToColl);
 
         items.Add(new Separator());
 

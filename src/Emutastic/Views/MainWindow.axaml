@@ -137,6 +137,14 @@
                         </Expander>
 
                         <Rectangle Height="1" Fill="{DynamicResource BorderSubtleBrush}" Margin="12,10,12,0"/>
+                        <Grid ColumnDefinitions="*,Auto" Margin="16,8,8,0">
+                            <TextBlock Grid.Column="0" Text="COLLECTIONS" Theme="{DynamicResource LabelMuted}" Margin="0,0,0,4" VerticalAlignment="Center"/>
+                            <Button Grid.Column="1" Name="NewCollectionButton" Content="＋" FontSize="13" Padding="6,0" Background="Transparent"
+                                    BorderThickness="0" Foreground="{DynamicResource TextSecondaryBrush}" Cursor="Hand" ToolTip.Tip="New collection"/>
+                        </Grid>
+                        <StackPanel Name="UserCollectionsPanel"/>
+
+                        <Rectangle Height="1" Fill="{DynamicResource BorderSubtleBrush}" Margin="12,10,12,0"/>
                         <TextBlock Text="OPTIONS" Theme="{DynamicResource LabelMuted}" Margin="16,8,0,4"/>
                         <Button Name="PreferencesButton" Theme="{DynamicResource SidebarItemStyle}" Content="⚙  Preferences"/>
                         <Button Name="ImportButton" Theme="{DynamicResource SidebarItemStyle}" Content="↓  Import ROMs"/>
