@@ -431,7 +431,39 @@
                         </StackPanel>
                     </ScrollViewer>
                 </Grid>
-                <Grid Name="PanelBackups" IsVisible="False"/>
+                <Grid Name="PanelBackups" IsVisible="False">
+                    <ScrollViewer Margin="32,24,32,24" VerticalScrollBarVisibility="Auto">
+                        <StackPanel MaxWidth="560" HorizontalAlignment="Left">
+                            <TextBlock Text="LOCAL BACKUP" Theme="{StaticResource PrefLabel}"/>
+                            <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,0,0,12"/>
+                            <TextBlock TextWrapping="Wrap" FontSize="12" FontFamily="{DynamicResource PrimaryFont}" Margin="0,0,0,8"
+                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                       Text="Set a folder to back up your battery saves, save states, and library database. Only save data is backed up — artwork and snaps are excluded to keep backups small."/>
+                            <Grid ColumnDefinitions="*,Auto,Auto">
+                                <Border Grid.Column="0" Background="{DynamicResource BgTertiaryBrush}" BorderBrush="{DynamicResource BorderNormalBrush}"
+                                        BorderThickness="1" CornerRadius="6" Padding="10,8">
+                                    <TextBlock Name="BackupFolderPathText" Text="Not set" Foreground="{DynamicResource TextSecondaryBrush}"
+                                               FontSize="12" FontFamily="{DynamicResource PrimaryFont}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                </Border>
+                                <Button Name="BrowseBackupFolderBtn" Grid.Column="1" Content="Browse…" Theme="{StaticResource PrefSecondaryBtn}" Margin="8,0,0,0"/>
+                                <Button Name="ClearBackupFolderBtn" Grid.Column="2" Content="Clear" Theme="{StaticResource PrefSecondaryBtn}" Margin="4,0,0,0"/>
+                            </Grid>
+                            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,12,0,0">
+                                <Button Name="BackupNowBtn" Content="Back Up Now" Theme="{StaticResource PrefActionBtn}"/>
+                                <Button Name="RestoreBackupBtn" Content="Restore from Backup…" Theme="{StaticResource PrefSecondaryBtn}"/>
+                                <TextBlock Name="BackupFolderStatusText" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12"
+                                           FontFamily="{DynamicResource PrimaryFont}" VerticalAlignment="Center"/>
+                            </StackPanel>
+
+                            <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,24,0,16"/>
+                            <TextBlock Text="CLOUD SYNC (GITHUB)" Theme="{StaticResource PrefLabel}"/>
+                            <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,0,0,12"/>
+                            <TextBlock TextWrapping="Wrap" FontSize="12" FontFamily="{DynamicResource PrimaryFont}"
+                                       Foreground="{DynamicResource TextMutedBrush}"
+                                       Text="Sync saves + database across machines via a private GitHub repo — coming in a future update."/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
                 <Grid Name="PanelAbout" IsVisible="False">
                     <ScrollViewer Margin="32,24,32,24" VerticalScrollBarVisibility="Auto">
                         <StackPanel MaxWidth="560" HorizontalAlignment="Left">

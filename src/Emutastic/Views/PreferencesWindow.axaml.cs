@@ -67,6 +67,7 @@ public partial class PreferencesWindow : Window
         this.FindControl<Button>("CoreOptionsResetBtn")!.Click += (_, _) => CoreOptionsReset();
         this.FindControl<Button>("CoreOptionsSaveBtn")!.Click += (_, _) => CoreOptionsSave();
         WireMedia();
+        WireBackups();
     }
 
     protected override void OnClosed(EventArgs e)
@@ -90,6 +91,7 @@ public partial class PreferencesWindow : Window
         if (target == "PanelSnaps") LoadSnapsSettings();
         if (target == "PanelCoreOptions") BuildCoreOptionsTab();
         if (target == "PanelMedia") LoadMediaSettings();
+        if (target == "PanelBackups") LoadBackupsSettings();
     }
 
     // Temporary placeholder until the panel's sub-splinter fills it.
@@ -789,6 +791,116 @@ public partial class PreferencesWindow : Window
 
     private string? ComboText(string name) =>
         (this.FindControl<ComboBox>(name)!.SelectedItem as ComboBoxItem)?.Content as string;
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  U5 P3 — Backups panel (local recursive-copy backup; cloud sync deferred)
+    // ════════════════════════════════════════════════════════════════════════
+
+    private void WireBackups()
+    {
+        this.FindControl<Button>("BrowseBackupFolderBtn")!.Click += (_, _) => _ = BrowseBackupFolderAsync();
+        this.FindControl<Button>("ClearBackupFolderBtn")!.Click  += (_, _) =>
+        {
+            var prefs = App.Configuration!.GetUserPreferences();
+            prefs.BackupFolder = "";
+            App.Configuration!.SetUserPreferences(prefs); App.Configuration!.ScheduleSave();
+            SetBackupFolderText("");
+        };
+        this.FindControl<Button>("BackupNowBtn")!.Click       += (_, _) => _ = BackupNowAsync();
+        this.FindControl<Button>("RestoreBackupBtn")!.Click   += (_, _) => _ = RestoreBackupAsync();
+    }
+
+    private void LoadBackupsSettings()
+        => SetBackupFolderText(App.Configuration?.GetUserPreferences().BackupFolder ?? "");
+
+    private void SetBackupFolderText(string path)
+    {
+        var tb = this.FindControl<TextBlock>("BackupFolderPathText")!;
+        bool set = !string.IsNullOrEmpty(path);
+        tb.Text = set ? path : "Not set";
+        tb.Foreground = Brush(set ? "TextPrimaryBrush" : "TextSecondaryBrush");
+    }
+
+    private async Task BrowseBackupFolderAsync()
+    {
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "Select backup folder", AllowMultiple = false });
+        string? path = folders.Count > 0 ? folders[0].TryGetLocalPath() : null;
+        if (string.IsNullOrEmpty(path)) return;
+        var prefs = App.Configuration!.GetUserPreferences();
+        prefs.BackupFolder = path;
+        App.Configuration!.SetUserPreferences(prefs); App.Configuration!.ScheduleSave();
+        SetBackupFolderText(path);
+    }
+
+    private async Task BackupNowAsync()
+    {
+        string dest = App.Configuration?.GetUserPreferences().BackupFolder ?? "";
+        if (string.IsNullOrEmpty(dest)) return;
+        var btn = this.FindControl<Button>("BackupNowBtn")!;
+        var status = this.FindControl<TextBlock>("BackupFolderStatusText")!;
+        btn.IsEnabled = false; status.Text = "Backing up…";
+        try
+        {
+            await Task.Run(() =>
+            {
+                string root = AppPaths.DataRoot;
+                string battery = System.IO.Path.Combine(root, "BatterySaves");
+                if (System.IO.Directory.Exists(battery)) CopyDirectoryRecursive(battery, System.IO.Path.Combine(dest, "BatterySaves"));
+                string states = System.IO.Path.Combine(root, "Save States");
+                if (System.IO.Directory.Exists(states)) CopyDirectoryRecursive(states, System.IO.Path.Combine(dest, "Save States"));
+                string db = System.IO.Path.Combine(root, "library.db");
+                if (System.IO.File.Exists(db)) System.IO.File.Copy(db, System.IO.Path.Combine(dest, "library.db"), overwrite: true);
+            });
+            status.Text = $"Backup complete — {DateTime.Now:g}";
+        }
+        catch (Exception ex) { status.Text = $"Error: {ex.Message}"; }
+        finally { btn.IsEnabled = true; }
+    }
+
+    private async Task RestoreBackupAsync()
+    {
+        string src = App.Configuration?.GetUserPreferences().BackupFolder ?? "";
+        if (string.IsNullOrEmpty(src)) return;
+        var status = this.FindControl<TextBlock>("BackupFolderStatusText")!;
+        bool hasDb = System.IO.File.Exists(System.IO.Path.Combine(src, "library.db"));
+        bool hasSaves = System.IO.Directory.Exists(System.IO.Path.Combine(src, "BatterySaves"));
+        bool hasStates = System.IO.Directory.Exists(System.IO.Path.Combine(src, "Save States"));
+        if (!hasDb && !hasSaves && !hasStates) { status.Text = "No backup data found in that folder."; return; }
+
+        var parts = new System.Collections.Generic.List<string>();
+        if (hasDb) parts.Add("library database");
+        if (hasSaves) parts.Add("battery saves");
+        if (hasStates) parts.Add("save states");
+        bool ok = await new ConfirmDialog("Restore from Backup",
+            $"This will overwrite your current {string.Join(", ", parts)} with the backup copy.\n\nContinue?",
+            "Restore", danger: true).ShowDialog<bool>(this);
+        if (!ok) return;
+
+        var btn = this.FindControl<Button>("RestoreBackupBtn")!;
+        btn.IsEnabled = false; status.Text = "Restoring…";
+        try
+        {
+            await Task.Run(() =>
+            {
+                string root = AppPaths.DataRoot;
+                if (hasSaves)  CopyDirectoryRecursive(System.IO.Path.Combine(src, "BatterySaves"), System.IO.Path.Combine(root, "BatterySaves"));
+                if (hasStates) CopyDirectoryRecursive(System.IO.Path.Combine(src, "Save States"), System.IO.Path.Combine(root, "Save States"));
+                if (hasDb)     System.IO.File.Copy(System.IO.Path.Combine(src, "library.db"), System.IO.Path.Combine(root, "library.db"), overwrite: true);
+            });
+            status.Text = "Restore complete — restart recommended";
+        }
+        catch (Exception ex) { status.Text = $"Error: {ex.Message}"; }
+        finally { btn.IsEnabled = true; }
+    }
+
+    private static void CopyDirectoryRecursive(string sourceDir, string destDir)
+    {
+        System.IO.Directory.CreateDirectory(destDir);
+        foreach (string file in System.IO.Directory.GetFiles(sourceDir))
+            System.IO.File.Copy(file, System.IO.Path.Combine(destDir, System.IO.Path.GetFileName(file)), overwrite: true);
+        foreach (string dir in System.IO.Directory.GetDirectories(sourceDir))
+            CopyDirectoryRecursive(dir, System.IO.Path.Combine(destDir, System.IO.Path.GetFileName(dir)));
+    }
 
     private IBrush? Brush(string key) => this.TryFindResource(key, out var v) ? v as IBrush : null;
     private FontFamily Font(string key) => this.TryFindResource(key, out var v) && v is FontFamily f ? f : FontFamily.Default;
