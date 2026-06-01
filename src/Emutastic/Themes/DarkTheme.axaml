@@ -100,6 +100,41 @@
     <SolidColorBrush x:Key="PillGroupBgBrush"   Color="{StaticResource PillGroupBgColor}"/>
     <SolidColorBrush x:Key="FavoriteHeartBrush" Color="{StaticResource FavoriteHeartColor}"/>
 
+    <!-- ── ENGRAVED-METALLIC TOOLBAR PALETTE (verbatim from upstream MainWindow.xaml) ──
+         The toolbar tab toggles, view toggles and list column headers are all chiseled
+         "raised metal" segments: a vertical charcoal gradient, a 1px black chisel border,
+         a 1px top highlight; when selected they invert to a recessed darker fill with a
+         top inner shadow + bottom rim light + OpenEmu-blue text. -->
+    <LinearGradientBrush x:Key="ToolbarRaisedFillBrush" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Offset="0.0"  Color="#FF3A3A3A"/>
+        <GradientStop Offset="0.5"  Color="#FF2A2A2A"/>
+        <GradientStop Offset="0.51" Color="#FF222222"/>
+        <GradientStop Offset="1.0"  Color="#FF161616"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="ToolbarPressedFillBrush" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Offset="0.0" Color="#FF111111"/>
+        <GradientStop Offset="1.0" Color="#FF1E1E1E"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="ToolbarHoverFillBrush" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Offset="0.0"  Color="#FF424242"/>
+        <GradientStop Offset="0.5"  Color="#FF323232"/>
+        <GradientStop Offset="0.51" Color="#FF2A2A2A"/>
+        <GradientStop Offset="1.0"  Color="#FF1E1E1E"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="ToolbarChiselBrush"       Color="#FF0B0B0B"/>
+    <SolidColorBrush x:Key="ToolbarTopHighlightBrush" Color="#26FFFFFF"/>
+    <SolidColorBrush x:Key="ToolbarTopShadowBrush"    Color="#80000000"/>
+    <SolidColorBrush x:Key="ToolbarBottomRimBrush"    Color="#33FFFFFF"/>
+    <SolidColorBrush x:Key="ToolbarRaisedTextBrush"   Color="#FFE8E8E8"/>
+    <SolidColorBrush x:Key="ToolbarPressedTextBrush"  Color="#FF3D8ADE"/>
+    <!-- Recessed search field: chisel border + a dark top-to-bottom gradient
+         (lighter at the bottom = light coming from above into the inset). -->
+    <LinearGradientBrush x:Key="SearchFillBrush" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Offset="0.0" Color="#FF1A1A1A"/>
+        <GradientStop Offset="0.5" Color="#FF222222"/>
+        <GradientStop Offset="1.0" Color="#FF2A2A2A"/>
+    </LinearGradientBrush>
+
     <!-- ── TYPOGRAPHY ──
          Upstream uses "Segoe UI Variable" (Windows-only). On Linux we use Inter (bundled via
          Avalonia.Fonts.Inter) with sans-serif fallback; ★/☆/♥ data glyphs resolve via system
@@ -259,47 +294,193 @@
         </Style>
     </ControlTheme>
 
-    <!-- ── TOOLBAR TAB TOGGLE (Library / Save States / Screenshots / Achievements) ──
-         Flat segment with an accent underline + brighter text when selected. -->
-    <ControlTheme x:Key="TabToggle" TargetType="ToggleButton">
-        <Setter Property="Background" Value="Transparent"/>
-        <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}"/>
+    <!-- ── TOOLBAR TAB TOGGLES (Library / Save States / Screenshots / Achievements) ──
+         The engraved-metallic segmented recipe from upstream (TabToggleLeft/Middle/Right).
+         Three keys differ only in corner rounding so the buttons read as one connected
+         segment; the 1px chisel borders meeting between segments form a crisp divider.
+         Selected → recessed pressed fill, top inner shadow, bottom rim light, blue text. -->
+    <ControlTheme x:Key="TabToggleLeft" TargetType="ToggleButton">
+        <Setter Property="Foreground" Value="{DynamicResource ToolbarRaisedTextBrush}"/>
         <Setter Property="FontFamily" Value="{DynamicResource PrimaryFont}"/>
         <Setter Property="FontSize" Value="12"/>
-        <Setter Property="FontWeight" Value="SemiBold"/>
-        <Setter Property="Padding" Value="16,7"/>
+        <Setter Property="FontWeight" Value="Medium"/>
+        <Setter Property="Padding" Value="14,6"/>
         <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="Template">
             <ControlTemplate>
-                <Border Name="b" Background="{TemplateBinding Background}" BorderBrush="Transparent"
-                        BorderThickness="0,0,0,2" Padding="{TemplateBinding Padding}">
-                    <ContentPresenter Content="{TemplateBinding Content}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                <Border Name="outerBorder" Background="{DynamicResource ToolbarRaisedFillBrush}"
+                        BorderBrush="{DynamicResource ToolbarChiselBrush}" BorderThickness="1"
+                        CornerRadius="6,0,0,6">
+                    <Panel>
+                        <Border Name="topInner" BorderBrush="{DynamicResource ToolbarTopHighlightBrush}"
+                                BorderThickness="0,1,0,0" CornerRadius="5,0,0,5"/>
+                        <Border Name="bottomRim" BorderBrush="{DynamicResource ToolbarBottomRimBrush}"
+                                BorderThickness="0,0,0,1" CornerRadius="0,0,0,5" IsVisible="False"/>
+                        <ContentPresenter Name="content" Content="{TemplateBinding Content}"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          Margin="{TemplateBinding Padding}">
+                            <ContentPresenter.Effect>
+                                <DropShadowEffect BlurRadius="0" OffsetX="0" OffsetY="1" Opacity="0.85" Color="Black"/>
+                            </ContentPresenter.Effect>
+                        </ContentPresenter>
+                    </Panel>
                 </Border>
             </ControlTemplate>
         </Setter>
-        <Style Selector="^:pointerover"><Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/></Style>
-        <Style Selector="^:checked"><Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/></Style>
-        <Style Selector="^:checked /template/ Border#b"><Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/></Style>
+        <Style Selector="^:pointerover /template/ Border#outerBorder"><Setter Property="Background" Value="{DynamicResource ToolbarHoverFillBrush}"/></Style>
+        <Style Selector="^:checked"><Setter Property="Foreground" Value="{DynamicResource ToolbarPressedTextBrush}"/></Style>
+        <Style Selector="^:checked /template/ Border#outerBorder"><Setter Property="Background" Value="{DynamicResource ToolbarPressedFillBrush}"/></Style>
+        <Style Selector="^:checked /template/ Border#topInner">
+            <Setter Property="BorderBrush" Value="{DynamicResource ToolbarTopShadowBrush}"/>
+            <Setter Property="BorderThickness" Value="0,2,0,0"/>
+        </Style>
+        <Style Selector="^:checked /template/ Border#bottomRim"><Setter Property="IsVisible" Value="True"/></Style>
     </ControlTheme>
 
-    <!-- ── VIEW-MODE TOGGLE (grid / list) ── small icon segment, accent when active. -->
-    <ControlTheme x:Key="ViewToggle" TargetType="ToggleButton">
-        <Setter Property="Background" Value="{DynamicResource BgTertiaryBrush}"/>
-        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
-        <Setter Property="FontSize" Value="14"/>
-        <Setter Property="Width" Value="30"/>
+    <ControlTheme x:Key="TabToggleMiddle" TargetType="ToggleButton" BasedOn="{StaticResource TabToggleLeft}">
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Border Name="outerBorder" Background="{DynamicResource ToolbarRaisedFillBrush}"
+                        BorderBrush="{DynamicResource ToolbarChiselBrush}" BorderThickness="1"
+                        CornerRadius="0">
+                    <Panel>
+                        <Border Name="topInner" BorderBrush="{DynamicResource ToolbarTopHighlightBrush}"
+                                BorderThickness="0,1,0,0"/>
+                        <Border Name="bottomRim" BorderBrush="{DynamicResource ToolbarBottomRimBrush}"
+                                BorderThickness="0,0,0,1" IsVisible="False"/>
+                        <ContentPresenter Name="content" Content="{TemplateBinding Content}"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          Margin="{TemplateBinding Padding}">
+                            <ContentPresenter.Effect>
+                                <DropShadowEffect BlurRadius="0" OffsetX="0" OffsetY="1" Opacity="0.85" Color="Black"/>
+                            </ContentPresenter.Effect>
+                        </ContentPresenter>
+                    </Panel>
+                </Border>
+            </ControlTemplate>
+        </Setter>
+    </ControlTheme>
+
+    <ControlTheme x:Key="TabToggleRight" TargetType="ToggleButton" BasedOn="{StaticResource TabToggleLeft}">
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Border Name="outerBorder" Background="{DynamicResource ToolbarRaisedFillBrush}"
+                        BorderBrush="{DynamicResource ToolbarChiselBrush}" BorderThickness="1"
+                        CornerRadius="0,6,6,0">
+                    <Panel>
+                        <Border Name="topInner" BorderBrush="{DynamicResource ToolbarTopHighlightBrush}"
+                                BorderThickness="0,1,0,0" CornerRadius="0,5,0,0"/>
+                        <Border Name="bottomRim" BorderBrush="{DynamicResource ToolbarBottomRimBrush}"
+                                BorderThickness="0,0,0,1" CornerRadius="0,0,5,0" IsVisible="False"/>
+                        <ContentPresenter Name="content" Content="{TemplateBinding Content}"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          Margin="{TemplateBinding Padding}">
+                            <ContentPresenter.Effect>
+                                <DropShadowEffect BlurRadius="0" OffsetX="0" OffsetY="1" Opacity="0.85" Color="Black"/>
+                            </ContentPresenter.Effect>
+                        </ContentPresenter>
+                    </Panel>
+                </Border>
+            </ControlTemplate>
+        </Setter>
+    </ControlTheme>
+
+    <!-- ── VIEW-MODE TOGGLES (grid / list) ── same metallic recipe; the icon is drawn
+         in-template as vector rectangles whose fill flips to the blue accent when active. -->
+    <ControlTheme x:Key="ViewGridToggle" TargetType="ToggleButton">
+        <Setter Property="Width" Value="32"/>
         <Setter Property="Height" Value="26"/>
         <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="Template">
             <ControlTemplate>
-                <Border Name="b" Background="{TemplateBinding Background}" CornerRadius="5" Margin="1,0">
-                    <ContentPresenter Content="{TemplateBinding Content}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                <Border Name="outerBorder" Background="{DynamicResource ToolbarRaisedFillBrush}"
+                        BorderBrush="{DynamicResource ToolbarChiselBrush}" BorderThickness="1"
+                        CornerRadius="6,0,0,6">
+                    <Panel>
+                        <Border Name="topInner" BorderBrush="{DynamicResource ToolbarTopHighlightBrush}"
+                                BorderThickness="0,1,0,0" CornerRadius="5,0,0,5"/>
+                        <Border Name="bottomRim" BorderBrush="{DynamicResource ToolbarBottomRimBrush}"
+                                BorderThickness="0,0,0,1" CornerRadius="0,0,0,5" IsVisible="False"/>
+                        <Viewbox Width="14" Height="14" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <Canvas Width="14" Height="14">
+                                <Rectangle Name="G1" Canvas.Left="0" Canvas.Top="0" Width="6" Height="6" Fill="{DynamicResource ToolbarRaisedTextBrush}"/>
+                                <Rectangle Name="G2" Canvas.Left="8" Canvas.Top="0" Width="6" Height="6" Fill="{DynamicResource ToolbarRaisedTextBrush}"/>
+                                <Rectangle Name="G3" Canvas.Left="0" Canvas.Top="8" Width="6" Height="6" Fill="{DynamicResource ToolbarRaisedTextBrush}"/>
+                                <Rectangle Name="G4" Canvas.Left="8" Canvas.Top="8" Width="6" Height="6" Fill="{DynamicResource ToolbarRaisedTextBrush}"/>
+                            </Canvas>
+                        </Viewbox>
+                    </Panel>
                 </Border>
             </ControlTemplate>
         </Setter>
-        <Style Selector="^:pointerover /template/ Border#b"><Setter Property="Background" Value="{DynamicResource BgQuaternaryBrush}"/></Style>
-        <Style Selector="^:checked /template/ Border#b"><Setter Property="Background" Value="{DynamicResource AccentBrush}"/></Style>
-        <Style Selector="^:checked"><Setter Property="Foreground" Value="White"/></Style>
+        <Style Selector="^:pointerover /template/ Border#outerBorder"><Setter Property="Background" Value="{DynamicResource ToolbarHoverFillBrush}"/></Style>
+        <Style Selector="^:checked /template/ Border#outerBorder"><Setter Property="Background" Value="{DynamicResource ToolbarPressedFillBrush}"/></Style>
+        <Style Selector="^:checked /template/ Border#topInner">
+            <Setter Property="BorderBrush" Value="{DynamicResource ToolbarTopShadowBrush}"/>
+            <Setter Property="BorderThickness" Value="0,2,0,0"/>
+        </Style>
+        <Style Selector="^:checked /template/ Border#bottomRim"><Setter Property="IsVisible" Value="True"/></Style>
+        <Style Selector="^:checked /template/ Rectangle"><Setter Property="Fill" Value="{DynamicResource ToolbarPressedTextBrush}"/></Style>
+    </ControlTheme>
+
+    <ControlTheme x:Key="ViewListToggle" TargetType="ToggleButton">
+        <Setter Property="Width" Value="32"/>
+        <Setter Property="Height" Value="26"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Border Name="outerBorder" Background="{DynamicResource ToolbarRaisedFillBrush}"
+                        BorderBrush="{DynamicResource ToolbarChiselBrush}" BorderThickness="0,1,1,1"
+                        CornerRadius="0,6,6,0">
+                    <Panel>
+                        <Border Name="topInner" BorderBrush="{DynamicResource ToolbarTopHighlightBrush}"
+                                BorderThickness="0,1,0,0" CornerRadius="0,5,0,0"/>
+                        <Border Name="bottomRim" BorderBrush="{DynamicResource ToolbarBottomRimBrush}"
+                                BorderThickness="0,0,0,1" CornerRadius="0,0,5,0" IsVisible="False"/>
+                        <Viewbox Width="14" Height="14" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <Canvas Width="14" Height="14">
+                                <Rectangle Name="L1" Canvas.Left="0" Canvas.Top="0"   Width="14" Height="3" Fill="{DynamicResource ToolbarRaisedTextBrush}"/>
+                                <Rectangle Name="L2" Canvas.Left="0" Canvas.Top="5.5" Width="14" Height="3" Fill="{DynamicResource ToolbarRaisedTextBrush}"/>
+                                <Rectangle Name="L3" Canvas.Left="0" Canvas.Top="11"  Width="14" Height="3" Fill="{DynamicResource ToolbarRaisedTextBrush}"/>
+                            </Canvas>
+                        </Viewbox>
+                    </Panel>
+                </Border>
+            </ControlTemplate>
+        </Setter>
+        <Style Selector="^:pointerover /template/ Border#outerBorder"><Setter Property="Background" Value="{DynamicResource ToolbarHoverFillBrush}"/></Style>
+        <Style Selector="^:checked /template/ Border#outerBorder"><Setter Property="Background" Value="{DynamicResource ToolbarPressedFillBrush}"/></Style>
+        <Style Selector="^:checked /template/ Border#topInner">
+            <Setter Property="BorderBrush" Value="{DynamicResource ToolbarTopShadowBrush}"/>
+            <Setter Property="BorderThickness" Value="0,2,0,0"/>
+        </Style>
+        <Style Selector="^:checked /template/ Border#bottomRim"><Setter Property="IsVisible" Value="True"/></Style>
+        <Style Selector="^:checked /template/ Rectangle"><Setter Property="Fill" Value="{DynamicResource ToolbarPressedTextBrush}"/></Style>
+    </ControlTheme>
+
+    <!-- ── SEARCH FIELD TEXTBOX ── strips all of Fluent's chrome (border + the focus
+         underline adorner) so the recessed Border that wraps it is the only visible frame.
+         Without this the stock TextBox paints a box and an accent underline on focus. -->
+    <ControlTheme x:Key="SearchTextBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="MinHeight" Value="0"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Style Selector="^ /template/ Border#PART_BorderElement">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+        </Style>
+        <Style Selector="^:pointerover /template/ Border#PART_BorderElement">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+        </Style>
+        <Style Selector="^:focus /template/ Border#PART_BorderElement">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+        </Style>
     </ControlTheme>
 
     <!-- ── TEXT STYLES (applied via Theme=) ── -->
