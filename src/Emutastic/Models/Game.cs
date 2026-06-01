@@ -21,7 +21,7 @@ namespace Emutastic.Models
         public string Title { get; set; } = "";
         public string Console { get; set; } = "";
 
-        // Preferred libretro core DLL filename (e.g. "mame2003_plus_libretro.dll").
+        // Preferred libretro core DLL filename (e.g. "mame2003_plus_libretro.so").
         // Set at import time by ImportService for consoles with multiple cores
         // (currently only Arcade — FBNeo vs MAME 2003-Plus). Empty for games on
         // single-core consoles or legacy imports from before this column existed.

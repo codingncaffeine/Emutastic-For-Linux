@@ -21,3 +21,6 @@ Cores/
 
 # Spike scratch (downloaded cores/ROMs, throwaway)
 spike/
+
+# Local API keys — never commit
+src/Emutastic/Secrets.cs

@@ -307,8 +307,8 @@ namespace Emutastic.Services
         {
             if (string.IsNullOrEmpty(romName)) return null;
             EnsureLoaded();
-            if (_fbneoArcadeNames.Contains(romName))        return "fbneo_libretro.dll";
-            if (_mame2003plusArcadeNames.Contains(romName)) return "mame2003_plus_libretro.dll";
+            if (_fbneoArcadeNames.Contains(romName))        return "fbneo_libretro.so";
+            if (_mame2003plusArcadeNames.Contains(romName)) return "mame2003_plus_libretro.so";
             return null;
         }
 

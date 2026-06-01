@@ -279,11 +279,11 @@ namespace Emutastic.Services
                 var routeFix = connection.CreateCommand();
                 routeFix.CommandText = @"
                     UPDATE Games
-                    SET PreferredCore = 'mame2003_plus_libretro.dll'
+                    SET PreferredCore = 'mame2003_plus_libretro.so'
                     WHERE Console = 'Arcade'
                       AND (LOWER(RomPath) LIKE '%mame2003plus%'
                            OR LOWER(RomPath) LIKE '%mame2003-plus%')
-                      AND PreferredCore <> 'mame2003_plus_libretro.dll';";
+                      AND PreferredCore <> 'mame2003_plus_libretro.so';";
                 int rowsFixed = routeFix.ExecuteNonQuery();
                 if (rowsFixed > 0)
                     System.Diagnostics.Trace.WriteLine(
