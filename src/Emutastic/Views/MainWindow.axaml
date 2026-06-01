@@ -9,11 +9,19 @@
         Width="1100" Height="720" MinWidth="800" MinHeight="500"
         Title="Emutastic"
         Icon="/Assets/banners and icons/emutastic-logo.png"
-        Background="{DynamicResource BgPrimaryBrush}"
+        Background="Transparent"
+        TransparencyLevelHint="Transparent"
         WindowDecorations="None">
 
     <!-- M4c shell: 1:1 main-window clone (title bar + sidebar + flat box-art grid + status banner).
-         List/grouped views = M4c-2; nav/launch/import wiring + slider = M4d. -->
+         Rounded window shell (matches upstream OuterBorder): bg+border+radius, then an inner
+         ClipToBounds border so child content respects the rounded corners. -->
+    <Border x:Name="OuterBorder" Background="{DynamicResource BgPrimaryBrush}"
+            BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1" CornerRadius="10">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="30" OffsetX="0" OffsetY="0" Opacity="0.6" Color="{DynamicResource ShadowColor}"/>
+        </Border.Effect>
+        <Border CornerRadius="10" ClipToBounds="True">
     <Grid Name="RootGrid" RowDefinitions="38,*,Auto">
 
         <!-- ══ TITLE BAR ══ -->
@@ -366,4 +374,6 @@
             </StackPanel>
         </Border>
     </Grid>
+        </Border>
+    </Border>
 </Window>

@@ -114,6 +114,8 @@
             <DropShadowEffect BlurRadius="30" OffsetX="0" OffsetY="0" Opacity="0.6" Color="{DynamicResource ShadowColor}"/>
         </Border.Effect>
 
+        <!-- Inner clip border so child content respects the rounded corners (matches upstream). -->
+        <Border CornerRadius="10" ClipToBounds="True">
         <Grid Name="RootGrid" RowDefinitions="38,46,*" ClipToBounds="True">
 
             <!-- ═══ TITLE BAR ═══ -->
@@ -660,5 +662,6 @@
                 </Grid>
             </Grid>
         </Grid>
+        </Border>
     </Border>
 </Window>
