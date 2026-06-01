@@ -1,0 +1,10 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Emutastic.Views.EmulatorWindow"
+        Width="768" Height="720"
+        Background="Black"
+        Title="Emutastic — Emulator">
+    <!-- M2 vertical slice: software-rendered frames blitted into this Image.
+         The HW (GL/Vulkan) path in M6 swaps this Image for a NativeControlHost child surface. -->
+    <Image Name="Screen" Stretch="Uniform" />
+</Window>

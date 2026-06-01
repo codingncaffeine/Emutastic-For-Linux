@@ -1,0 +1,134 @@
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
+using Avalonia.Threading;
+using Emutastic.Emulator;
+
+namespace Emutastic.Views
+{
+    /// <summary>
+    /// M2 vertical-slice emulator window: hosts an <see cref="EmulatorSession"/>, blits its
+    /// software frames into a WriteableBitmap on a 60 Hz UI timer, and feeds keyboard input to
+    /// player 1 (so a ROM is playable without a gamepad).
+    /// </summary>
+    public partial class EmulatorWindow : Window
+    {
+        private readonly EmulatorSession _session;
+        private readonly Image _screen;
+        private WriteableBitmap? _bmp;
+        private int _bmpW, _bmpH;
+        private long _lastSeq;
+        private DispatcherTimer? _timer;
+
+        // Avalonia Key -> libretro joypad id (player 1 keyboard fallback)
+        private static readonly Dictionary<Key, int> KeyMap = new()
+        {
+            { Key.Up, 4 }, { Key.Down, 5 }, { Key.Left, 6 }, { Key.Right, 7 },
+            { Key.Z, 0 },  // B
+            { Key.X, 8 },  // A
+            { Key.A, 1 },  // Y
+            { Key.S, 9 },  // X
+            { Key.Enter, 3 },      // START
+            { Key.RightShift, 2 }, // SELECT
+            { Key.Q, 10 }, // L
+            { Key.W, 11 }, // R
+        };
+
+        // Parameterless ctor for the XAML designer/loader only.
+        public EmulatorWindow() : this(CreateDesignSession()) { }
+
+        public EmulatorWindow(EmulatorSession session)
+        {
+            InitializeComponent();
+            _session = session;
+            _screen = this.FindControl<Image>("Screen")!;
+            RenderOptions.SetBitmapInterpolationMode(_screen, BitmapInterpolationMode.None); // crisp pixels
+
+            Opened += OnOpened;
+            Closed += OnClosed;
+        }
+
+        private static EmulatorSession CreateDesignSession() => new("", "");
+
+        private void OnOpened(object? sender, EventArgs e)
+        {
+            Title = "Emutastic — loading…";
+            // GOLDEN RULE: never block the UI thread. Core dlopen + retro_load_game (which can be
+            // slow for heavy cores / BIOS / CHD) runs on a background thread; we marshal back to the
+            // UI thread only to start the frame timer (or report failure).
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                bool ok = _session.Start(out string? error);
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (!ok)
+                    {
+                        Title = "Emutastic — failed to start";
+                        System.Diagnostics.Trace.WriteLine($"[EmulatorWindow] start failed: {error}");
+                        return;
+                    }
+                    Title = $"Emutastic — {_session.CoreName}";
+                    _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1000.0 / 60.0) };
+                    _timer.Tick += (_, _) => PumpFrame();
+                    _timer.Start();
+                });
+            });
+        }
+
+        private void PumpFrame()
+        {
+            if (!_session.TrySnapshot(ref _lastSeq, out byte[]? buf, out int w, out int h) || buf == null)
+                return;
+
+            if (_bmp == null || _bmpW != w || _bmpH != h)
+            {
+                _bmp = new WriteableBitmap(new PixelSize(w, h), new Vector(96, 96),
+                    PixelFormat.Bgra8888, AlphaFormat.Opaque);
+                _bmpW = w; _bmpH = h;
+                _screen.Source = _bmp;
+            }
+
+            using (var fb = _bmp.Lock())
+            {
+                int srcStride = w * 4;
+                if (fb.RowBytes == srcStride)
+                {
+                    Marshal.Copy(buf, 0, fb.Address, buf.Length);
+                }
+                else
+                {
+                    for (int y = 0; y < h; y++)
+                        Marshal.Copy(buf, y * srcStride, fb.Address + y * fb.RowBytes, srcStride);
+                }
+            }
+            _screen.InvalidateVisual();
+        }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (KeyMap.TryGetValue(e.Key, out int id)) { _session.Input.SetKeyboardButton(id, true); e.Handled = true; }
+        }
+
+        protected override void OnKeyUp(KeyEventArgs e)
+        {
+            base.OnKeyUp(e);
+            if (KeyMap.TryGetValue(e.Key, out int id)) { _session.Input.SetKeyboardButton(id, false); e.Handled = true; }
+        }
+
+        private void OnClosed(object? sender, EventArgs e)
+        {
+            _timer?.Stop();
+            // GOLDEN RULE: Dispose joins the emu thread (up to 5s) and tears down native resources —
+            // never do that on the UI thread. Run teardown on a background thread.
+            var session = _session;
+            System.Threading.Tasks.Task.Run(() => session.Dispose());
+        }
+    }
+}
