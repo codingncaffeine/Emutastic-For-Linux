@@ -605,9 +605,8 @@ public partial class MainWindow : Window
                 () => RunGuarded(() => _artworkFetch!.FetchScreenScraperArtForConsoleAsync(console, display))));
         }
 
-        // Edit Controls — opens Preferences (the per-console Controls panel lands with the
-        // in-game input subsystem in U9; for now it opens the Preferences window).
-        var editControls = MenuAction("🎮  Edit Controls…", () => new PreferencesWindow().Show(this));
+        // Edit Controls — opens Preferences on the Controls panel with this console preselected.
+        var editControls = MenuAction("🎮  Edit Controls…", () => new PreferencesWindow(console).Show(this));
         menu.Items.Insert(0, editControls);
         menu.Items.Insert(1, new Separator());
         return menu;

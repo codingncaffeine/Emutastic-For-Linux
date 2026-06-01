@@ -5,8 +5,11 @@ using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 
 namespace Emutastic.Views;
@@ -35,9 +38,12 @@ public partial class PreferencesWindow : Window
         ("NavAbout",        "PanelAbout"),
     };
 
-    public PreferencesWindow()
+    public PreferencesWindow() : this(null) { }
+
+    public PreferencesWindow(string? initialConsole)
     {
         InitializeComponent();
+        if (!string.IsNullOrEmpty(initialConsole)) _currentConsole = initialConsole;
 
         Platform.WindowResize.Enable(this);   // edge/corner resize for the borderless window
 
@@ -68,11 +74,16 @@ public partial class PreferencesWindow : Window
         this.FindControl<Button>("CoreOptionsSaveBtn")!.Click += (_, _) => CoreOptionsSave();
         WireMedia();
         WireBackups();
+
+        // Controls is the default tab (NavControls is checked in XAML before our handlers were
+        // attached, so its IsCheckedChanged didn't fire) — init it explicitly.
+        ShowPanel("PanelControls");
     }
 
     protected override void OnClosed(EventArgs e)
     {
         _windowCts.Cancel();
+        _ctrl?.Dispose();
         base.OnClosed(e);
     }
 
@@ -94,6 +105,7 @@ public partial class PreferencesWindow : Window
         if (target == "PanelBackups") LoadBackupsSettings();
         if (target == "PanelSystemFiles") BuildBiosPanel();
         if (target == "PanelCores") BuildCoresPanel();
+        if (target == "PanelControls") InitControls();
     }
 
     // Temporary placeholder until the panel's sub-splinter fills it.
@@ -1557,6 +1569,307 @@ public partial class PreferencesWindow : Window
             _ => name.Length == 0 ? name : char.ToUpper(name[0]) + name[1..].Replace("_", " "),
         };
     }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  Controls panel (CI3) — per-console input mapping with live key/gamepad capture.
+    //  Disk-swap chord deferred; keyboard capture stores the Avalonia Key enum name.
+    // ════════════════════════════════════════════════════════════════════════
+
+    private Services.ControllerManager? _ctrl;
+    private bool _controlsInit;
+    private string _currentConsole = "NES";
+    private int _currentPlayer;
+    private bool _isKeyboardMode = true;
+    private int _waitingRowIndex = -1;
+    private bool _suppressControlsAutoSave;
+    private string _selectedDevice = "Keyboard";
+    private readonly List<CtrlRow> _ctrlRows = new();
+    private readonly Dictionary<string, Services.InputMapping> _ctrlMappings = new(StringComparer.OrdinalIgnoreCase);
+
+    private sealed class CtrlRow { public string ButtonName = ""; public Border Box = null!; public TextBlock BoxLabel = null!; }
+
+    private void InitControls()
+    {
+        var sysCombo = this.FindControl<ComboBox>("SystemComboBox")!;
+        if (_controlsInit) { PopulateInputDevices(); return; }
+        _controlsInit = true;
+
+        _ctrl = new Services.ControllerManager();
+        _ctrl.ButtonChanged += OnControllerButtonChanged;     // fires on the UI timer thread
+        _ctrl.ConnectionChanged += _ => PopulateInputDevices();
+        this.AddHandler(KeyDownEvent, OnControlsKeyDown, RoutingStrategies.Tunnel);
+
+        PopulateSystemComboBox(sysCombo);
+        sysCombo.SelectionChanged += (_, _) => { if (sysCombo.SelectedItem is ComboBoxItem { Tag: string tag }) { StopWaiting(); LoadConsole(tag); } };
+
+        var playerCombo = this.FindControl<ComboBox>("PlayerComboBox")!;
+        playerCombo.SelectedIndex = 0;
+        playerCombo.SelectionChanged += (_, _) => { _currentPlayer = Math.Max(0, playerCombo.SelectedIndex); StopWaiting(); LoadConsole(_currentConsole); };
+
+        var slotCombo = this.FindControl<ComboBox>("ControllerSlotComboBox")!;
+        slotCombo.SelectionChanged += (_, _) =>
+        {
+            if (_suppressControlsAutoSave) return;
+            var cfg = App.Configuration!.GetInputConfiguration(ConfigKey);
+            cfg.ControllerSlot = slotCombo.SelectedIndex <= 0 ? -1 : slotCombo.SelectedIndex - 1;  // 0=Default→-1
+            App.Configuration!.SetInputConfiguration(ConfigKey, cfg); App.Configuration!.ScheduleSave();
+        };
+
+        var devCombo = this.FindControl<ComboBox>("InputDeviceComboBox")!;
+        devCombo.SelectionChanged += (_, _) =>
+        {
+            _selectedDevice = devCombo.SelectedItem as string ?? "Keyboard";
+            _isKeyboardMode = _selectedDevice == "Keyboard";
+            if (_ctrl != null) _ctrl.SetActiveDevice(Math.Max(0, devCombo.SelectedIndex - 1));
+            StopWaiting();
+            LoadConsole(_currentConsole);
+        };
+
+        this.FindControl<Button>("RefreshDevicesBtn")!.Click += (_, _) => PopulateInputDevices();
+        this.FindControl<Button>("ResetDefaultsBtn")!.Click += (_, _) => ResetControlsDefaults();
+        this.FindControl<Button>("SaveControlsBtn")!.Click += (_, _) =>
+        {
+            SaveMappingsToConfig(); App.Configuration?.ScheduleSave();
+            this.FindControl<Button>("SaveControlsBtn")!.Content = "Saved";
+        };
+
+        PopulateInputDevices();
+        LoadConsole(_currentConsole);
+    }
+
+    private string ConfigKey => $"{_currentConsole}_P{_currentPlayer}";
+
+    private void PopulateSystemComboBox(ComboBox combo)
+    {
+        var iconConv = new Converters.ConsoleTagToIconConverter();
+        combo.Items.Clear();
+        ComboBoxItem? selected = null;
+        foreach (var (tag, name) in Configuration.ControllerDefinitions.GetSupportedConsoles())
+        {
+            var sp = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            if (iconConv.Convert(tag, typeof(IImage), null, System.Globalization.CultureInfo.InvariantCulture) is IImage icon)
+                sp.Children.Add(new Image { Width = 18, Height = 18, Source = icon });
+            sp.Children.Add(new TextBlock { Text = string.IsNullOrEmpty(name) ? tag : name, VerticalAlignment = VerticalAlignment.Center });
+            var item = new ComboBoxItem { Content = sp, Tag = tag };
+            combo.Items.Add(item);
+            if (tag == _currentConsole) selected = item;
+        }
+        combo.SelectedItem = selected ?? combo.Items.OfType<ComboBoxItem>().FirstOrDefault();
+    }
+
+    private void PopulateInputDevices()
+    {
+        var devCombo = this.FindControl<ComboBox>("InputDeviceComboBox")!;
+        var devices = new List<string> { "Keyboard" };
+        if (_ctrl != null) devices.AddRange(_ctrl.GetDeviceNames());
+        _suppressControlsAutoSave = true;
+        devCombo.ItemsSource = devices;
+        devCombo.SelectedItem = devices.Contains(_selectedDevice) ? _selectedDevice
+            : devices.Count > 1 ? devices[1] : "Keyboard";
+        _suppressControlsAutoSave = false;
+        _selectedDevice = devCombo.SelectedItem as string ?? "Keyboard";
+        _isKeyboardMode = _selectedDevice == "Keyboard";
+    }
+
+    private void LoadConsole(string tag)
+    {
+        _currentConsole = tag;
+        if (!Configuration.ControllerDefinitions.AllControllers.TryGetValue(tag, out var def)) return;
+        SetControllerImage(def.ControllerImage);
+        LoadMappingsFromConfig();
+        RebuildButtonsPanel(def);
+    }
+
+    private void SetControllerImage(string path)
+    {
+        var img = this.FindControl<Image>("ControllerImage")!;
+        try
+        {
+            // WPF "/Assets/images/..." → avares://. Pass the path raw (spaces and all) — matches the
+            // proven ConsoleTagToIconConverter loader; Avalonia unescapes when matching the resource key.
+            var uri = new Uri("avares://Emutastic" + path);
+            img.Source = new Bitmap(AssetLoader.Open(uri));
+        }
+        catch { img.Source = null; }
+    }
+
+    private void RebuildButtonsPanel(Configuration.ControllerDefinition def)
+    {
+        var panel = this.FindControl<StackPanel>("ButtonsPanel")!;
+        panel.Children.Clear();
+        _ctrlRows.Clear();
+
+        foreach (var group in def.Buttons.GroupBy(b => string.IsNullOrEmpty(b.Group) ? "Buttons" : b.Group))
+        {
+            panel.Children.Add(new TextBlock { Text = group.Key.ToUpperInvariant(), FontSize = 10, FontWeight = FontWeight.SemiBold,
+                FontFamily = Font("PrimaryFont"), Foreground = Brush("TextMutedBrush"), Margin = new Thickness(0, 12, 0, 4) });
+            panel.Children.Add(new Avalonia.Controls.Shapes.Rectangle { Height = 1, Fill = Brush("BorderNormalBrush"), Margin = new Thickness(0, 0, 0, 6) });
+            foreach (var btn in group) panel.Children.Add(BuildMappingRow(btn.Name));
+        }
+        RefreshAllRows();
+    }
+
+    private Control BuildMappingRow(string buttonName)
+    {
+        var grid = new Grid { Margin = new Thickness(0, 2, 0, 2), ColumnDefinitions = new ColumnDefinitions("*,110") };
+        var nameLabel = new TextBlock { Text = buttonName, Foreground = Brush("TextPrimaryBrush"), FontSize = 12, FontFamily = Font("PrimaryFont"),
+            VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+        Grid.SetColumn(nameLabel, 0);
+
+        var boxLabel = new TextBlock { Text = "—", Foreground = Brush("TextMutedBrush"), FontSize = 11,
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+        var box = new Border { Background = Brush("BgTertiaryBrush"), CornerRadius = new CornerRadius(4), Padding = new Thickness(8, 4, 8, 4),
+            Cursor = new Cursor(StandardCursorType.Hand), Child = boxLabel, Tag = buttonName };
+        Grid.SetColumn(box, 1);
+        box.PointerPressed += (_, e) =>
+        {
+            e.Handled = true;
+            int idx = _ctrlRows.FindIndex(r => r.ButtonName == buttonName);
+            if (idx >= 0) StartWaiting(idx);
+            Focus();
+        };
+        grid.Children.Add(nameLabel); grid.Children.Add(box);
+        _ctrlRows.Add(new CtrlRow { ButtonName = buttonName, Box = box, BoxLabel = boxLabel });
+        return grid;
+    }
+
+    private void RefreshAllRows() { for (int i = 0; i < _ctrlRows.Count; i++) RefreshRow(i); }
+
+    private void RefreshRow(int idx)
+    {
+        if (idx < 0 || idx >= _ctrlRows.Count) return;
+        var row = _ctrlRows[idx];
+        if (idx == _waitingRowIndex)
+        {
+            row.Box.Background = Brush("AccentBrush"); row.BoxLabel.Text = "Press…"; row.BoxLabel.Foreground = Brushes.White; return;
+        }
+        if (_ctrlMappings.TryGetValue(row.ButtonName, out var m) && !string.IsNullOrEmpty(m.DisplayText) && m.DisplayText != "Not mapped")
+        {
+            row.Box.Background = Brush("BgQuaternaryBrush"); row.BoxLabel.Text = m.DisplayText; row.BoxLabel.Foreground = Brush("TextPrimaryBrush");
+        }
+        else { row.Box.Background = Brush("BgTertiaryBrush"); row.BoxLabel.Text = "—"; row.BoxLabel.Foreground = Brush("TextMutedBrush"); }
+    }
+
+    private void StartWaiting(int rowIndex)
+    {
+        int prev = _waitingRowIndex;
+        _waitingRowIndex = rowIndex;
+        if (_ctrl != null) _ctrl.RawMode = true;
+        if (prev >= 0) RefreshRow(prev);
+        RefreshRow(rowIndex);
+    }
+
+    private void StopWaiting()
+    {
+        int prev = _waitingRowIndex;
+        _waitingRowIndex = -1;
+        if (_ctrl != null) _ctrl.RawMode = false;
+        if (prev >= 0) RefreshRow(prev);
+    }
+
+    private void CommitMapping(string buttonName, string displayText, Key key = Key.None, uint controllerId = 0)
+    {
+        _ctrlMappings[buttonName] = new Services.InputMapping
+        {
+            ConsoleName = _currentConsole, ButtonName = buttonName,
+            InputType = _isKeyboardMode ? Services.InputType.Keyboard : Services.InputType.Controller,
+            Key = key, ControllerButtonId = controllerId, DisplayText = displayText,
+        };
+        int cur = _waitingRowIndex;
+        _waitingRowIndex = -1;
+        RefreshRow(cur);
+        if (cur + 1 < _ctrlRows.Count) StartWaiting(cur + 1);   // auto-advance
+        else if (_ctrl != null) _ctrl.RawMode = false;
+    }
+
+    private void OnControlsKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (!_isKeyboardMode || _waitingRowIndex < 0) return;
+        if (e.Key == Key.Escape) { StopWaiting(); e.Handled = true; return; }
+        CommitMapping(_ctrlRows[_waitingRowIndex].ButtonName, KeyToDisplayString(e.Key), key: e.Key);
+        e.Handled = true;
+    }
+
+    private void OnControllerButtonChanged(uint rawId, bool isPressed)
+    {
+        if (_isKeyboardMode || !isPressed || _waitingRowIndex < 0) return;
+        string display = rawId >= 110 ? StickDirToString(rawId)
+            : rawId == 100 ? "L2" : rawId == 101 ? "R2" : $"Button {rawId}";
+        CommitMapping(_ctrlRows[_waitingRowIndex].ButtonName, display, controllerId: rawId);
+    }
+
+    private void LoadMappingsFromConfig()
+    {
+        _ctrlMappings.Clear();
+        var config = App.Configuration!.GetInputConfiguration(ConfigKey);
+        var source = _isKeyboardMode ? config.KeyboardMappings : config.ControllerMappings;
+        foreach (var m in source)
+            _ctrlMappings[m.ButtonName] = new Services.InputMapping
+            {
+                ConsoleName = _currentConsole, ButtonName = m.ButtonName,
+                InputType = _isKeyboardMode ? Services.InputType.Keyboard : Services.InputType.Controller,
+                Key = _isKeyboardMode && Enum.TryParse<Key>(m.InputIdentifier, out var k) ? k : Key.None,
+                ControllerButtonId = !_isKeyboardMode && uint.TryParse(m.InputIdentifier, out var bid) ? bid : 0,
+                DisplayText = m.DisplayName,
+            };
+        _suppressControlsAutoSave = true;
+        int slot = config.ControllerSlot;
+        this.FindControl<ComboBox>("ControllerSlotComboBox")!.SelectedIndex = (slot >= 0 && slot <= 3) ? slot + 1 : 0;
+        _suppressControlsAutoSave = false;
+    }
+
+    private void SaveMappingsToConfig()
+    {
+        var config = App.Configuration!.GetInputConfiguration(ConfigKey);
+        if (_isKeyboardMode)
+        {
+            config.KeyboardMappings.Clear();
+            foreach (var m in _ctrlMappings.Values.Where(m => m.InputType == Services.InputType.Keyboard && m.Key != Key.None))
+                config.KeyboardMappings.Add(new Configuration.ButtonMapping { ButtonName = m.ButtonName, InputIdentifier = m.Key.ToString(),
+                    InputType = Configuration.InputType.Keyboard, DisplayName = m.DisplayText });
+        }
+        else
+        {
+            config.ControllerMappings.Clear();
+            foreach (var m in _ctrlMappings.Values.Where(m => m.InputType == Services.InputType.Controller))
+                config.ControllerMappings.Add(new Configuration.ButtonMapping { ButtonName = m.ButtonName, InputIdentifier = m.ControllerButtonId.ToString(),
+                    InputType = Configuration.InputType.Controller, DisplayName = m.DisplayText });
+        }
+        App.Configuration!.SetInputConfiguration(ConfigKey, config);
+    }
+
+    private void ResetControlsDefaults()
+    {
+        _ctrlMappings.Clear();
+        var defaults = _isKeyboardMode
+            ? Configuration.ConfigurationExtensions.GetDefaultKeyboardMappings(_currentConsole)
+            : Configuration.ConfigurationExtensions.GetDefaultControllerMappings(_currentConsole);
+        foreach (var d in defaults)
+            _ctrlMappings[d.ButtonName] = new Services.InputMapping
+            {
+                ConsoleName = _currentConsole, ButtonName = d.ButtonName,
+                InputType = _isKeyboardMode ? Services.InputType.Keyboard : Services.InputType.Controller,
+                Key = _isKeyboardMode && Enum.TryParse<Key>(d.InputIdentifier, out var k) ? k : Key.None,
+                ControllerButtonId = !_isKeyboardMode && uint.TryParse(d.InputIdentifier, out var bid) ? bid : 0,
+                DisplayText = d.DisplayName,
+            };
+        StopWaiting();
+        RefreshAllRows();
+    }
+
+    private static string StickDirToString(uint rawId) => rawId switch
+    {
+        110 => "L-Stick ←", 111 => "L-Stick →", 112 => "L-Stick ↑", 113 => "L-Stick ↓",
+        114 => "R-Stick ←", 115 => "R-Stick →", 116 => "R-Stick ↑", 117 => "R-Stick ↓", _ => $"Axis {rawId}",
+    };
+
+    private static string KeyToDisplayString(Key key) => key switch
+    {
+        Key.Space => "Space", Key.Enter => "Enter", Key.Back => "Backspace", Key.Escape => "Escape", Key.Tab => "Tab",
+        Key.LeftShift => "L Shift", Key.RightShift => "R Shift", Key.LeftCtrl => "L Ctrl", Key.RightCtrl => "R Ctrl",
+        Key.LeftAlt => "L Alt", Key.RightAlt => "R Alt", Key.Up => "↑", Key.Down => "↓", Key.Left => "←", Key.Right => "→",
+        _ => key.ToString(),
+    };
 
     private IBrush? Brush(string key) => this.TryFindResource(key, out var v) ? v as IBrush : null;
     private FontFamily Font(string key) => this.TryFindResource(key, out var v) && v is FontFamily f ? f : FontFamily.Default;
