@@ -54,7 +54,9 @@ public partial class MainWindow : Window
 
         // Launch on double-click / Enter from the library grid.
         var grid = this.FindControl<ListBox>("GameGridView")!;
-        grid.Tapped += OnGameTapped;                       // single-click → open detail (upstream UX)
+        // Manual WPF-Extended-style selection (Avalonia's Multiple mode accumulates on plain
+        // click, which we don't want): tunnel the press so we drive selection + detail ourselves.
+        grid.AddHandler(PointerPressedEvent, OnGamePointerPressed, RoutingStrategies.Tunnel);
         grid.KeyDown += (_, e) => { if (e.Key == Key.Enter) { OpenSelectedDetail(); e.Handled = true; } };
         grid.AddHandler(ContextRequestedEvent, OnGameContextRequested);
 
@@ -352,13 +354,54 @@ public partial class MainWindow : Window
 
     // Single-click a box-art card → open its detail window (upstream UX). Shift+click
     // is reserved for range-select, so it never opens the card.
-    private void OnGameTapped(object? sender, TappedEventArgs e)
+    private Game? _selectionAnchor;
+
+    // Left-click a card: plain → select one + open detail; Ctrl → toggle; Shift → range from
+    // the anchor (ports upstream GameCard_Click + DoRangeSelect). Right-click falls through to
+    // ContextRequested. We handle the press so Avalonia's built-in Multiple-toggle doesn't fire.
+    private void OnGamePointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        // Shift/Ctrl are multi-select gestures (handled by the ListBox) — don't open detail.
-        if (e.KeyModifiers.HasFlag(KeyModifiers.Shift) || e.KeyModifiers.HasFlag(KeyModifiers.Control)) return;
+        if (!e.GetCurrentPoint(sender as Visual).Properties.IsLeftButtonPressed) return;
         var node = e.Source as Control;
         while (node != null && node.DataContext is not Game) node = node.Parent as Control;
-        if (node?.DataContext is Game g) OpenGameDetail(g);
+        if (node?.DataContext is not Game g) return;   // empty space → let the ListBox clear selection
+        var grid = this.FindControl<ListBox>("GameGridView")!;
+
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Shift)) { DoRangeSelect(grid, g); e.Handled = true; }
+        else if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            if (grid.SelectedItems!.Contains(g)) grid.SelectedItems.Remove(g);
+            else grid.SelectedItems.Add(g);
+            _selectionAnchor = g;
+            e.Handled = true;
+        }
+        else
+        {
+            grid.SelectedItems!.Clear();
+            grid.SelectedItems.Add(g);
+            _selectionAnchor = g;
+            e.Handled = true;
+            OpenGameDetail(g);
+        }
+    }
+
+    private void DoRangeSelect(ListBox grid, Game clicked)
+    {
+        var items = grid.Items.OfType<Game>().ToList();
+        int ci = items.IndexOf(clicked);
+        if (ci < 0) return;
+        if (_selectionAnchor == null)
+        {
+            _selectionAnchor = clicked;
+            grid.SelectedItems!.Clear();
+            grid.SelectedItems.Add(clicked);
+            return;
+        }
+        int ai = items.IndexOf(_selectionAnchor);
+        if (ai < 0) ai = 0;
+        int start = Math.Min(ai, ci), end = Math.Max(ai, ci);
+        grid.SelectedItems!.Clear();
+        for (int i = start; i <= end; i++) grid.SelectedItems.Add(items[i]);
     }
 
     private void OpenSelectedDetail()
@@ -476,7 +519,10 @@ public partial class MainWindow : Window
             if (!ok) return;
             await Task.Run(() => _db!.DeleteGames(games.Select(g => g.Id)));
             foreach (var g in games) _vm!.RemoveGame(g);
-            this.FindControl<ListBox>("GameGridView")?.SelectedItems?.Clear();
+            var listV = this.FindControl<DataGrid>("GameListView");
+            if (listV is { IsVisible: true }) listV.SelectedItems.Clear();
+            else this.FindControl<ListBox>("GameGridView")?.SelectedItems?.Clear();
+            _selectionAnchor = null;
             await _vm!.FilterGamesAsync();
         }));
         del.Foreground = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#FF5F57"));
@@ -618,35 +664,45 @@ public partial class MainWindow : Window
     // Rescan the source folders of this console's imported games for new ROMs of its
     // extensions and import them (port of upstream RefreshLibraryFolder), then backfill
     // missing artwork for the console.
-    private void RefreshLibraryFolder(string console, string display)
+    private bool _refreshInProgress;
+
+    private async void RefreshLibraryFolder(string console, string display)
     {
         if (_db == null || _importer == null) return;
+        // Guard stays set until the import drains (released in onDrained / early returns) so a
+        // second Refresh can't subscribe a duplicate drain handler onto one coalesced drain.
+        if (_refreshInProgress) { _vm?.SetStatus("A refresh is already running…", autoClear: true); return; }
+        _refreshInProgress = true;
 
-        var scanDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var game in _db.GetAllGames())
-        {
-            if (!string.Equals(game.Console, console, StringComparison.OrdinalIgnoreCase)) continue;
-            string source = !string.IsNullOrEmpty(game.OriginalSourcePath) ? game.OriginalSourcePath : game.RomPath;
-            source = AppPaths.FromStoragePath(source);
-            if (string.IsNullOrEmpty(source)) continue;
-            try { string? dir = System.IO.Path.GetDirectoryName(source); if (!string.IsNullOrEmpty(dir) && System.IO.Directory.Exists(dir)) scanDirs.Add(dir); }
-            catch { }
-        }
-        if (scanDirs.Count == 0) { _vm?.SetStatus($"Nothing to refresh — no {display} game folders found on disk.", autoClear: true); return; }
-
+        // Scan off the UI thread (GetAllGames + recursive EnumerateFiles can be heavy).
         var exts = new HashSet<string>(RomService.GetExtensionsForConsole(console), StringComparer.OrdinalIgnoreCase);
-        if (exts.Count == 0) { _vm?.SetStatus($"No file extensions registered for {display}.", autoClear: true); return; }
+        if (exts.Count == 0) { _vm?.SetStatus($"No file extensions registered for {display}.", autoClear: true); _refreshInProgress = false; return; }
 
-        var candidates = new List<string>();
-        foreach (var dir in scanDirs)
+        var (candidates, before, noDirs) = await Task.Run(() =>
         {
-            try { foreach (var path in System.IO.Directory.EnumerateFiles(dir, "*", System.IO.SearchOption.AllDirectories))
-                    if (exts.Contains(System.IO.Path.GetExtension(path))) candidates.Add(path); }
-            catch { }
-        }
-        if (candidates.Count == 0) { _vm?.SetStatus($"Nothing to refresh — no new {display} files found.", autoClear: true); return; }
+            var scanDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var all = _db!.GetAllGames();
+            foreach (var game in all)
+            {
+                if (!string.Equals(game.Console, console, StringComparison.OrdinalIgnoreCase)) continue;
+                string source = AppPaths.FromStoragePath(!string.IsNullOrEmpty(game.OriginalSourcePath) ? game.OriginalSourcePath : game.RomPath);
+                if (string.IsNullOrEmpty(source)) continue;
+                try { string? d = System.IO.Path.GetDirectoryName(source); if (!string.IsNullOrEmpty(d) && System.IO.Directory.Exists(d)) scanDirs.Add(d); }
+                catch { }
+            }
+            var found = new List<string>();
+            foreach (var dir in scanDirs)
+            {
+                try { foreach (var path in System.IO.Directory.EnumerateFiles(dir, "*", System.IO.SearchOption.AllDirectories))
+                        if (exts.Contains(System.IO.Path.GetExtension(path))) found.Add(path); }
+                catch { }
+            }
+            int cnt = all.Count(g => string.Equals(g.Console, console, StringComparison.OrdinalIgnoreCase));
+            return (found, cnt, scanDirs.Count == 0);
+        });
 
-        int before = _db.GetAllGames().Count(g => string.Equals(g.Console, console, StringComparison.OrdinalIgnoreCase));
+        if (noDirs) { _vm?.SetStatus($"Nothing to refresh — no {display} game folders found on disk.", autoClear: true); _refreshInProgress = false; return; }
+        if (candidates.Count == 0) { _vm?.SetStatus($"Nothing to refresh — no {display} files found in your existing {display} folders.", autoClear: true); _refreshInProgress = false; return; }
         Action? onDrained = null;
         onDrained = () =>
         {
@@ -665,6 +721,7 @@ public partial class MainWindow : Window
                 }, autoClear: true);
                 // Backfill missing artwork for the console (the user expects a full refresh).
                 try { await _artworkFetch!.FetchMissingArtworkForConsoleAsync(console, display); } catch { }
+                _refreshInProgress = false;
             });
         };
         _importer.ImportQueueDrained += onDrained;
