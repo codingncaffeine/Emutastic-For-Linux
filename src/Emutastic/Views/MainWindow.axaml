@@ -181,7 +181,7 @@
                         <!-- RIGHT: OpenEmu-style recessed search field — chisel border, dark
                              top-to-bottom gradient, and a soft downward drop shadow (upstream
                              DropShadowEffect BlurRadius 2 / down 1 / 0.6) so it reads recessed. -->
-                        <Border Grid.Column="2" Width="180" Height="26" CornerRadius="14" Padding="10,0" VerticalAlignment="Center"
+                        <Border Grid.Column="2" Name="SearchBorder" Width="180" Height="26" CornerRadius="14" Padding="10,0" VerticalAlignment="Center"
                                 Background="{DynamicResource SearchFillBrush}" BorderBrush="{DynamicResource ToolbarChiselBrush}"
                                 BorderThickness="1" Margin="0,0,12,0">
                             <Border.Effect>
@@ -201,15 +201,17 @@
                     </Grid>
                 </Border>
 
+                <!-- ══ LIBRARY view (grid + list + empty placeholder) ══ -->
+                <Grid Name="LibraryView" Grid.Row="1">
                 <!-- empty-library placeholder -->
-                <TextBlock Grid.Row="1" Text="No games yet — drag ROMs here, or click ＋ Import"
+                <TextBlock Text="No games yet — drag ROMs here, or click ＋ Import"
                            HorizontalAlignment="Center" VerticalAlignment="Center"
                            FontFamily="{DynamicResource PrimaryFont}" FontSize="15"
                            Foreground="{DynamicResource TextMutedBrush}"
                            IsVisible="{Binding Games.Count, Converter={StaticResource CountIsZeroToBool}}"/>
 
                 <!-- flat box-art grid -->
-                <ListBox Name="GameGridView" Grid.Row="1"
+                <ListBox Name="GameGridView"
                          ItemsSource="{Binding Games}"
                          Background="Transparent" BorderThickness="0"
                          Padding="{DynamicResource LibraryGridPadding}"
@@ -279,7 +281,7 @@
                 </ListBox>
 
                 <!-- OpenEmu-style list view (toggled by the grid/list view buttons) -->
-                <DataGrid Name="GameListView" Grid.Row="1" ItemsSource="{Binding Games}"
+                <DataGrid Name="GameListView" ItemsSource="{Binding Games}"
                           IsVisible="False" AutoGenerateColumns="False" CanUserSortColumns="True"
                           CanUserResizeColumns="True" IsReadOnly="True" GridLinesVisibility="Horizontal"
                           Background="Transparent" RowBackground="Transparent"
@@ -307,6 +309,39 @@
                         </DataGridTemplateColumn>
                     </DataGrid.Columns>
                 </DataGrid>
+                </Grid>
+
+                <!-- ══ SCREENSHOTS view (per-game groups, populated in code-behind) ══ -->
+                <Grid Name="ScreenshotsView" Grid.Row="1" IsVisible="False">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="16,8,16,16">
+                        <StackPanel>
+                            <!-- Empty state -->
+                            <StackPanel Name="ScreenshotsEmptyState" HorizontalAlignment="Center" Margin="0,60,0,0" IsVisible="False">
+                                <TextBlock Name="ScreenshotsEmptyIcon" Text="📷" FontSize="48" HorizontalAlignment="Center" Margin="0,0,0,12"/>
+                                <TextBlock Name="ScreenshotsEmptyHeadline" Text="Screenshots will appear here when they've been saved."
+                                           FontFamily="{DynamicResource PrimaryFont}" FontSize="13" Foreground="{DynamicResource TextMutedBrush}"
+                                           HorizontalAlignment="Center" TextWrapping="Wrap"/>
+                                <TextBlock Name="ScreenshotsEmptyHint" Text="To take a screenshot, press Print Screen or F12 while in a game."
+                                           FontFamily="{DynamicResource PrimaryFont}" FontSize="12" Foreground="{DynamicResource TextMutedBrush}"
+                                           HorizontalAlignment="Center" Opacity="0.6" Margin="0,6,0,0"/>
+                            </StackPanel>
+                            <StackPanel Name="ScreenshotsPanel"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+
+                <!-- ══ SAVE STATES view (per-game groups, populated in code-behind) ══ -->
+                <Grid Name="SaveStatesView" Grid.Row="1" IsVisible="False">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,8,0,16">
+                        <StackPanel>
+                            <TextBlock Name="SaveStatesEmptyText"
+                                       Text="No save states yet. Press F5 or the Save State button while in a game."
+                                       FontFamily="{DynamicResource PrimaryFont}" FontSize="13" Foreground="{DynamicResource TextMutedBrush}"
+                                       HorizontalAlignment="Center" Margin="0,60,0,0" TextWrapping="Wrap" IsVisible="False"/>
+                            <StackPanel Name="SaveStatesPanel"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
             </Grid>
         </Grid>
 
