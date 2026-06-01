@@ -1,0 +1,96 @@
+namespace Emutastic.Models
+{
+    /// <summary>
+    /// Deserialized from colors.json inside a .emutheme package or embedded resource.
+    /// Every property is nullable — only provided values override the default theme.
+    /// </summary>
+    public class ThemeColors
+    {
+        // ── Core palette ──
+        public string? BgPrimary { get; set; }
+        public string? BgSecondary { get; set; }
+        public string? BgTertiary { get; set; }
+        public string? BgQuaternary { get; set; }
+        public string? BorderSubtle { get; set; }
+        public string? BorderNormal { get; set; }
+        public string? TextPrimary { get; set; }
+        public string? TextSecondary { get; set; }
+        public string? TextMuted { get; set; }
+        public string? Accent { get; set; }
+        public string? AccentHover { get; set; }
+        public string? Green { get; set; }
+
+        // ── Scrollbar ──
+        public string? ScrollThumb { get; set; }
+        public string? ScrollThumbHover { get; set; }
+        public string? ScrollThumbDrag { get; set; }
+        public string? ScrollTrack { get; set; }
+
+        // ── Play Button ──
+        public string? PlayBtnBg { get; set; }
+        public string? PlayBtnBorder { get; set; }
+        public string? PlayBtnHoverBg { get; set; }
+        public string? PlayBtnHoverBorder { get; set; }
+        public string? PlayBtnPressedBg { get; set; }
+
+        // ── Accent variants ──
+        public string? AccentPressed { get; set; }
+        public string? AccentDisabled { get; set; }
+
+        // ── Traffic lights ──
+        public string? TrafficYellow { get; set; }
+        public string? TrafficYellowHover { get; set; }
+        public string? TrafficGreenHover { get; set; }
+        public string? TrafficRed { get; set; }
+        public string? TrafficRedHover { get; set; }
+
+        // ── Overlay ──
+        public string? OverlayBg { get; set; }
+
+        // ── Shadow ──
+        public string? Shadow { get; set; }
+
+        // ── Pill controls ──
+        public string? PillBg { get; set; }
+        public string? PillBorder { get; set; }
+        public string? PillHoverBg { get; set; }
+        public string? PillPressedBg { get; set; }
+        public string? PillFg { get; set; }
+        public string? PillMutedFg { get; set; }
+
+        // ── Surfaces ──
+        public string? Surface { get; set; }
+        public string? SurfaceHover { get; set; }
+        public string? SurfaceActive { get; set; }
+        public string? ContentBg { get; set; }
+        public string? Warning { get; set; }
+
+        // ── Library ──
+        /// <summary>Selection ring color around a clicked game card in the library grid.</summary>
+        public string? LibrarySelection { get; set; }
+        /// <summary>Focus ring color around a keyboard-focused game card in the library grid.</summary>
+        public string? LibraryFocus { get; set; }
+
+        // ── Misc ──
+        public string? PillGroupBg { get; set; }
+        public string? AchievementGold { get; set; }
+        public string? FavoriteHeart { get; set; }
+
+        // ── Background image ──
+        /// <summary>Relative path to background image inside .emutheme (e.g. "assets/background.png"), or absolute path for local config.</summary>
+        public string? BackgroundImage { get; set; }
+        /// <summary>Background image opacity (0.0–1.0). Default 1.0.</summary>
+        public double? BackgroundImageOpacity { get; set; }
+        /// <summary>Background image stretch mode: UniformToFill, Uniform, Fill, None.</summary>
+        public string? BackgroundImageStretch { get; set; }
+        /// <summary>Background image zoom level (1.0 = 100%).</summary>
+        public double? BackgroundImageZoom { get; set; }
+        /// <summary>Background image horizontal offset in pixels.</summary>
+        public double? BackgroundImageOffsetX { get; set; }
+        /// <summary>Background image vertical offset in pixels.</summary>
+        public double? BackgroundImageOffsetY { get; set; }
+        /// <summary>Whether the background image tiles/repeats.</summary>
+        public bool? BackgroundImageRepeat { get; set; }
+
+    }
+}

@@ -1,0 +1,317 @@
+using System;
+using System.IO;
+
+namespace Emutastic
+{
+    /// <summary>
+    /// Single source of truth for the application data root directory.
+    /// Config file normally lives in %AppData%\Emutastic; everything else
+    /// (database, saves, snaps, artwork, etc.) lives under DataRoot,
+    /// which can be redirected by the user to any folder.
+    ///
+    /// Portable mode (two triggers, both opt-in):
+    ///   1. Drop a file named "portable.txt" next to the .exe
+    ///   2. Pass --portable on the command line
+    /// When portable mode is on, both config AND data root are forced to
+    /// [exe]\PortableData\, and the AppData location is never touched.
+    /// </summary>
+    public static class AppPaths
+    {
+        private static string? _customRoot;
+        private static bool _portable;
+        private static string? _portableRoot;
+
+        /// <summary>
+        /// The default data root. On Windows this is %AppData%\Emutastic (Roaming),
+        /// matching upstream. On Linux/macOS we follow the XDG Base Directory spec:
+        /// data lives under $XDG_DATA_HOME (~/.local/share/Emutastic) while the
+        /// config file is kept separately under ~/.config/Emutastic by
+        /// JsonConfigurationService (which uses SpecialFolder.ApplicationData →
+        /// ~/.config on Linux). LocalApplicationData maps to ~/.local/share on Linux.
+        /// </summary>
+        public static string DefaultRoot { get; } =
+            Path.Combine(
+                Environment.GetFolderPath(OperatingSystem.IsWindows()
+                    ? Environment.SpecialFolder.ApplicationData
+                    : Environment.SpecialFolder.LocalApplicationData),
+                "Emutastic");
+
+        /// <summary>True when a portable.txt marker was found next to the .exe.</summary>
+        public static bool IsPortable => _portable;
+
+        /// <summary>
+        /// Detects portable mode. MUST be called once at the very start of
+        /// App.OnStartup, before JsonConfigurationService is constructed.
+        /// Triggers (either one activates):
+        ///   1. A file named "portable.txt" next to the running .exe.
+        ///   2. The --portable command-line argument (case-insensitive).
+        /// </summary>
+        /// <param name="args">Process command-line args, typically e.Args from
+        /// App.OnStartup. Pass null/empty to check only for the marker file.</param>
+        public static void DetectPortableMode(string[]? args = null)
+        {
+            try
+            {
+                bool cliPortable = args != null && Array.Exists(args,
+                    a => string.Equals(a, "--portable", StringComparison.OrdinalIgnoreCase));
+
+                // MainModule path beats AppContext.BaseDirectory because the latter points
+                // at the extraction temp dir for single-file published apps (.NET 8) — the
+                // user's portable.txt sits next to the .exe, not in the extraction dir.
+                string? exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+                string exeDir = !string.IsNullOrEmpty(exePath)
+                    ? Path.GetDirectoryName(exePath)!
+                    : AppContext.BaseDirectory;
+                string marker = Path.Combine(exeDir, "portable.txt");
+                bool markerPresent = File.Exists(marker);
+
+                if (cliPortable || markerPresent)
+                {
+                    _portable = true;
+                    _portableRoot = Path.Combine(exeDir, "PortableData");
+                    Directory.CreateDirectory(_portableRoot);
+                }
+            }
+            catch
+            {
+                // Best effort. If the exe dir is read-only we silently fall back to AppData.
+                _portable = false;
+                _portableRoot = null;
+            }
+        }
+
+        /// <summary>
+        /// The active data root. Portable wins, then custom dir, then default.
+        /// </summary>
+        public static string DataRoot
+        {
+            get
+            {
+                if (_portable && !string.IsNullOrEmpty(_portableRoot))
+                {
+                    Directory.CreateDirectory(_portableRoot);
+                    return _portableRoot;
+                }
+                if (!string.IsNullOrEmpty(_customRoot))
+                {
+                    Directory.CreateDirectory(_customRoot);
+                    return _customRoot;
+                }
+                return DefaultRoot;
+            }
+        }
+
+        /// <summary>
+        /// Called once at startup after config is loaded to apply the custom path.
+        /// In portable mode the custom path is remembered but DataRoot still points
+        /// at PortableData — so removing portable.txt later restores the prior choice.
+        /// </summary>
+        public static void SetCustomRoot(string? path)
+        {
+            _customRoot = string.IsNullOrWhiteSpace(path) ? null : path;
+        }
+
+        /// <summary>
+        /// Relativizes an absolute filesystem path against DataRoot for DB storage.
+        /// If the path lives under DataRoot, returns a relative form (e.g. "Roms\NES\zelda.smc")
+        /// that survives drive-letter changes when the data folder moves between PCs.
+        /// Paths outside DataRoot are returned as-is — they're absolute references the user
+        /// owns (e.g. ROMs on a fixed C:\ drive) and we can't make them portable for them.
+        /// Empty strings pass through unchanged.
+        /// </summary>
+        public static string ToStoragePath(string absoluteOrEmpty)
+        {
+            if (string.IsNullOrEmpty(absoluteOrEmpty)) return absoluteOrEmpty;
+            // Already relative? Pass through (idempotent — callers might re-relativize).
+            if (!Path.IsPathRooted(absoluteOrEmpty)) return absoluteOrEmpty;
+            try
+            {
+                string dataRoot = Path.GetFullPath(DataRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                string full = Path.GetFullPath(absoluteOrEmpty);
+                string rootWithSep = dataRoot + Path.DirectorySeparatorChar;
+                if (full.StartsWith(rootWithSep, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(full, dataRoot, StringComparison.OrdinalIgnoreCase))
+                {
+                    return Path.GetRelativePath(dataRoot, full);
+                }
+            }
+            catch { /* fall through and store as-is */ }
+            return absoluteOrEmpty;
+        }
+
+        /// <summary>
+        /// Inverse of ToStoragePath. If the stored path is relative, prepends DataRoot;
+        /// if absolute, returns as-is. Handles both fresh portable installs (relative paths
+        /// in DB) and legacy installs (absolute paths) the same way at the read site.
+        /// </summary>
+        public static string FromStoragePath(string storedOrEmpty)
+        {
+            if (string.IsNullOrEmpty(storedOrEmpty)) return storedOrEmpty;
+            if (Path.IsPathRooted(storedOrEmpty)) return storedOrEmpty;
+            return Path.Combine(DataRoot, storedOrEmpty);
+        }
+
+        /// <summary>
+        /// Folder that holds libretro core .dlls. In portable mode this lives at
+        /// [DataRoot]/Cores/ so the entire portable experience — cores included —
+        /// sits inside PortableData/. In normal mode it's [exe]/Cores/ as before.
+        /// Cores are downloaded into this folder by CoreManager.
+        /// </summary>
+        public static string GetCoresFolder()
+        {
+            string folder;
+            if (_portable && !string.IsNullOrEmpty(_portableRoot))
+                folder = Path.Combine(_portableRoot, "Cores");
+            else if (OperatingSystem.IsWindows())
+                // Windows: cores live next to the .exe (writable install dir), as upstream.
+                folder = Path.Combine(AppContext.BaseDirectory, "Cores");
+            else
+                // Linux/macOS: the install dir (e.g. /usr/lib/emutastic from a .deb) is
+                // read-only, so cores are downloaded into the writable data root instead:
+                // ~/.local/share/Emutastic/Cores.
+                folder = Path.Combine(DataRoot, "Cores");
+            Directory.CreateDirectory(folder);
+            return folder;
+        }
+
+        /// <summary>
+        /// Folder that holds user-downloaded native assets that aren't bundled in
+        /// the release zip — currently SDL3.dll and ffmpeg.exe. Always under
+        /// [DataRoot]/Native/ so the files survive both UAC-restricted install
+        /// locations (Program Files etc.) and version upgrades where the user
+        /// extracts a new release zip into a fresh folder. In portable mode this
+        /// resolves to [exe]/PortableData/Native/ so the entire portable bundle
+        /// stays self-contained.
+        /// </summary>
+        public static string GetNativeFolder()
+        {
+            string folder = Path.Combine(DataRoot, "Native");
+            Directory.CreateDirectory(folder);
+            return folder;
+        }
+
+        /// <summary>
+        /// Folder that holds DAT files used for CHD/Redump SHA1 lookup during
+        /// import. Same persistence rationale as GetNativeFolder.
+        /// </summary>
+        public static string GetDatsFolder()
+        {
+            string folder = Path.Combine(DataRoot, "DATs");
+            Directory.CreateDirectory(folder);
+            return folder;
+        }
+
+        /// <summary>
+        /// Copies a user-picked asset (background image, custom icon, etc.) into
+        /// [DataRoot]/{subfolder}/ if it isn't already living under DataRoot, and
+        /// returns the new absolute path. If the source is already under DataRoot,
+        /// returns it unchanged. Callers should then pass the result through
+        /// ToStoragePath before storing in config/DB so the relative form survives
+        /// portable USB swaps and CustomDataDirectory changes.
+        ///
+        /// Collision-safe: if a file with the same name already exists at the
+        /// destination, appends "_1", "_2", … to the filename. This avoids
+        /// silently overwriting a previously-imported asset the user might still
+        /// be using under a different theme/profile.
+        /// </summary>
+        public static string ImportFileToDataRoot(string sourceAbsolutePath, string subfolder)
+        {
+            if (string.IsNullOrWhiteSpace(sourceAbsolutePath)) return sourceAbsolutePath;
+            if (!File.Exists(sourceAbsolutePath)) return sourceAbsolutePath;
+
+            string dataRoot = Path.GetFullPath(DataRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string fullSrc  = Path.GetFullPath(sourceAbsolutePath);
+
+            // Already under DataRoot — no-op.
+            if (fullSrc.StartsWith(dataRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+             || string.Equals(fullSrc, dataRoot, StringComparison.OrdinalIgnoreCase))
+                return sourceAbsolutePath;
+
+            string destDir = Path.Combine(dataRoot, subfolder);
+            Directory.CreateDirectory(destDir);
+
+            string baseName = Path.GetFileNameWithoutExtension(fullSrc);
+            string ext      = Path.GetExtension(fullSrc);
+            string destPath = Path.Combine(destDir, baseName + ext);
+            // Sanity cap: an ACL or filesystem quirk could in theory keep
+            // File.Exists returning true; bail rather than spin forever.
+            for (int n = 1; n < 10000 && File.Exists(destPath); n++)
+                destPath = Path.Combine(destDir, $"{baseName}_{n}{ext}");
+
+            File.Copy(fullSrc, destPath, overwrite: false);
+            return destPath;
+        }
+
+        /// <summary>
+        /// Returns the .exe folder regardless of portable mode — used by the
+        /// native-assets migration to locate any pre-existing SDL3.dll, ffmpeg.exe,
+        /// or DATs/ that legacy installs left next to the .exe.
+        /// </summary>
+        public static string GetExeFolder()
+        {
+            try
+            {
+                string? exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+                return !string.IsNullOrEmpty(exePath)
+                    ? Path.GetDirectoryName(exePath)!
+                    : AppContext.BaseDirectory;
+            }
+            catch { return AppContext.BaseDirectory; }
+        }
+
+        /// <summary>
+        /// In portable mode, returns the path to the .exe folder so we can find
+        /// pre-existing Cores/ that shipped with the install (for migration). Null otherwise.
+        /// </summary>
+        public static string? GetExeFolderIfPortable()
+        {
+            if (!_portable) return null;
+            try
+            {
+                string? exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+                return !string.IsNullOrEmpty(exePath)
+                    ? Path.GetDirectoryName(exePath)
+                    : AppContext.BaseDirectory;
+            }
+            catch { return AppContext.BaseDirectory; }
+        }
+
+        // Per-folder overrides (set from Preferences → Folders)
+        private static string? _screenshotsRoot;
+        private static string? _recordingsRoot;
+
+        public static void SetScreenshotsFolder(string? path)
+            => _screenshotsRoot = string.IsNullOrWhiteSpace(path) ? null : path;
+        public static void SetRecordingsFolder(string? path)
+            => _recordingsRoot = string.IsNullOrWhiteSpace(path) ? null : path;
+
+        /// <summary>
+        /// Builds a full path under DataRoot for the given subfolder(s).
+        /// Creates the directory if it doesn't exist.
+        /// Screenshots and Recordings honour per-folder overrides if set.
+        /// </summary>
+        public static string GetFolder(params string[] subfolders)
+        {
+            string root = DataRoot;
+
+            // Check for per-folder overrides — when a custom root is set,
+            // it replaces DataRoot + "Screenshots"/"Recordings", so skip the first subfolder
+            bool customRoot = false;
+            if (subfolders.Length > 0)
+            {
+                if (subfolders[0] == "Screenshots" && !string.IsNullOrEmpty(_screenshotsRoot))
+                { root = _screenshotsRoot; customRoot = true; }
+                else if (subfolders[0] == "Recordings" && !string.IsNullOrEmpty(_recordingsRoot))
+                { root = _recordingsRoot; customRoot = true; }
+            }
+
+            int skip = customRoot ? 1 : 0;
+            string[] parts = new string[subfolders.Length - skip + 1];
+            parts[0] = root;
+            Array.Copy(subfolders, skip, parts, 1, subfolders.Length - skip);
+            string path = Path.Combine(parts);
+            Directory.CreateDirectory(path);
+            return path;
+        }
+    }
+}
