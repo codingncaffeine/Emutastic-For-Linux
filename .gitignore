@@ -1,0 +1,20 @@
+# Upstream reference clone (kept locally for porting, not part of this repo)
+reference/
+
+# .NET build artifacts
+bin/
+obj/
+*.user
+.vs/
+
+# Rider / VS Code
+.idea/
+*.DotSettings.user
+
+# OS
+.DS_Store
+
+# App runtime data / cores / ROMs (never commit)
+Cores/
+*.so
+*.dll
