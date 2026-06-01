@@ -1364,7 +1364,42 @@ public partial class PreferencesWindow : Window
         string datsDir = AppPaths.GetDatsFolder();
         try { System.IO.Directory.CreateDirectory(datsDir); } catch { }
 
-        panel.Children.Add(new TextBlock { Text = "DAT FILES (ROM IDENTIFICATION)", Theme = (Avalonia.Styling.ControlTheme?)(this.TryFindResource("PrefLabel", out var t) ? t : null), Margin = new Thickness(0, 24, 0, 4) });
+        // ── Cheats database (libretro cheats.zip) ──
+        panel.Children.Add(new TextBlock { Text = "CHEATS DATABASE", Theme = (Avalonia.Styling.ControlTheme?)(this.TryFindResource("PrefLabel", out var tc) ? tc : null), Margin = new Thickness(0, 8, 0, 4) });
+        panel.Children.Add(new Border { Height = 1, Background = Brush("BorderNormalBrush"), Margin = new Thickness(0, 0, 0, 8) });
+        {
+            bool installed = Services.CheatDatabaseService.IsInstalled();
+            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), Margin = new Thickness(0, 0, 0, 16) };
+            var info = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            info.Children.Add(new TextBlock { Text = "libretro community cheats", FontSize = 12, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextPrimaryBrush") });
+            var status = new TextBlock { FontSize = 10, FontFamily = Font("PrimaryFont"),
+                Text = installed ? $"Installed — {Services.CheatDatabaseService.TotalFileCount()} files, {Services.CheatDatabaseService.InstalledSystemCount()} systems" : "Not installed (~37 MB download)",
+                Foreground = new SolidColorBrush(Color.Parse(installed ? "#30D158" : "#888888")) };
+            info.Children.Add(status);
+            Grid.SetColumn(info, 0);
+            var bar = new ProgressBar { Height = 3, Width = 80, Minimum = 0, Maximum = 100, IsVisible = false, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
+            Grid.SetColumn(bar, 1);
+            var btn = new Button { Content = installed ? "Update" : "Download", Theme = (Avalonia.Styling.ControlTheme?)(this.TryFindResource("PrefSecondaryBtn", out var tb2) ? tb2 : null), Padding = new Thickness(10, 4), FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+            Grid.SetColumn(btn, 2);
+            btn.Click += async (_, _) =>
+            {
+                btn.IsEnabled = false; bar.IsVisible = true;
+                try
+                {
+                    int n = await Services.CheatDatabaseService.DownloadAndExtractAsync((pct, msg) =>
+                        Avalonia.Threading.Dispatcher.UIThread.Post(() => { bar.Value = pct; status.Text = msg; }));
+                    status.Text = $"Installed — {n} files, {Services.CheatDatabaseService.InstalledSystemCount()} systems";
+                    status.Foreground = new SolidColorBrush(Color.Parse("#30D158"));
+                    btn.Content = "Update";
+                }
+                catch (Exception ex) { status.Text = $"Failed: {ex.Message}"; status.Foreground = Brush("AccentBrush"); }
+                finally { bar.IsVisible = false; btn.IsEnabled = true; }
+            };
+            row.Children.Add(info); row.Children.Add(bar); row.Children.Add(btn);
+            panel.Children.Add(row);
+        }
+
+        panel.Children.Add(new TextBlock { Text = "DAT FILES (ROM IDENTIFICATION)", Theme = (Avalonia.Styling.ControlTheme?)(this.TryFindResource("PrefLabel", out var t) ? t : null), Margin = new Thickness(0, 8, 0, 4) });
         panel.Children.Add(new Border { Height = 1, Background = Brush("BorderNormalBrush"), Margin = new Thickness(0, 0, 0, 8) });
         panel.Children.Add(new TextBlock { Text = "Reference DAT files improve ROM identification for disc/arcade systems. Native libraries (SDL3, ffmpeg) are provided by your system packages on Linux; shader packs and overlays arrive with the shader splinter.",
             FontSize = 11, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextMutedBrush"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10) });
