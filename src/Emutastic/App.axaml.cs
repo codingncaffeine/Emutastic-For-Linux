@@ -60,6 +60,16 @@ public partial class App : Application
         {
             string[] args = desktop.Args ?? System.Array.Empty<string>();
 
+            // Route Trace.WriteLine (used throughout import + the libretro run/log callbacks) to
+            // stderr when no debugger is attached, so the [Import]/[Emu]/[core:] diagnostics are
+            // visible when running the app from a terminal (matches upstream).
+            if (!System.Diagnostics.Debugger.IsAttached)
+            {
+                System.Diagnostics.Trace.Listeners.Clear();
+                System.Diagnostics.Trace.Listeners.Add(
+                    new System.Diagnostics.ConsoleTraceListener(useErrorStream: true));
+            }
+
             // Portable / flash-drive mode (day-one feature): portable.txt next to the
             // executable, or --portable, forces config+data into [exe]/PortableData/.
             AppPaths.DetectPortableMode(args);

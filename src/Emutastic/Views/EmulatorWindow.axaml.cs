@@ -43,6 +43,8 @@ namespace Emutastic.Views
         // Parameterless ctor for the XAML designer/loader only.
         public EmulatorWindow() : this(CreateDesignSession()) { }
 
+        private System.Diagnostics.TextWriterTraceListener? _fileLog;
+
         public EmulatorWindow(EmulatorSession session)
         {
             InitializeComponent();
@@ -50,8 +52,31 @@ namespace Emutastic.Views
             _screen = this.FindControl<Image>("Screen")!;
             RenderOptions.SetBitmapInterpolationMode(_screen, BitmapInterpolationMode.None); // crisp pixels
 
+            SetupEmulatorLog(session);
+
             Opened += OnOpened;
             Closed += OnClosed;
+        }
+
+        // Mirror all Trace output ([Emu]/[core:] etc.) to Logs/emulator.log for this session, so a
+        // crash or core misbehavior is diagnosable post-hoc (matches upstream). Rotates at 5 MB.
+        private void SetupEmulatorLog(EmulatorSession session)
+        {
+            try
+            {
+                string logDir = AppPaths.GetFolder("Logs");
+                string logPath = System.IO.Path.Combine(logDir, "emulator.log");
+                if (System.IO.File.Exists(logPath) && new System.IO.FileInfo(logPath).Length > 5 * 1024 * 1024)
+                    System.IO.File.Move(logPath, System.IO.Path.Combine(logDir, "emulator.old.log"), overwrite: true);
+                _fileLog = new System.Diagnostics.TextWriterTraceListener(logPath, "EmuFileLog")
+                {
+                    TraceOutputOptions = System.Diagnostics.TraceOptions.DateTime,
+                };
+                System.Diagnostics.Trace.Listeners.Add(_fileLog);
+                System.Diagnostics.Trace.AutoFlush = true;
+                System.Diagnostics.Trace.WriteLine($"[Emu] === session start: core={session.CoreName} ===");
+            }
+            catch { /* logging is best-effort */ }
         }
 
         private static EmulatorSession CreateDesignSession() => new("", "");
@@ -141,6 +166,14 @@ namespace Emutastic.Views
             // never do that on the UI thread. Run teardown on a background thread.
             var session = _session;
             System.Threading.Tasks.Task.Run(() => session.Dispose());
+
+            // Remove this session's file-log listener so launches don't accumulate duplicate writers.
+            if (_fileLog != null)
+            {
+                System.Diagnostics.Trace.WriteLine("[Emu] === session end ===");
+                try { System.Diagnostics.Trace.Flush(); System.Diagnostics.Trace.Listeners.Remove(_fileLog); _fileLog.Dispose(); } catch { }
+                _fileLog = null;
+            }
         }
     }
 }
