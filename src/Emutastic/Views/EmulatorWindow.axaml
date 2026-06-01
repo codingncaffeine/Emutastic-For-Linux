@@ -1,5 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:pe="using:Emutastic.Views.PauseEffects"
         x:Class="Emutastic.Views.EmulatorWindow"
         Icon="/Assets/banners and icons/emutastic-logo.png"
         Width="768" Height="720" MinWidth="480" MinHeight="360"
@@ -7,6 +8,24 @@
         Background="Transparent"
         TransparencyLevelHint="Transparent"
         WindowDecorations="None">
+
+    <Window.Resources>
+        <!-- Circular translucent icon button for the in-game HUD pill. -->
+        <ControlTheme x:Key="OverlayPillBtn" TargetType="Button">
+            <Setter Property="Width" Value="48"/>
+            <Setter Property="Height" Value="48"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Border Name="b" Background="{TemplateBinding Background}" CornerRadius="24">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Content="{TemplateBinding Content}"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+            <Style Selector="^:pointerover /template/ Border#b"><Setter Property="Background" Value="#33FFFFFF"/></Style>
+        </ControlTheme>
+    </Window.Resources>
 
     <!-- Themed shell to match the rest of the app (rounded chrome + dark title bar). Software frames
          blit into the Screen Image; the HW (GL/Vulkan) path swaps it for a NativeControlHost child. -->
@@ -33,10 +52,34 @@
                     </StackPanel>
                 </Grid>
 
-                <!-- ══ SCREEN ══ -->
-                <Border Grid.Row="1" Background="Black">
+                <!-- ══ SCREEN + in-game overlay ══ -->
+                <Panel Grid.Row="1" Background="Black">
                     <Image Name="Screen" Stretch="Uniform"/>
-                </Border>
+
+                    <!-- Pause-effect animation (over the frozen frame; never eats input). -->
+                    <pe:PauseEffectHost Name="PauseEffectOverlay" IsVisible="False" IsHitTestVisible="False"/>
+
+                    <!-- Hover HUD pill (bottom-center). O2 stacks the cog/save menus above this. -->
+                    <StackPanel Name="OverlayHud" IsVisible="False" Opacity="0"
+                                VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="0,0,0,22">
+                        <Border Background="#EE0F0F11" BorderBrush="#44FFFFFF" BorderThickness="1" CornerRadius="26" Padding="8,4">
+                            <StackPanel Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+                                <Button Name="OverlayPowerBtn" Theme="{StaticResource OverlayPillBtn}" ToolTip.Tip="Close Game">
+                                    <Image Source="avares://Emutastic/Assets/buttons/powerbutton.png" Width="40" Height="40"
+                                           RenderOptions.BitmapInterpolationMode="HighQuality"/>
+                                </Button>
+                                <Button Name="OverlayPauseBtn" Theme="{StaticResource OverlayPillBtn}" ToolTip.Tip="Pause / Resume">
+                                    <TextBlock Name="OverlayPauseGlyph" Text="⏸" FontSize="20" Foreground="White"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Button>
+                                <Button Name="OverlayResetBtn" Theme="{StaticResource OverlayPillBtn}" ToolTip.Tip="Reset Game">
+                                    <TextBlock Text="⟳" FontSize="22" Foreground="White"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Button>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </Panel>
             </Grid>
         </Border>
     </Border>

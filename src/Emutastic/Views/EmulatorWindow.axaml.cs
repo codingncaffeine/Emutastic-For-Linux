@@ -66,6 +66,13 @@ namespace Emutastic.Views
             this.FindControl<Button>("MaximizeButton")!.Click += (_, _) => ToggleMaximize();
             this.FindControl<Button>("CloseButton")!.Click += (_, _) => Close();
 
+            // In-game overlay: HUD pill appears on mouse-move, the pause button freezes the game and
+            // plays the saved pause-effect animation over the frozen frame.
+            PointerMoved += (_, _) => ShowHud();
+            this.FindControl<Button>("OverlayPowerBtn")!.Click += (_, _) => Close();
+            this.FindControl<Button>("OverlayPauseBtn")!.Click += (_, _) => TogglePause();
+            this.FindControl<Button>("OverlayResetBtn")!.Click += (_, _) => _session.RequestReset();
+
             Opened += OnOpened;
             Closed += OnClosed;
         }
@@ -171,6 +178,67 @@ namespace Emutastic.Views
             return KeyMap.TryGetValue(key, out id);
         }
 
+        // ── In-game overlay (pause HUD + pause-effect animation) ──
+        private PauseEffects.PauseEffectRunner? _pauseRunner;
+        private DispatcherTimer? _hudHideTimer;
+
+        private void ShowHud()
+        {
+            var hud = this.FindControl<StackPanel>("OverlayHud");
+            if (hud == null) return;
+            hud.IsVisible = true;
+            hud.Opacity = 1;
+            _hudHideTimer ??= CreateHudHideTimer();
+            _hudHideTimer.Stop();
+            _hudHideTimer.Start();
+        }
+
+        private DispatcherTimer CreateHudHideTimer()
+        {
+            var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(2500) };
+            t.Tick += (_, _) =>
+            {
+                t.Stop();
+                if (_session.IsPaused) return;   // keep the HUD up while paused (matches upstream)
+                var hud = this.FindControl<StackPanel>("OverlayHud");
+                if (hud != null) { hud.Opacity = 0; hud.IsVisible = false; }
+            };
+            return t;
+        }
+
+        private void TogglePause()
+        {
+            bool willPause = !_session.IsPaused;
+            _session.SetPaused(willPause);
+
+            var host = this.FindControl<PauseEffects.PauseEffectHost>("PauseEffectOverlay")!;
+            var glyph = this.FindControl<TextBlock>("OverlayPauseGlyph");
+
+            if (willPause)
+            {
+                host.IsVisible = true;
+                _pauseRunner ??= new PauseEffects.PauseEffectRunner(host);
+                var cfg = App.Configuration?.GetThemeConfiguration();
+                string id = cfg?.PauseEffect ?? "none";
+                double intensity = Math.Clamp(cfg?.PauseEffectIntensity ?? 1.0, 0.5, 2.0);
+                var entry = PauseEffects.PauseEffectRegistry.Find(id);
+                if (entry != null && entry.Id != PauseEffects.PauseEffectRegistry.NoneId)
+                {
+                    var inst = entry.Factory();
+                    if (entry.IsPixel) _pauseRunner.Start((PauseEffects.IPixelPauseEffect)inst, intensity);
+                    else _pauseRunner.Start((PauseEffects.IPauseEffect)inst, intensity);
+                }
+                if (glyph != null) glyph.Text = "▶";
+                ShowHud();   // keep HUD visible while paused
+            }
+            else
+            {
+                _pauseRunner?.Stop();   // fades out, then hides the host itself
+                if (glyph != null) glyph.Text = "⏸";
+                ShowHud();              // restart the auto-hide countdown
+            }
+        }
+
         private void SetTitle(string t)
         {
             Title = t;
@@ -184,6 +252,8 @@ namespace Emutastic.Views
         private void OnClosed(object? sender, EventArgs e)
         {
             _timer?.Stop();
+            _hudHideTimer?.Stop();
+            _pauseRunner?.Dispose();
             // GOLDEN RULE: Dispose joins the emu thread (up to 5s) and tears down native resources —
             // never do that on the UI thread. Run teardown on a background thread.
             var session = _session;

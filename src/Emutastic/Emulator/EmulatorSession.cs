@@ -57,6 +57,14 @@ namespace Emutastic.Emulator
 
         private Thread? _thread;
         private volatile bool _running;
+        private volatile bool _paused;
+        private volatile bool _resetRequested;
+
+        /// <summary>Pause/resume the emulation (frame freezes, audio goes silent). UI-thread safe.</summary>
+        public bool IsPaused => _paused;
+        public void SetPaused(bool paused) => _paused = paused;
+        /// <summary>Request a core reset; applied on the emu thread to avoid racing retro_run.</summary>
+        public void RequestReset() => _resetRequested = true;
 
         // latest converted frame (BGRA8888), guarded by _frameLock
         private readonly object _frameLock = new();
@@ -136,6 +144,15 @@ namespace Emutastic.Emulator
             double next = sw.Elapsed.TotalMilliseconds;
             while (_running)
             {
+                // Paused: stop advancing the core (frame stays frozen, audio drains to silence) but
+                // keep the thread alive + responsive. Cheap idle wait; resync timing on resume.
+                if (_paused)
+                {
+                    Thread.Sleep(16);
+                    next = sw.Elapsed.TotalMilliseconds;
+                    continue;
+                }
+                if (_resetRequested) { _resetRequested = false; try { _core!.Reset(); } catch (Exception ex) { Trace.WriteLine($"[Emu] reset threw: {ex}"); } }
                 _input.Poll();
                 try { _core!.Run(); } catch (Exception ex) { Trace.WriteLine($"[Emu] retro_run threw: {ex}"); break; }
 
