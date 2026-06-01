@@ -1515,7 +1515,7 @@ public partial class PreferencesWindow : Window
         }
 
         // Reveal "update available" pills + Update All once the staleness check returns.
-        _ = DecorateCoreUpdatesAsync(coresFolder, updateAllBtn);
+        _ = DecorateCoreUpdatesAsync(coresFolder, updateAllBtn, allProgressBar, dlAllSummary);
 
         AppendExtrasSection(panel);
         _coresBuilding = false;
@@ -1696,7 +1696,7 @@ public partial class PreferencesWindow : Window
         }
     }
 
-    private async Task DecorateCoreUpdatesAsync(string coresFolder, Button updateAllBtn)
+    private async Task DecorateCoreUpdatesAsync(string coresFolder, Button updateAllBtn, ProgressBar allProgressBar, TextBlock summary)
     {
         try
         {
@@ -1708,11 +1708,28 @@ public partial class PreferencesWindow : Window
             updateAllBtn.Click += async (_, _) =>
             {
                 updateAllBtn.IsEnabled = false; updateAllBtn.Content = "Updating…";
-                foreach (var e in updates) { try { await _coreDownloader.DownloadAsync(e, coresFolder, new Progress<int>()); } catch { } }
+                allProgressBar.IsVisible = true; allProgressBar.Value = 0;
+                int done = 0, failed = 0;
+                foreach (var e in updates)
+                {
+                    int n = done + 1, completed = done;
+                    summary.Text = $"Updating {FormatCoreName(e.FileName)}… ({n}/{updates.Count})";
+                    var prog = new Progress<int>(p =>
+                    {
+                        summary.Text = $"Updating {FormatCoreName(e.FileName)}… {p}%  ({n}/{updates.Count})";
+                        allProgressBar.Value = (completed * 100 + p) / (double)updates.Count;
+                    });
+                    try { await _coreDownloader.DownloadAsync(e, coresFolder, prog); }
+                    catch (Exception ex) { failed++; System.Diagnostics.Trace.WriteLine($"[Cores] update {e.FileName} failed: {ex.Message}"); }
+                    done++;
+                    allProgressBar.Value = done * 100 / (double)updates.Count;
+                }
+                allProgressBar.IsVisible = false;
+                summary.Text = failed == 0 ? $"Updated {done} core(s)." : $"Done — {done - failed} ok, {failed} failed (see Logs/cores.log).";
                 BuildCoresPanel();
             };
         }
-        catch { /* update check is best-effort (offline, etc.) */ }
+        catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"[Cores] update check failed: {ex.Message}"); }
     }
 
     private static string FormatCoreName(string dllName)
