@@ -151,7 +151,9 @@ namespace Emutastic.Services
                 var response = await _http.GetAsync(url);
                 string json  = await response.Content.ReadAsStringAsync();
 
-                Log($"Login response ({(int)response.StatusCode}): {json}");
+                // Log status + size only — the ssuserInfos body carries account info (ssid, email,
+                // contributor stats); no need to spill it into screenscraper.log.
+                Log($"Login response ({(int)response.StatusCode}): {json.Length} bytes");
 
                 if (!response.IsSuccessStatusCode)
                     return ($"Server returned {(int)response.StatusCode}", 1);
