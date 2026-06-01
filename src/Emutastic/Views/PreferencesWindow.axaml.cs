@@ -341,7 +341,9 @@ public partial class PreferencesWindow : Window
             int pct = System.Math.Clamp((int)intensity.Value, 50, 200);
             this.FindControl<TextBlock>("PauseEffectIntensityValueLabel")!.Text = $"{pct}%";
             UpdateThemeConfig(c => c.PauseEffectIntensity = pct / 100.0);
-            RestartPausePreview();
+            // Re-seed the live effect in place (no fade/realloc flicker); full restart only if idle.
+            if (_pauseRunner is { HasActiveEffect: true }) _pauseRunner.SetIntensity(pct / 100.0);
+            else RestartPausePreview();
         };
     }
 

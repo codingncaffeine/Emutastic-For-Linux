@@ -62,6 +62,17 @@ namespace Emutastic.Views.PauseEffects
             BeginFadeIn();
         }
 
+        /// <summary>Change intensity in place (re-seeds the active effect) without a fade/realloc —
+        /// avoids the preview flicker when dragging the intensity slider.</summary>
+        public void SetIntensity(double intensity)
+        {
+            _intensity = intensity;
+            if (_vector != null) _vector.Init(CanvasSize(), intensity);
+            else if (_pixel != null) _pixel.Init(PixelW, PixelH, intensity);   // bitmap unchanged
+        }
+
+        public bool HasActiveEffect => _vector != null || _pixel != null;
+
         private void BeginFadeIn()
         {
             _stopping = false;
