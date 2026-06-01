@@ -105,17 +105,17 @@
          "raised metal" segments: a vertical charcoal gradient, a 1px black chisel border,
          a 1px top highlight; when selected they invert to a recessed darker fill with a
          top inner shadow + bottom rim light + OpenEmu-blue text. -->
-    <LinearGradientBrush x:Key="ToolbarRaisedFillBrush" StartPoint="0,0" EndPoint="0,1">
+    <LinearGradientBrush x:Key="ToolbarRaisedFillBrush" StartPoint="0%,0%" EndPoint="0%,100%">
         <GradientStop Offset="0.0"  Color="#FF3A3A3A"/>
         <GradientStop Offset="0.5"  Color="#FF2A2A2A"/>
         <GradientStop Offset="0.51" Color="#FF222222"/>
         <GradientStop Offset="1.0"  Color="#FF161616"/>
     </LinearGradientBrush>
-    <LinearGradientBrush x:Key="ToolbarPressedFillBrush" StartPoint="0,0" EndPoint="0,1">
+    <LinearGradientBrush x:Key="ToolbarPressedFillBrush" StartPoint="0%,0%" EndPoint="0%,100%">
         <GradientStop Offset="0.0" Color="#FF111111"/>
         <GradientStop Offset="1.0" Color="#FF1E1E1E"/>
     </LinearGradientBrush>
-    <LinearGradientBrush x:Key="ToolbarHoverFillBrush" StartPoint="0,0" EndPoint="0,1">
+    <LinearGradientBrush x:Key="ToolbarHoverFillBrush" StartPoint="0%,0%" EndPoint="0%,100%">
         <GradientStop Offset="0.0"  Color="#FF424242"/>
         <GradientStop Offset="0.5"  Color="#FF323232"/>
         <GradientStop Offset="0.51" Color="#FF2A2A2A"/>
@@ -129,7 +129,7 @@
     <SolidColorBrush x:Key="ToolbarPressedTextBrush"  Color="#FF3D8ADE"/>
     <!-- Recessed search field: chisel border + a dark top-to-bottom gradient
          (lighter at the bottom = light coming from above into the inset). -->
-    <LinearGradientBrush x:Key="SearchFillBrush" StartPoint="0,0" EndPoint="0,1">
+    <LinearGradientBrush x:Key="SearchFillBrush" StartPoint="0%,0%" EndPoint="0%,100%">
         <GradientStop Offset="0.0" Color="#FF1A1A1A"/>
         <GradientStop Offset="0.5" Color="#FF222222"/>
         <GradientStop Offset="1.0" Color="#FF2A2A2A"/>
