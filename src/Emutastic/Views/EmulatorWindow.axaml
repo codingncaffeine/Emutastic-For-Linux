@@ -35,7 +35,7 @@
             <DropShadowEffect BlurRadius="30" OffsetX="0" OffsetY="0" Opacity="0.6" Color="{DynamicResource ShadowColor}"/>
         </Border.Effect>
         <Border CornerRadius="10" ClipToBounds="True">
-            <Grid RowDefinitions="38,*">
+            <Grid RowDefinitions="38,*,Auto">
                 <!-- ══ TITLE BAR ══ -->
                 <Grid Name="CustomTitleBar" Grid.Row="0" Background="{DynamicResource BgSecondaryBrush}" ColumnDefinitions="*,Auto">
                     <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0" Spacing="7">
@@ -45,7 +45,10 @@
                                    FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}"
                                    VerticalAlignment="Center"/>
                     </StackPanel>
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0" Spacing="6">
+                    <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                VerticalAlignment="{DynamicResource WinBtnStripVAlign}"
+                                Margin="{DynamicResource WinBtnStripMargin}"
+                                Spacing="{DynamicResource WinBtnStripSpacing}">
                         <Button Name="MinimizeButton" Padding="0" Theme="{DynamicResource ActiveMinButton}" ToolTip.Tip="Minimize"/>
                         <Button Name="MaximizeButton" Padding="0" Theme="{DynamicResource ActiveMaxButton}" ToolTip.Tip="Maximize"/>
                         <Button Name="CloseButton" Padding="0" Theme="{DynamicResource ActiveCloseButton}" ToolTip.Tip="Close"/>
@@ -80,6 +83,14 @@
                         </Border>
                     </StackPanel>
                 </Panel>
+
+                <!-- ══ BOTTOM STATUS BAR ══ real fps / target / core.Run avg (matches upstream StatusText) -->
+                <Border Grid.Row="2" Background="{DynamicResource BgSecondaryBrush}" Height="22">
+                    <TextBlock Name="StatusText" Text="Starting…"
+                               FontFamily="{DynamicResource PrimaryFont}" FontSize="11"
+                               Foreground="{DynamicResource TextMutedBrush}"
+                               VerticalAlignment="Center" Margin="12,0"/>
+                </Border>
             </Grid>
         </Border>
     </Border>

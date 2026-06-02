@@ -24,7 +24,9 @@ namespace Emutastic.Views
         private WriteableBitmap? _bmp;
         private int _bmpW, _bmpH;
         private long _lastSeq;
-        private DispatcherTimer? _timer;
+        private int _videoPending;           // 0/1 guard: at most one queued present at a time (push model)
+        private DispatcherTimer? _statusTimer;
+        private int _zeroFpsSeconds;
 
         // Avalonia Key -> libretro joypad id (player 1 keyboard fallback)
         private static readonly Dictionary<Key, int> KeyMap = new()
@@ -48,6 +50,12 @@ namespace Emutastic.Views
         public EmulatorWindow(EmulatorSession session)
         {
             InitializeComponent();
+
+            // Remember the game window's size/position across sessions (config is loaded at App
+            // startup). Restore pre-show to avoid a resize flash; persist on close.
+            RestoreWindowBounds();
+            Closing += (_, _) => SaveWindowBounds();
+
             _session = session;
             _screen = this.FindControl<Image>("Screen")!;
             RenderOptions.SetBitmapInterpolationMode(_screen, BitmapInterpolationMode.None); // crisp pixels
@@ -114,15 +122,58 @@ namespace Emutastic.Views
                     if (!ok)
                     {
                         SetTitle("Emutastic — failed to start");
+                        var sf = this.FindControl<TextBlock>("StatusText");
+                        if (sf != null) sf.Text = error ?? "Failed to start";
                         System.Diagnostics.Trace.WriteLine($"[EmulatorWindow] start failed: {error}");
                         return;
                     }
                     SetTitle($"Emutastic — {_session.CoreName}");
-                    _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1000.0 / 60.0) };
-                    _timer.Tick += (_, _) => PumpFrame();
-                    _timer.Start();
+                    // PUSH present: present each frame as the core produces it (single clock = the emu
+                    // thread's pacing), matching upstream's OnVideoRefresh. A pulled present (timer or
+                    // RequestAnimationFrame) adds a second clock that beats against production → chunky.
+                    _session.FrameReady += OnFrameReady;
+                    // Bottom status bar: real fps / target / core.Run avg, refreshed once a second.
+                    _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.0) };
+                    _statusTimer.Tick += (_, _) => UpdateStatus();
+                    _statusTimer.Start();
                 });
             });
+        }
+
+        // Bottom status bar: real produced-frame rate vs target + average retro_run cost. Mirrors
+        // upstream's StatusText; the "Working…" hint catches a stalled core (e.g. a slow disc seek).
+        private void UpdateStatus()
+        {
+            var st = this.FindControl<TextBlock>("StatusText");
+            if (st == null) return;
+
+            _session.SampleStats(out int frames, out double avgRunMs);
+            double target = _session.TargetFps;
+
+            if (_session.IsPaused)
+            {
+                _zeroFpsSeconds = 0;
+                st.Text = $"Paused   (target {target:F0} fps)";
+                return;
+            }
+
+            if (frames == 0) _zeroFpsSeconds++; else _zeroFpsSeconds = 0;
+            string s = $"{frames} fps   (target {target:F0})   core.Run avg {avgRunMs:F1}ms";
+            if (_zeroFpsSeconds >= 2) s += $"   ⏳ Working… ({_zeroFpsSeconds}s with no frame)";
+            st.Text = s;
+        }
+
+        // Fired on the emu thread when a frame is produced. Marshal one blit to the UI thread at Render
+        // priority, coalescing so a slow UI can't queue a backlog (the next FrameReady is dropped while
+        // one present is pending; PumpFrame always blits the latest snapshot).
+        private void OnFrameReady()
+        {
+            if (System.Threading.Interlocked.CompareExchange(ref _videoPending, 1, 0) != 0) return;
+            Dispatcher.UIThread.Post(() =>
+            {
+                System.Threading.Interlocked.Exchange(ref _videoPending, 0);
+                PumpFrame();
+            }, DispatcherPriority.Render);
         }
 
         private void PumpFrame()
@@ -132,6 +183,10 @@ namespace Emutastic.Views
 
             if (_bmp == null || _bmpW != w || _bmpH != h)
             {
+                // NOTE: per-console display-aspect-ratio (EmulatorSession.DisplayAspectRatio, incl.
+                // TG16's 4:3 and matching upstream's universal core-AR) is a render-fidelity task on
+                // its own — it must also invert AR for 90/270 rotation. Deferred; we keep native
+                // pixel-ratio rendering (square DPI) here for now to avoid changing every game's AR.
                 _bmp = new WriteableBitmap(new PixelSize(w, h), new Vector(96, 96),
                     PixelFormat.Bgra8888, AlphaFormat.Opaque);
                 _bmpW = w; _bmpH = h;
@@ -252,9 +307,62 @@ namespace Emutastic.Views
         private void ToggleMaximize()
             => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
 
+        // ── Game-window size/position persistence (same scheme as MainWindow, separate keys) ──
+        private void RestoreWindowBounds()
+        {
+            try
+            {
+                var cfg = App.Configuration;
+                if (cfg == null) return;
+
+                double w = cfg.GetValue("emuWinWidth", 0.0);
+                double h = cfg.GetValue("emuWinHeight", 0.0);
+                int x = cfg.GetValue("emuWinLeft", int.MinValue);
+                int y = cfg.GetValue("emuWinTop", int.MinValue);
+                bool maximized = cfg.GetValue("emuWinMaximized", false);
+
+                if (w >= MinWidth && h >= MinHeight)
+                {
+                    Width = w;
+                    Height = h;
+                }
+                if (x != int.MinValue && y != int.MinValue)
+                {
+                    WindowStartupLocation = WindowStartupLocation.Manual;
+                    Position = new PixelPoint(x, y);
+                }
+                if (maximized)
+                    WindowState = WindowState.Maximized;
+            }
+            catch { /* fall back to the XAML default size */ }
+        }
+
+        private void SaveWindowBounds()
+        {
+            try
+            {
+                var cfg = App.Configuration;
+                if (cfg == null) return;
+
+                cfg.SetValue("emuWinMaximized", WindowState == WindowState.Maximized);
+                if (WindowState == WindowState.Normal)
+                {
+                    cfg.SetValue("emuWinWidth", ClientSize.Width);
+                    cfg.SetValue("emuWinHeight", ClientSize.Height);
+                    cfg.SetValue("emuWinLeft", Position.X);
+                    cfg.SetValue("emuWinTop", Position.Y);
+                }
+                // Off the UI thread — SaveAsync captures the UI context across its awaits, which can
+                // deadlock against a blocking save on close (see MainWindow.SaveWindowBounds).
+                _ = System.Threading.Tasks.Task.Run(() => cfg.SaveAsync());
+            }
+            catch { /* best-effort on close */ }
+        }
+
         private void OnClosed(object? sender, EventArgs e)
         {
-            _timer?.Stop();
+            _session.FrameReady -= OnFrameReady;   // stop presenting before teardown
+            _statusTimer?.Stop();
             _hudHideTimer?.Stop();
             _pauseRunner?.Dispose();
             // GOLDEN RULE: Dispose joins the emu thread (up to 5s) and tears down native resources —

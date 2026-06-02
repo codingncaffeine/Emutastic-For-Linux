@@ -37,6 +37,17 @@ sealed class Program
             return;
         }
 
+        // Timeline anchors for the cold-start hunt:
+        //  • "+Nms since exec" = time from process launch to reaching Main = .NET runtime load + JIT
+        //    of the startup path (the part ReadyToRun precompilation would cut).
+        //  • The gap from here to the first App.* phase = Avalonia platform init (X11 + Skia +
+        //    HarfBuzz + Inter font / fontconfig) — happens before the window maps.
+        try
+        {
+            var sinceExec = DateTime.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime;
+            Emutastic.Services.StartupTrace.Mark($"program_main_start (+{sinceExec.TotalMilliseconds:F0}ms since exec)");
+        }
+        catch { Emutastic.Services.StartupTrace.Mark("program_main_start"); }
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }
 

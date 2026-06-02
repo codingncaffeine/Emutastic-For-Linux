@@ -3,6 +3,7 @@
         xmlns:conv="using:Emutastic.Converters"
         xmlns:vm="using:Emutastic.ViewModels"
         xmlns:models="using:Emutastic.Models"
+        xmlns:ctl="using:Emutastic.Controls"
         x:Class="Emutastic.Views.MainWindow"
         x:DataType="vm:MainViewModel"
         x:CompileBindings="False"
@@ -39,8 +40,12 @@
             <Grid Grid.Column="1" Background="{DynamicResource BgSecondaryBrush}" ColumnDefinitions="*,Auto">
                 <!-- drag zone -->
                 <Border Name="DragZone" Grid.Column="0" Background="Transparent"/>
-                <!-- window buttons — style (mac / Win11 / Linux) swaps via Active*Button -->
-                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0" Spacing="6">
+                <!-- window buttons — style (mac / Win11 / Linux) swaps via Active*Button; the strip
+                     layout (margin/spacing/v-align) also swaps so Win11 sits flush in the corner -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal"
+                            VerticalAlignment="{DynamicResource WinBtnStripVAlign}"
+                            Margin="{DynamicResource WinBtnStripMargin}"
+                            Spacing="{DynamicResource WinBtnStripSpacing}">
                     <Button Name="MinimizeButton" Padding="0" Theme="{DynamicResource ActiveMinButton}" ToolTip.Tip="Minimize"/>
                     <Button Name="MaximizeButton" Padding="0" Theme="{DynamicResource ActiveMaxButton}" ToolTip.Tip="Maximize"/>
                     <Button Name="CloseButton" Padding="0" Theme="{DynamicResource ActiveCloseButton}" ToolTip.Tip="Close"/>
@@ -56,13 +61,13 @@
                 <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
                     <StackPanel Name="SidebarPanel" Margin="0,6,0,12">
                         <TextBlock Text="LIBRARY" Theme="{DynamicResource LabelMuted}" Margin="16,10,0,4"/>
-                        <Button Theme="{DynamicResource SidebarItemStyle}" Content="All Games"
+                        <Button Theme="{DynamicResource SidebarItemStyle}" Content="All Games" Tag="All Games"
                                 Command="{Binding NavigateToAllGamesCommand}"/>
-                        <Button Theme="{DynamicResource SidebarItemStyle}" Content="◷  Recently Played"
+                        <Button Theme="{DynamicResource SidebarItemStyle}" Content="◷  Recently Played" Tag="Recent"
                                 Command="{Binding NavigateToRecentCommand}"/>
-                        <Button Theme="{DynamicResource SidebarItemStyle}" Content="♡  Favorites"
+                        <Button Theme="{DynamicResource SidebarItemStyle}" Content="♡  Favorites" Tag="Favorites"
                                 Command="{Binding NavigateToFavoritesCommand}"/>
-                        <Button Theme="{DynamicResource SidebarItemStyle}" Content="Recently Added"
+                        <Button Theme="{DynamicResource SidebarItemStyle}" Content="Recently Added" Tag="RecentlyAdded"
                                 Command="{Binding NavigateToRecentlyAddedCommand}"/>
 
                         <Rectangle Height="1" Fill="{DynamicResource BorderSubtleBrush}" Margin="12,8"/>
@@ -163,18 +168,63 @@
                 <Border Grid.Row="0" Background="{DynamicResource BgSecondaryBrush}"
                         BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,1">
                     <Grid ColumnDefinitions="Auto,*,Auto">
-                        <!-- LEFT: grid/list view toggles (connected metallic segment).
-                             Wrapper Border carries the float drop shadow so the segments
-                             lift off the toolbar (upstream BlurRadius 6 / down 1 / 0.55). -->
-                        <Border Grid.Column="0" Background="Transparent" Margin="12,0,0,0" VerticalAlignment="Center">
-                            <Border.Effect>
-                                <DropShadowEffect BlurRadius="6" OffsetX="0" OffsetY="1" Opacity="0.55" Color="Black"/>
-                            </Border.Effect>
-                            <StackPanel Orientation="Horizontal">
-                                <ToggleButton Name="ViewGrid" Theme="{StaticResource ViewGridToggle}" IsChecked="True" Tag="Grid" ToolTip.Tip="Grid view"/>
-                                <ToggleButton Name="ViewList" Theme="{StaticResource ViewListToggle}" Tag="List" ToolTip.Tip="List view"/>
-                            </StackPanel>
-                        </Border>
+                        <!-- LEFT: grid/list view toggles + 2D/3D box-art toggle. -->
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                            <!-- grid/list view toggles (connected metallic segment). Wrapper Border
+                                 carries the float drop shadow so the segments lift off the toolbar
+                                 (upstream BlurRadius 6 / down 1 / 0.55). -->
+                            <Border Background="Transparent" Margin="12,0,0,0" VerticalAlignment="Center">
+                                <Border.Effect>
+                                    <DropShadowEffect BlurRadius="6" OffsetX="0" OffsetY="1" Opacity="0.55" Color="Black"/>
+                                </Border.Effect>
+                                <StackPanel Orientation="Horizontal">
+                                    <ToggleButton Name="ViewGrid" Theme="{StaticResource ViewGridToggle}" IsChecked="True" Tag="Grid" ToolTip.Tip="Grid view"/>
+                                    <ToggleButton Name="ViewList" Theme="{StaticResource ViewListToggle}" Tag="List" ToolTip.Tip="List view"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- 2D / 3D box-art toggle — hidden until the current view has 3D box art
+                                 (set visible by UpdateBoxArtToggleVisibility / BoxArt3DFetched). -->
+                            <Border Name="BoxArtTogglePanel" Background="Transparent" Margin="6,0,0,0"
+                                    VerticalAlignment="Center" IsVisible="False">
+                                <Border.Effect>
+                                    <DropShadowEffect BlurRadius="6" OffsetX="0" OffsetY="1" Opacity="0.55" Color="Black"/>
+                                </Border.Effect>
+                                <StackPanel Orientation="Horizontal">
+                                    <ToggleButton Name="BoxArt2D" Theme="{StaticResource BoxArt2DToggle}" IsChecked="True" Tag="2D" ToolTip.Tip="2D Box Art"/>
+                                    <ToggleButton Name="BoxArt3D" Theme="{StaticResource BoxArt3DToggle}" Tag="3D" ToolTip.Tip="3D Box Art"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Per-console card spacing: fused H/V cap + slider. The cap toggles which
+                                 axis the slider drives; each console remembers its own H and V spacing
+                                 (ThemeConfiguration.PerConsoleSpacing). Visible only on a single-console
+                                 library (hidden in Recent / Favorites / All Games / Collection). -->
+                            <Border Name="SpacingControlPanel" Margin="8,0,0,0" Height="26"
+                                    VerticalAlignment="Center" IsVisible="False"
+                                    Background="{DynamicResource ToolbarRaisedFillBrush}"
+                                    BorderBrush="{DynamicResource ToolbarChiselBrush}"
+                                    BorderThickness="1" CornerRadius="6">
+                                <Grid Width="118" ColumnDefinitions="22,*">
+                                    <Border Name="SpacingHVCap" Grid.Column="0" Background="Transparent"
+                                            BorderThickness="0,0,1,0" BorderBrush="{DynamicResource ToolbarChiselBrush}"
+                                            Cursor="Hand" ToolTip.Tip="Click to toggle Horizontal / Vertical spacing">
+                                        <TextBlock Name="SpacingHVLabel" Text="H" FontSize="10" FontWeight="SemiBold"
+                                                   FontFamily="{DynamicResource PrimaryFont}"
+                                                   Foreground="{DynamicResource ToolbarRaisedTextBrush}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center">
+                                            <TextBlock.Effect>
+                                                <DropShadowEffect BlurRadius="0" OffsetX="0" OffsetY="1" Opacity="0.85" Color="Black"/>
+                                            </TextBlock.Effect>
+                                        </TextBlock>
+                                    </Border>
+                                    <Slider Name="SpacingSliderToolbar" Grid.Column="1" Minimum="4" Maximum="96" Value="20"
+                                            Margin="6,0,8,0" VerticalAlignment="Center"
+                                            Theme="{StaticResource ToolbarSpacingSlider}"
+                                            ToolTip.Tip="Drag to adjust spacing for this library"/>
+                                </Grid>
+                            </Border>
+                        </StackPanel>
 
                         <!-- CENTER: Library / Save States / Screenshots / Achievements tabs —
                              same float drop shadow lets the metallic segments float. -->
@@ -234,13 +284,36 @@
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                     <ListBox.ItemsPanel>
                         <ItemsPanelTemplate>
-                            <WrapPanel Orientation="Horizontal"/>
+                            <ctl:VirtualizingWrapPanel/>
                         </ItemsPanelTemplate>
                     </ListBox.ItemsPanel>
                     <ListBox.Styles>
                         <Style Selector="ListBoxItem">
                             <Setter Property="Padding" Value="0"/>
                             <Setter Property="Background" Value="Transparent"/>
+                        </Style>
+                        <!-- Game cards show NO Fluent chrome at all — no fill or accent border on hover,
+                             selection, press, or focus (the card art is the only visual). Kill both the
+                             background and the border for every state. -->
+                        <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="BorderBrush" Value="Transparent"/>
+                        </Style>
+                        <Style Selector="ListBoxItem:pressed /template/ ContentPresenter#PART_ContentPresenter">
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="BorderBrush" Value="Transparent"/>
+                        </Style>
+                        <Style Selector="ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="BorderBrush" Value="Transparent"/>
+                        </Style>
+                        <Style Selector="ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="BorderBrush" Value="Transparent"/>
+                        </Style>
+                        <Style Selector="ListBoxItem:selected:pressed /template/ ContentPresenter#PART_ContentPresenter">
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="BorderBrush" Value="Transparent"/>
                         </Style>
                     </ListBox.Styles>
                     <ListBox.ItemTemplate>
@@ -253,7 +326,12 @@
                                         <Border.Height>
                                             <MultiBinding Converter="{StaticResource ConsoleToArtHeight}">
                                                 <Binding Path="Console"/>
-                                                <Binding Path="Width" RelativeSource="{RelativeSource Self}"/>
+                                                <!-- Read the ANCESTOR card Border's Width (it carries the live
+                                                     LibraryCardWidth DynamicResource). Binding to Self here gives
+                                                     NaN — the art Border stretches and has no Width property set —
+                                                     so the MultiBinding would never re-fire and the card couldn't
+                                                     resize (matches upstream's AncestorLevel=1 Border binding). -->
+                                                <Binding Path="Width" RelativeSource="{RelativeSource AncestorType=Border}"/>
                                                 <Binding Path="DataContext.IsMixedView" RelativeSource="{RelativeSource AncestorType=ListBox}"/>
                                             </MultiBinding>
                                         </Border.Height>
@@ -269,8 +347,9 @@
                                                        TextWrapping="Wrap" TextAlignment="Center"
                                                        VerticalAlignment="Center" HorizontalAlignment="Center" Margin="12"
                                                        IsVisible="{Binding DisplayArtPath, Converter={StaticResource NullOrEmptyToBool}}"/>
-                                            <!-- box art -->
-                                            <Image Source="{Binding DisplayArtPath, Converter={StaticResource PathToImage}}"
+                                            <!-- box art — loaded async (never decodes on the UI thread)
+                                                 so realizing the visible cards can't freeze the grid -->
+                                            <Image ctl:AsyncImage.SourcePath="{Binding DisplayArtPath}"
                                                    Stretch="Uniform" HorizontalAlignment="Left" VerticalAlignment="Top"
                                                    IsVisible="{Binding DisplayArtPath, Converter={StaticResource NotNullOrEmptyToBool}}"/>
                                             <!-- favorite heart -->

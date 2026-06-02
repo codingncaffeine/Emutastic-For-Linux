@@ -34,6 +34,11 @@ namespace Emutastic.Platform
                   RJ_LEFT = 6, RJ_RIGHT = 7, RJ_A = 8, RJ_X = 9, RJ_L = 10, RJ_R = 11,
                   RJ_L3 = 14, RJ_R3 = 15;
         const int JOYPAD_COUNT = 16;
+        public const uint RETRO_DEVICE_ANALOG = 5;
+        // Set per-console from the handler: analog consoles (PS1/N64/GC…) report stick values; digital
+        // consoles (NES/Genesis/arcade…) instead let the left stick drive the d-pad.
+        public bool UsesAnalogStick;
+        public bool PromoteAnalogStickToDpad;
 
         // libretro joypad id -> SDL gamepad button (-1 = unmapped for M2, e.g. L2/R2 triggers)
         static readonly int[] _retroToSdl = BuildMap();
@@ -209,6 +214,11 @@ namespace Emutastic.Platform
         /// <summary>libretro retro_input_state_t backend.</summary>
         public short GetInputState(uint port, uint device, uint index, uint id)
         {
+            // Analog consoles report the raw stick axis (SDL's Sint16 range == libretro's). Digital
+            // consoles return 0 here — their stick is folded into the d-pad below instead.
+            if (device == RETRO_DEVICE_ANALOG)
+                return UsesAnalogStick ? ReadAnalog(port, index, id) : (short)0;
+
             if (device != RETRO_DEVICE_JOYPAD || id >= JOYPAD_COUNT) return 0;
 
             bool pressed = false;
@@ -227,12 +237,39 @@ namespace Emutastic.Platform
                     int sdlBtn = _retroToSdl[(int)id];
                     if (sdlBtn >= 0 && SDL_GetGamepadButton(h, sdlBtn)) pressed = true;
                 }
+
+                // Digital consoles: let the left analog stick drive the d-pad when no digital
+                // direction is held (handler.PromoteAnalogStickToDpad).
+                if (!pressed && PromoteAnalogStickToDpad)
+                    pressed = (int)id switch
+                    {
+                        RJ_UP    => SDL_GetGamepadAxis(h, AXIS_LEFTY) < -STICK_THRESHOLD,
+                        RJ_DOWN  => SDL_GetGamepadAxis(h, AXIS_LEFTY) >  STICK_THRESHOLD,
+                        RJ_LEFT  => SDL_GetGamepadAxis(h, AXIS_LEFTX) < -STICK_THRESHOLD,
+                        RJ_RIGHT => SDL_GetGamepadAxis(h, AXIS_LEFTX) >  STICK_THRESHOLD,
+                        _        => false
+                    };
             }
 
             // keyboard fallback only for player 1
             if (port == 0 && _kbd[(int)id]) pressed = true;
 
             return pressed ? (short)1 : (short)0;
+        }
+
+        // RETRO_DEVICE_ANALOG: index 0 = left stick, 1 = right; id 0 = X, 1 = Y. SDL_GetGamepadAxis
+        // already returns the -32768..32767 range libretro expects.
+        private short ReadAnalog(uint port, uint index, uint id)
+        {
+            if (port >= (uint)_pads.Count) return 0;
+            IntPtr h = _pads[(int)port].handle;
+            int axis = (index, id) switch
+            {
+                (0u, 0u) => AXIS_LEFTX,  (0u, 1u) => AXIS_LEFTY,
+                (1u, 0u) => AXIS_RIGHTX, (1u, 1u) => AXIS_RIGHTY,
+                _        => -1
+            };
+            return axis < 0 ? (short)0 : SDL_GetGamepadAxis(h, axis);
         }
 
         public void Dispose()

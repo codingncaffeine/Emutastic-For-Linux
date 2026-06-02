@@ -8,6 +8,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
+using Avalonia.LogicalTree;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
@@ -36,6 +37,12 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+
+        // Restore the saved window size/position from the previous session (config is loaded at App
+        // startup, before this ctor runs) and persist it on close. Done here, pre-show, so there's
+        // no resize flash.
+        RestoreWindowBounds();
+        Closing += (_, _) => SaveWindowBounds();
 
         Platform.WindowResize.Enable(this);   // edge/corner resize for the borderless window
         Activated += OnMainActivated;          // click back on the app → dismiss the game-detail card
@@ -120,11 +127,80 @@ public partial class MainWindow : Window
         this.FindControl<ToggleButton>("ViewGrid")!.Click += OnViewToggle;
         this.FindControl<ToggleButton>("ViewList")!.Click += OnViewToggle;
 
+        // 2D / 3D box-art toggle (hidden until the current view has 3D art).
+        this.FindControl<ToggleButton>("BoxArt2D")!.Click += OnBoxArtToggle;
+        this.FindControl<ToggleButton>("BoxArt3D")!.Click += OnBoxArtToggle;
+
+        // Per-console card spacing: H/V cap flips the axis; slider drags persist that axis.
+        this.FindControl<Border>("SpacingHVCap")!.PointerPressed += (_, _) => SpacingHVToggle();
+        var spacingSlider = this.FindControl<Slider>("SpacingSliderToolbar")!;
+        spacingSlider.PropertyChanged += (_, e) =>
+        {
+            if (_spacingControlSuppressEvents || e.Property.Name != nameof(Slider.Value)) return;
+            OnSpacingSliderChanged(spacingSlider.Value);
+        };
+
         Opened += OnOpened;
     }
 
     private void ToggleMaximize() =>
         WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+
+    // ── Window size/position persistence (mirrors upstream Restore/SaveMainWindowBounds) ──
+    private void RestoreWindowBounds()
+    {
+        try
+        {
+            var cfg = App.Configuration;
+            if (cfg == null) return;
+
+            double w = cfg.GetValue("mainWinWidth", 0.0);
+            double h = cfg.GetValue("mainWinHeight", 0.0);
+            int x = cfg.GetValue("mainWinLeft", int.MinValue);
+            int y = cfg.GetValue("mainWinTop", int.MinValue);
+            bool maximized = cfg.GetValue("mainWinMaximized", false);
+
+            if (w >= MinWidth && h >= MinHeight)
+            {
+                Width = w;
+                Height = h;
+            }
+            if (x != int.MinValue && y != int.MinValue)
+            {
+                WindowStartupLocation = WindowStartupLocation.Manual;
+                Position = new PixelPoint(x, y);
+            }
+            if (maximized)
+                WindowState = WindowState.Maximized;
+        }
+        catch { /* fall back to the XAML default size */ }
+    }
+
+    private void SaveWindowBounds()
+    {
+        try
+        {
+            var cfg = App.Configuration;
+            if (cfg == null) return;
+
+            cfg.SetValue("mainWinMaximized", WindowState == WindowState.Maximized);
+            // Only capture size/position in the Normal state, so we restore the pre-maximize bounds.
+            // ClientSize is the reliable current size for our borderless custom-chrome window
+            // (Width/Height aren't updated by the platform on a user resize).
+            if (WindowState == WindowState.Normal)
+            {
+                cfg.SetValue("mainWinWidth", ClientSize.Width);
+                cfg.SetValue("mainWinHeight", ClientSize.Height);
+                cfg.SetValue("mainWinLeft", Position.X);
+                cfg.SetValue("mainWinTop", Position.Y);
+            }
+            // Persist off the UI thread. Calling SaveAsync directly on the UI thread here deadlocks:
+            // it captures the UI context across its awaits while the OnOpened Closing handler blocks
+            // the UI thread on Task.Run(SaveAsync).GetResult() waiting for the same _saveLock.
+            _ = System.Threading.Tasks.Task.Run(() => cfg.SaveAsync());
+        }
+        catch { /* best-effort on close */ }
+    }
 
     // Tab strip: keep one checked and swap the content view. Library / Save States /
     // Screenshots are live; Achievements lands in U8 (status note + blank content).
@@ -233,6 +309,158 @@ public partial class MainWindow : Window
         this.FindControl<DataGrid>("GameListView")!.IsVisible = list;
     }
 
+    // Switches the library between 2D cover art and 3D box art for the current console (or every
+    // console in a favorites/grouped view), persists the choice, and rebinds the tiles. Mirrors
+    // upstream MainWindow.BoxArtToggle_Click.
+    private void OnBoxArtToggle(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not ToggleButton clicked || _vm == null) return;
+        bool use3D = clicked.Tag as string == "3D";
+        this.FindControl<ToggleButton>("BoxArt2D")!.IsChecked = !use3D;
+        this.FindControl<ToggleButton>("BoxArt3D")!.IsChecked = use3D;
+
+        if (_vm.IsShowingFavorites)
+        {
+            foreach (var c in _vm.Games.Select(g => g.Console).Distinct())
+            {
+                if (use3D) Game.EnableConsole3D(c);
+                else       Game.DisableConsole3D(c);
+            }
+        }
+        else
+        {
+            string console = _vm.SelectedConsole ?? "";
+            if (use3D) Game.EnableConsole3D(console);
+            else       Game.DisableConsole3D(console);
+        }
+
+        // Persist which consoles display 3D box art (restored at startup).
+        var snapConfig = App.Configuration?.GetSnapConfiguration();
+        if (snapConfig != null)
+        {
+            snapConfig.Use3DBoxArtConsoles = new System.Collections.Generic.List<string>(Game.Consoles3D);
+            App.Configuration!.SetSnapConfiguration(snapConfig);
+        }
+
+        // Consoles3D is static, so changing it raises no per-game PropertyChanged — re-seat the
+        // games collection (which favorites/all-games/console views all bind to) so DisplayArtPath
+        // is re-read and the tiles swap art.
+        _vm.RefreshAllGames();
+    }
+
+    // Shows the 2D/3D toggle only when the current view has any 3D box art, and syncs the
+    // checked segment to the current console's preference. Mirrors upstream UpdateBoxArtToggleVisibility.
+    private void UpdateBoxArtToggleVisibility()
+    {
+        var panel = this.FindControl<Border>("BoxArtTogglePanel");
+        if (panel == null || _vm == null) return;
+
+        bool any3D = _vm.Games?.Any(g => !string.IsNullOrEmpty(g.BoxArt3DPath)) == true;
+        panel.IsVisible = any3D;
+        if (any3D)
+        {
+            string console = _vm.SelectedConsole ?? "";
+            bool is3D = Game.Consoles3D.Contains(console);
+            this.FindControl<ToggleButton>("BoxArt2D")!.IsChecked = !is3D;
+            this.FindControl<ToggleButton>("BoxArt3D")!.IsChecked = is3D;
+        }
+    }
+
+    // ── Per-console card spacing (toolbar H/V cap + slider) ──
+    private string _spacingAxis = "H";              // which axis the slider currently drives
+    private bool _spacingControlSuppressEvents;     // suppress the slider's change handler during a programmatic reload
+    private string _currentNavTag = "All Games";    // tag of the library view currently shown
+
+    // Console tags get a per-console spacing control; category views (All Games / Recent /
+    // Favorites / RecentlyAdded / Collection:*) use the global spacing and hide the control.
+    private static bool IsConsoleTag(string? tag)
+        => !string.IsNullOrEmpty(tag)
+           && tag != "All Games" && tag != "Recent"
+           && tag != "Favorites" && tag != "RecentlyAdded"
+           && !tag.StartsWith("Collection:");
+
+    // Runs after every navigation: keeps the 2D/3D toggle and the per-console spacing control in sync.
+    private void OnNavigated(string tag)
+    {
+        _currentNavTag = tag;
+        UpdateBoxArtToggleVisibility();
+        UpdateSpacingControl(tag, IsConsoleTag(tag));
+        HighlightSidebar(tag);
+    }
+
+    // Keep the selected library/console lit in the sidebar (persistent, same fill as hover) so it's
+    // clear which console you're in / importing to. Console buttons match by CommandParameter; the
+    // category buttons (All Games / Recent / Favorites / Recently Added) match by Tag.
+    private void HighlightSidebar(string tag)
+    {
+        var panel = this.FindControl<StackPanel>("SidebarPanel");
+        if (panel == null) return;
+        foreach (var btn in panel.GetLogicalDescendants().OfType<Button>())
+        {
+            string? btnTag = (btn.CommandParameter as string) ?? (btn.Tag as string);
+            btn.Classes.Set("selected", btnTag == tag);
+        }
+    }
+
+    // Show/hide the toolbar spacing control on navigation and load the active console's values.
+    private void UpdateSpacingControl(string tag, bool isConsoleView)
+    {
+        var panel = this.FindControl<Border>("SpacingControlPanel");
+        if (panel == null) return;
+        panel.IsVisible = isConsoleView;
+
+        // Mirror the active console on App so the SOLE layout writer honors this console's
+        // per-console override on any trigger (prefs save, theme change) instead of stomping it
+        // back to the global value. null on category views → global spacing.
+        App.ActiveConsoleTag = isConsoleView ? tag : null;
+        App.ApplyLibraryLayout();
+
+        if (!isConsoleView) return;
+        var (h, v) = App.ResolvePerConsoleSpacing(tag);
+        ReloadSpacingSliderValue(h, v);
+    }
+
+    // Tap the H/V cap to flip which axis the slider drives, and show that axis's current value.
+    private void SpacingHVToggle()
+    {
+        if (!IsConsoleTag(_currentNavTag)) return;
+        _spacingAxis = _spacingAxis == "H" ? "V" : "H";
+        var lbl = this.FindControl<TextBlock>("SpacingHVLabel");
+        if (lbl != null) lbl.Text = _spacingAxis;
+        var (h, v) = App.ResolvePerConsoleSpacing(_currentNavTag);
+        ReloadSpacingSliderValue(h, v);
+    }
+
+    // Slider drag writes the new value back to this console's per-console spacing for the active axis.
+    private void OnSpacingSliderChanged(double value)
+    {
+        if (!IsConsoleTag(_currentNavTag)) return;
+        var (h, v) = App.ResolvePerConsoleSpacing(_currentNavTag);
+        int newVal = (int)System.Math.Round(value);
+        if (_spacingAxis == "H") h = newVal; else v = newVal;
+
+        var theme = App.Configuration?.GetThemeConfiguration();
+        if (theme != null)
+        {
+            theme.PerConsoleSpacing ??= new();   // guard a hand-edited "perConsoleSpacing": null
+            theme.PerConsoleSpacing[_currentNavTag] = $"{h},{v}";
+            // SetThemeConfiguration already schedules a debounced save; no direct SaveAsync per
+            // drag pixel (the on-close flush persists the final value).
+            App.Configuration!.SetThemeConfiguration(theme);
+        }
+        App.ApplyLibraryLayout();   // route through the sole writer (honors ActiveConsoleTag)
+    }
+
+    // Reload the slider's displayed value from per-console state without re-firing the change handler.
+    private void ReloadSpacingSliderValue(int h, int v)
+    {
+        var slider = this.FindControl<Slider>("SpacingSliderToolbar");
+        if (slider == null) return;
+        _spacingControlSuppressEvents = true;
+        slider.Value = _spacingAxis == "H" ? h : v;
+        _spacingControlSuppressEvents = false;
+    }
+
     private void OnOpened(object? sender, EventArgs e)
     {
         if (Environment.GetEnvironmentVariable("EMUTASTIC_SHOT") == "1")
@@ -243,18 +471,25 @@ public partial class MainWindow : Window
 
         // GOLDEN RULE: construct services + VM on the UI thread (they capture
         // SynchronizationContext.Current); the heavy library read runs off-thread.
-        App.Configuration ??= new JsonConfigurationService();
-        // Load persisted settings before anything reads them (theme, library, etc.).
-        // Run on the thread pool + block briefly so LoadAsync's continuations don't
-        // need the UI thread (no deadlock); the config file is tiny + read once.
-        try { Task.Run(() => App.Configuration!.LoadAsync()).GetAwaiter().GetResult(); }
-        catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"config load failed: {ex.Message}"); }
-        // Flush any pending settings on exit (catch-all for changes not yet debounce-saved).
+        // Config is normally loaded at App startup (before any window is created). Only load here as
+        // a fallback if that didn't happen — re-loading on the UI thread otherwise just re-reads the
+        // file for no reason and slows the open.
+        if (App.Configuration == null)
+        {
+            App.Configuration = new JsonConfigurationService();
+            var swCfg = Services.StartupTrace.Start();
+            try { Task.Run(() => App.Configuration!.LoadAsync()).GetAwaiter().GetResult(); }
+            catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"config load failed: {ex.Message}"); }
+            Services.StartupTrace.Stop("MainWindow.LoadConfiguration", swCfg);
+        }
+        // Flush pending settings + stop the freeze watchdog on exit.
         Closing += (_, _) =>
         {
+            Services.UiFreezeWatchdog.Instance.Stop();
             try { Task.Run(() => App.Configuration?.SaveAsync() ?? Task.CompletedTask).GetAwaiter().GetResult(); }
             catch { /* best-effort on shutdown */ }
         };
+        var swSvc = Services.StartupTrace.Start();
         _db = new DatabaseService();
         _coreManager = new CoreManager(App.Configuration);
         _importer = new ImportService(_db, _coreManager, App.Configuration);
@@ -262,12 +497,7 @@ public partial class MainWindow : Window
         _artworkFetch = new ArtworkFetchService(_db, new ArtworkService(), _vm);
         WireImportEvents();
         DataContext = _vm;
-
-        // Retry artwork that didn't finish downloading last session (e.g. the app was closed
-        // mid-download). Repairs games whose art is already cached on disk but the DB path was
-        // lost, then re-fetches the rest silently (subsequent attempts bump ArtworkAttempts).
-        // Matches upstream's startup call; the method self-delays 500ms so the window renders first.
-        _ = _artworkFetch.RetryMissingArtworkAsync();
+        Services.StartupTrace.Stop("MainWindow.CreateServices", swSvc);
 
         // Apply the saved ScreenScraper thread allowance at startup (upstream MainWindow). Without
         // this, CurrentMaxThreads stays 1 until the user re-runs Test Login, so the metadata/3D-art
@@ -275,18 +505,53 @@ public partial class MainWindow : Window
         var snapCfg = App.Configuration?.GetSnapConfiguration();
         if (snapCfg != null) Services.ScreenScraperService.SetMaxThreads(snapCfg.ScreenScraperMaxThreads);
 
+        // Restore which consoles display 3D box art (persisted by BoxArtToggle_Click). Matches
+        // upstream MainWindow startup — without this the 2D/3D toggle always defaults to 2D.
+        if (snapCfg?.Use3DBoxArtConsoles?.Count > 0)
+            Models.Game.Consoles3D = new System.Collections.Generic.HashSet<string>(snapCfg.Use3DBoxArtConsoles);
+
+        // The 2D/3D box-art toggle is hidden unless the current view has 3D art. Re-evaluate after
+        // every navigation, and force it visible the moment a 3D-art download finishes.
+        _vm.Navigated += tag => Dispatcher.UIThread.Post(() => OnNavigated(tag));
+        _artworkFetch.BoxArt3DFetched += () => Dispatcher.UIThread.Post(() =>
+        {
+            var panel = this.FindControl<Border>("BoxArtTogglePanel");
+            if (panel != null) panel.IsVisible = true;
+        });
+
+        // Heal an interrupted import FIRST, then retry artwork. A close mid-import strands games with
+        // no hash (the hash+art background tasks never ran), and unhashed games are invisible to the
+        // artwork retry — so they'd never get art. ResumeIncompleteImportsAsync re-hashes them in a fast
+        // local pass; only then can RetryMissingArtworkAsync (which matches on hash) fetch their art.
+        // Both run off the UI thread; the resume is awaited so hashes exist before the retry queries.
+        // DEFERRED: this work can be heavy (re-hashing hundreds of stranded ROM files + network
+        // artwork fetches). Even off the UI thread it saturates disk/CPU, so kicking it off during
+        // launch makes the freshly-shown window feel sluggish. Wait until the UI has settled before
+        // starting it — the golden rule is the app must never feel slow, and nothing here is urgent.
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            await System.Threading.Tasks.Task.Delay(2500);
+            Services.StartupTrace.Mark("deferred_startup_work_begin");
+            try { await _importer.ResumeIncompleteImportsAsync(); }
+            catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"[MainWindow] resume failed: {ex.Message}"); }
+            await _artworkFetch.RetryMissingArtworkAsync();
+            Services.StartupTrace.Mark("deferred_startup_work_done");
+        });
+
         // Warm LibVLC off the UI thread so the first detail-card snap video doesn't
         // pay the multi-second native init on the dispatcher.
         VideoPlaybackService.Instance.StartWarmup();
 
         // Apply the saved/default theme palette into Application.Resources (enables Light/OLED/Midnight;
         // for Dark this matches the static DarkTheme.axaml values).
+        var swTheme = Services.StartupTrace.Start();
         try
         {
             string? themeId = App.Configuration?.GetThemeConfiguration()?.ActiveThemeId;
             ThemeService.Instance.LoadAndApplyTheme(string.IsNullOrEmpty(themeId) ? "builtin.dark" : themeId);
         }
         catch { /* theme apply is best-effort; static dark palette is the fallback */ }
+        Services.StartupTrace.Stop("MainWindow.ApplyTheme", swTheme);
 
         // Library layout (Preferences → Theme → Layout): push saved padding/card-size/spacing into
         // the grid's DynamicResources before first layout.
@@ -308,10 +573,15 @@ public partial class MainWindow : Window
 
         Task.Run(() =>
         {
+            var swReload = Services.StartupTrace.Start();
             _vm.Reload();
+            Services.StartupTrace.Stop("MainWindow.LibraryReload", swReload);
             Dispatcher.UIThread.Post(() =>
             {
+                var swNav = Services.StartupTrace.Start();
                 _vm.NavigateToAllGamesCommand.Execute(null);
+                Services.StartupTrace.Stop("MainWindow.NavigateToAllGames", swNav);
+                Services.StartupTrace.Mark("main_window_shown");
                 if (Environment.GetEnvironmentVariable("EMUTASTIC_SHOT") == "list")
                     OnViewToggle(this.FindControl<ToggleButton>("ViewList"), null!);
             });

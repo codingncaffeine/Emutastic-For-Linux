@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using Emutastic.Platform;
 using Emutastic.Services;
+using Emutastic.Services.ConsoleHandlers;
 
 namespace Emutastic.Emulator
 {
@@ -22,16 +24,22 @@ namespace Emutastic.Emulator
     {
         // ---- libretro environment command numbers (libretro.h) ----
         const uint ENV_SET_ROTATION = 1;   // core requests screen rotation (value × 90° CCW)
+        const uint ENV_SET_SYSTEM_AV_INFO = 32;  // core re-announces fps/sample_rate/geometry mid-run
+        const uint ENV_SET_GEOMETRY = 37;        // core re-announces geometry/aspect only
         const uint ENV_GET_OVERSCAN = 2;
         const uint ENV_GET_CAN_DUPE = 3;
         const uint ENV_SET_PERFORMANCE_LEVEL = 8;
         const uint ENV_GET_SYSTEM_DIRECTORY = 9;
         const uint ENV_SET_PIXEL_FORMAT = 10;
         const uint ENV_GET_VARIABLE = 15;
+        const uint ENV_SET_VARIABLES = 16;
         const uint ENV_GET_VARIABLE_UPDATE = 17;
+        const uint ENV_GET_CORE_OPTIONS_VERSION = 52;
         const uint ENV_GET_LOG_INTERFACE = 27;
         const uint ENV_GET_CORE_ASSETS_DIRECTORY = 30;
         const uint ENV_GET_SAVE_DIRECTORY = 31;
+        const uint ENV_SET_DISK_CONTROL_INTERFACE = 13;
+        const uint ENV_SET_DISK_CONTROL_EXT_INTERFACE = 58;
         // libretro OR's these flags into command IDs; mask them off before switching.
         const uint RETRO_ENVIRONMENT_EXPERIMENTAL = 0x10000;
         const uint RETRO_ENVIRONMENT_PRIVATE = 0x20000;
@@ -55,6 +63,23 @@ namespace Emutastic.Emulator
         private int _pixelFormat = 0; // 0=0RGB1555, 1=XRGB8888, 2=RGB565
         private double _fps = 60.0, _sampleRate = 44100;
 
+        // libretro disk-control interface (FDS / multi-disc). The core hands us these callbacks via
+        // SET_DISK_CONTROL_INTERFACE; we use them to insert disk 0 after load (FDS boots ejected →
+        // the BIOS otherwise sits on "Set the Disk Card").
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate bool SetEjectStateFn(bool ejected);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate bool SetImageIndexFn(uint index);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate bool GetEjectStateFn();
+        private SetEjectStateFn? _setEjectState;
+        private SetImageIndexFn? _setImageIndex;
+        private GetEjectStateFn? _getEjectState;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct retro_disk_control_callback   // first 7 fields are shared with the EXT version
+        {
+            public IntPtr set_eject_state, get_eject_state, get_image_index,
+                          set_image_index, get_num_images, replace_image_index, add_image_index;
+        }
+
         private Thread? _thread;
         private volatile bool _running;
         private volatile bool _paused;
@@ -72,18 +97,65 @@ namespace Emutastic.Emulator
         private int _frameW, _frameH;
         private volatile int _rotationDeg;   // 0/90/180/270, set by ENV_SET_ROTATION
         private long _frameSeq;
+        private int _frameCountSample;            // frames produced since the last SampleStats (real fps)
+        private long _coreRunTicks, _coreRunCalls; // accumulated retro_run time + call count for avg ms
 
         public string CoreName => _core?.CoreName ?? "?";
         public SdlInput Input => _input;
 
+        /// <summary>Display aspect ratio to render at (handler override, else core/geometry). 0 = use
+        /// the frame's pixel ratio. e.g. TG16 forces 4:3 regardless of the core's reported geometry.</summary>
+        public double DisplayAspectRatio { get; private set; }
+
+        /// <summary>The emulation loop's target frame rate (core-reported or handler-forced).</summary>
+        public double TargetFps => _fps;
+
+        /// <summary>Raised on the emu thread when a new frame has been published. The window presents
+        /// on this (push) — paced by the core, a single clock — instead of pulling on a timer.</summary>
+        public event Action? FrameReady;
+
+        /// <summary>Sample-and-reset the real fps + average retro_run time since the last call
+        /// (drives the bottom status bar). Safe to call from the UI thread.</summary>
+        public void SampleStats(out int frames, out double avgRunMs)
+        {
+            frames = System.Threading.Interlocked.Exchange(ref _frameCountSample, 0);
+            long ticks = System.Threading.Interlocked.Exchange(ref _coreRunTicks, 0);
+            long calls = System.Threading.Interlocked.Exchange(ref _coreRunCalls, 0);
+            avgRunMs = calls > 0 ? (double)ticks / calls / Stopwatch.Frequency * 1000.0 : 0;
+        }
+
         private readonly string _console;
+
+        // Per-console handler (core options, controller ports, aspect/fps, dirs) — keeps each console
+        // segregated so one console's quirks can't break another. See ConsoleHandlers/.
+        private readonly IConsoleHandler _handler;
+        // Resolved core options the core reads via GET_VARIABLE. Seeded from the handler, then filled
+        // in from each SET_VARIABLES announcement (first valid value when not pre-seeded).
+        private readonly Dictionary<string, string> _coreOptions = new();
+        // Persistent ANSI value pointers handed to the core via GET_VARIABLE (it keeps the pointer).
+        // _coreOptionPtrs is the current ptr per key (for the reuse check); _allocatedOptionPtrs is
+        // EVERY ptr ever handed out — we never free one mid-session (a core may still hold an old one
+        // → use-after-free), only at session end. Matches upstream's deliberate keep-alive.
+        private readonly Dictionary<string, IntPtr> _coreOptionPtrs = new();
+        private readonly List<IntPtr> _allocatedOptionPtrs = new();
+        private volatile bool _coreOptionsDirty;   // false until SET_VARIABLES announces options (upstream parity)
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct retro_variable { public IntPtr key; public IntPtr value; }
 
         public EmulatorSession(string corePath, string romPath, string console = "")
         {
             _corePath = corePath;
             _romPath = romPath;
             _console = console;
-            _input = new SdlInput();
+            _handler = ConsoleHandlerFactory.Create(console);
+            foreach (var kv in _handler.GetDefaultCoreOptions())   // pre-seed this console's curated options
+                _coreOptions[kv.Key] = kv.Value;
+            _input = new SdlInput
+            {
+                UsesAnalogStick = _handler.UsesAnalogStick,
+                PromoteAnalogStickToDpad = _handler.PromoteAnalogStickToDpad,
+            };
 
             _envCb = Environment_cb;
             _videoCb = Video_cb;
@@ -108,9 +180,13 @@ namespace Emutastic.Emulator
                 _core = new LibretroCore(_corePath);
                 // System (BIOS) and save dirs follow XDG/portable layout (AppPaths creates them);
                 // core-assets default to the core's own folder.
-                _systemDirPtr = Marshal.StringToHGlobalAnsi(AppPaths.GetFolder("System"));
-                _saveDirPtr = Marshal.StringToHGlobalAnsi(AppPaths.GetFolder("Saves"));
-                _coreAssetsDirPtr = Marshal.StringToHGlobalAnsi(System.IO.Path.GetDirectoryName(_corePath));
+                string coreDir = System.IO.Path.GetDirectoryName(_corePath) ?? "";
+                string sysDir = _handler.ResolveSystemDirectory(AppPaths.GetFolder("System"), coreDir);
+                string saveDir = AppPaths.GetFolder("Saves");
+                _handler.PrepareSaveDirectory(saveDir);   // create any console-specific subdirs (e.g. dc/)
+                _systemDirPtr = Marshal.StringToHGlobalAnsi(sysDir);
+                _saveDirPtr = Marshal.StringToHGlobalAnsi(saveDir);
+                _coreAssetsDirPtr = Marshal.StringToHGlobalAnsi(coreDir);
                 _core.SetCallbacks(_envCb, _videoCb, _audioCb, _audioBatchCb, _inputPollCb, _inputStateCb);
                 _core.Init();
 
@@ -120,7 +196,23 @@ namespace Emutastic.Emulator
                     return false;
                 }
 
+                // Per-console controller-port setup (base sets ports 0–3 to JOYPAD; PS1 → DualShock on
+                // 0–1; GameCube/Dreamcast 4 ports, which also kicks off VMU/maple attachment).
+                _handler.ConfigureControllerPorts(_core);
+
+                // FDS / multi-disc: if the core handed us a disk-control interface and booted with the
+                // disk ejected (FDS BIOS "Set the Disk Card"), insert disk 0 so the game boots. Discs
+                // that are already inserted (PS1/Saturn) are left alone.
+                TryInsertFirstDisk();
+
                 _fps = _core.AvInfo.timing.fps > 0 ? _core.AvInfo.timing.fps : 60.0;
+                double hwFps = _handler.HardwareTargetFps;   // console-forced rate (e.g. Dreamcast 60); -1 = use core
+                if (hwFps > 0) _fps = hwFps;
+
+                // Only a deliberate per-console AR override (e.g. TG16 → 4:3) changes the display; 0
+                // keeps the current pixel-ratio rendering for everything else (incl. rotated games).
+                var geo = _core.AvInfo.geometry;
+                DisplayAspectRatio = _handler.GetDisplayAspectRatio(geo.base_width, geo.base_height, geo.aspect_ratio);
                 _sampleRate = _core.AvInfo.timing.sample_rate > 0 ? _core.AvInfo.timing.sample_rate : 44100;
                 _audio = new SdlAudio((int)Math.Round(_sampleRate));
 
@@ -139,33 +231,63 @@ namespace Emutastic.Emulator
 
         private void RunLoop()
         {
-            double frameMs = 1000.0 / _fps;
-            var sw = Stopwatch.StartNew();
-            double next = sw.Elapsed.TotalMilliseconds;
+            // Recomputed each frame from _fps — the env callback (SET_SYSTEM_AV_INFO) may refine the
+            // rate mid-run (Famicom/FDS settles its timing after the BIOS boots the disk).
+            double targetFrameMs = 1000.0 / _fps;
+            // Software-core timing (upstream "Stopwatch-primary" model, see Emulation-Timing wiki):
+            // a high-res frame timer paces production; audio thresholds are only guards. Pure
+            // Thread.Sleep jitters → chunky 60fps, so we sleep most of the budget then SPIN the last ms.
+            const double prefillMs = 150, lowWatermark = 80, backpressureMs = 300;
+
+            // Pre-fill the audio buffer so it doesn't underrun at startup (underrun = crackle + a
+            // catch-up stutter as the loop races to refill). Run frames un-paced until the cushion
+            // fills, but BOUNDED (≤60 ≈ 1s) and only with a working audio device so a silent intro /
+            // no-audio device can't fast-forward seconds of game on boot.
+            for (int guard = 0; _running && _audio != null && _audio.IsOpen && _audio.QueuedMs < prefillMs && guard < 60; guard++)
+                try { _core!.Run(); } catch (Exception ex) { Trace.WriteLine($"[Emu] retro_run threw (prefill): {ex}"); break; }
+
+            var frameTimer = Stopwatch.StartNew();
             while (_running)
             {
                 // Reset is honored even while paused (so the pill's Reset isn't dead when paused).
                 if (_resetRequested) { _resetRequested = false; try { _core!.Reset(); } catch (Exception ex) { Trace.WriteLine($"[Emu] reset threw: {ex}"); } }
 
-                // Paused: stop advancing the core (frame stays frozen, audio drains to silence) but
-                // keep the thread alive + responsive. Cheap idle wait; resync timing on resume.
-                if (_paused)
-                {
-                    Thread.Sleep(16);
-                    next = sw.Elapsed.TotalMilliseconds;
-                    continue;
-                }
-                _input.Poll();
-                try { _core!.Run(); } catch (Exception ex) { Trace.WriteLine($"[Emu] retro_run threw: {ex}"); break; }
+                // Paused: stop advancing the core (frame stays frozen) but keep the thread responsive.
+                if (_paused) { Thread.Sleep(16); frameTimer.Restart(); continue; }
 
-                // Pace to the core's frame interval, but yield if the audio buffer is backed up
-                // (mirrors upstream AudioPlayer.GetBufferedMs backpressure so A/V stay in sync).
-                next += frameMs;
-                double now = sw.Elapsed.TotalMilliseconds;
-                double sleep = next - now;
-                if (_audio != null && _audio.QueuedMs > 100) sleep = Math.Max(sleep, _audio.QueuedMs - 100);
-                if (sleep > 0) Thread.Sleep((int)Math.Min(sleep, 100));
-                else if (sleep < -250) next = now; // fell far behind; resync rather than spiral
+                _input.Poll();
+
+                // Backpressure: if audio has run well ahead (core got ahead of real time), SKIP this
+                // frame's run so the buffer drains during the pacing wait — don't spin-then-run, which
+                // adds audio faster than it drains and burns CPU.
+                bool overBuffered = _audio != null && _audio.QueuedMs > backpressureMs;
+                if (!overBuffered)
+                {
+                    long runT0 = frameTimer.ElapsedTicks;
+                    try { _core!.Run(); } catch (Exception ex) { Trace.WriteLine($"[Emu] retro_run threw: {ex}"); break; }
+                    System.Threading.Interlocked.Add(ref _coreRunTicks, frameTimer.ElapsedTicks - runT0);
+                    System.Threading.Interlocked.Increment(ref _coreRunCalls);
+
+                    // Low-watermark catch-up: buffer dipped below the cushion → run one extra frame so
+                    // audio refills instead of underrunning (the latest video frame still wins). Counted
+                    // in the stats so the fps readout stays honest.
+                    if (_running && _audio != null && _audio.QueuedMs < lowWatermark)
+                    {
+                        _input.Poll();
+                        long t2 = frameTimer.ElapsedTicks;
+                        try { _core!.Run(); } catch (Exception ex) { Trace.WriteLine($"[Emu] retro_run threw: {ex}"); break; }
+                        System.Threading.Interlocked.Add(ref _coreRunTicks, frameTimer.ElapsedTicks - t2);
+                        System.Threading.Interlocked.Increment(ref _coreRunCalls);
+                    }
+                }
+
+                // Stopwatch pacing: sleep most of the remaining budget, then SPIN the last ~1ms for
+                // sub-millisecond accuracy → steady frame production (the fix for chunky 60fps).
+                targetFrameMs = 1000.0 / _fps;   // pick up any mid-run SET_SYSTEM_AV_INFO rate change
+                double remaining = targetFrameMs - frameTimer.Elapsed.TotalMilliseconds;
+                if (remaining > 1.5) Thread.Sleep((int)(remaining - 1.0));
+                while (_running && frameTimer.Elapsed.TotalMilliseconds < targetFrameMs) Thread.SpinWait(10);
+                frameTimer.Restart();
             }
         }
 
@@ -186,6 +308,33 @@ namespace Emutastic.Emulator
                     // value 0..3 → 0/90/180/270° counter-clockwise (vertical arcade games etc.)
                     if (data != IntPtr.Zero) _rotationDeg = (Marshal.ReadInt32(data) & 3) * 90;
                     return true;
+                case ENV_SET_SYSTEM_AV_INFO:
+                {
+                    // The core re-announces its av_info mid-run. Famicom/FDS via Nestopia does this
+                    // after the BIOS boots the disk (region/timing settle), refining fps from the
+                    // initial estimate — without honoring it we keep pacing to the stale rate, which
+                    // beats against real time → the "chunky" judder. Update the loop target (the loop
+                    // re-reads _fps each frame). Mirror upstream: don't re-open audio on a rate change;
+                    // and let a hardware-forced rate (e.g. Dreamcast 60) win over the core's report.
+                    if (data == IntPtr.Zero) return false;
+                    var av = Marshal.PtrToStructure<retro_system_av_info>(data);
+                    if (_handler.HardwareTargetFps <= 0)
+                    {
+                        double f = av.timing.fps;
+                        if (f > 0 && f <= 1000 && !double.IsNaN(f)) _fps = f;
+                    }
+                    DisplayAspectRatio = _handler.GetDisplayAspectRatio(av.geometry.base_width, av.geometry.base_height, av.geometry.aspect_ratio);
+                    return true;
+                }
+                case ENV_SET_GEOMETRY:
+                {
+                    // Geometry/aspect-only re-announcement (no timing change). We don't dynamically
+                    // resize the display today, but acknowledge it and refresh the aspect estimate.
+                    if (data == IntPtr.Zero) return false;
+                    var geom = Marshal.PtrToStructure<retro_game_geometry>(data);
+                    DisplayAspectRatio = _handler.GetDisplayAspectRatio(geom.base_width, geom.base_height, geom.aspect_ratio);
+                    return true;
+                }
                 case ENV_GET_SYSTEM_DIRECTORY:
                     if (data != IntPtr.Zero) Marshal.WriteIntPtr(data, _systemDirPtr);
                     return true;
@@ -202,12 +351,118 @@ namespace Emutastic.Emulator
                 case ENV_SET_PERFORMANCE_LEVEL:
                     return true;
                 case ENV_GET_VARIABLE_UPDATE:
-                    if (data != IntPtr.Zero) Marshal.WriteByte(data, 0); // no core-option changes pending
+                    if (data != IntPtr.Zero) Marshal.WriteByte(data, (byte)(_coreOptionsDirty ? 1 : 0));
                     return true;
-                case ENV_GET_OVERSCAN:
+                case ENV_GET_CORE_OPTIONS_VERSION:
+                    // Report v0 so cores use the simple SET_VARIABLES path (v2-capable cores downgrade
+                    // cleanly); v2's display/category metadata isn't needed to apply the options.
+                    if (data != IntPtr.Zero) Marshal.WriteInt32(data, 0);
+                    return true;
+                case ENV_SET_VARIABLES:
+                    ParseSetVariables(data);
+                    return true;
+                case ENV_SET_DISK_CONTROL_INTERFACE:
+                case ENV_SET_DISK_CONTROL_EXT_INTERFACE:
+                    // Capture the core's disk callbacks so we can insert disk 0 after load (FDS).
+                    if (data != IntPtr.Zero)
+                    {
+                        var dc = Marshal.PtrToStructure<retro_disk_control_callback>(data);
+                        if (dc.set_eject_state != IntPtr.Zero) _setEjectState = Marshal.GetDelegateForFunctionPointer<SetEjectStateFn>(dc.set_eject_state);
+                        if (dc.set_image_index != IntPtr.Zero) _setImageIndex = Marshal.GetDelegateForFunctionPointer<SetImageIndexFn>(dc.set_image_index);
+                        if (dc.get_eject_state != IntPtr.Zero) _getEjectState = Marshal.GetDelegateForFunctionPointer<GetEjectStateFn>(dc.get_eject_state);
+                    }
+                    return true;
                 case ENV_GET_VARIABLE:
+                    return HandleGetVariable(data);
+                case ENV_GET_OVERSCAN:
                 default:
                     return false; // unsupported / use core defaults — cores cope (incl. SET_HW_RENDER → SW)
+            }
+        }
+
+        // Parse a libretro SET_VARIABLES announcement: a NULL-terminated array of retro_variable
+        // {key, "human description; opt1|opt2|…"}. We let the console handler filter/inject values,
+        // then default any unseeded key to the core's first valid option.
+        private void ParseSetVariables(IntPtr data)
+        {
+            if (data == IntPtr.Zero) return;
+            try
+            {
+                int stride = Marshal.SizeOf<retro_variable>();
+                IntPtr p = data;
+                for (int n = 0; n < 4096; n++, p = IntPtr.Add(p, stride))   // cap: a malformed/non-terminated array can't run off into unmapped memory
+                {
+                    var v = Marshal.PtrToStructure<retro_variable>(p);
+                    if (v.key == IntPtr.Zero) break;   // {NULL, NULL} terminator
+
+                    string? key = Marshal.PtrToStringAnsi(v.key);
+                    string? desc = Marshal.PtrToStringAnsi(v.value);
+                    if (string.IsNullOrEmpty(key) || desc == null) continue;
+
+                    int semi = desc.IndexOf(';');
+                    string opts = semi >= 0 ? desc[(semi + 1)..] : desc;
+                    string[] vals = opts.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+                    vals = _handler.FilterCoreOptionValues(key!, vals) ?? vals;
+                    _handler.OnVariableAnnounced(key!, vals, _coreOptions);
+
+                    if (vals.Length == 0) continue;
+                    // Default an unseeded key to the first valid value; also repair a seeded value the
+                    // core wouldn't accept (not in its valid set) so we never feed it a bad option.
+                    if (!_coreOptions.TryGetValue(key!, out var cur) || Array.IndexOf(vals, cur) < 0)
+                        _coreOptions[key!] = vals[0];
+                }
+                _coreOptionsDirty = true;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.WriteLine($"[Emu] SET_VARIABLES parse failed: {ex.Message}");
+            }
+        }
+
+        // GET_VARIABLE: the core passes a retro_variable with key set; we write back a persistent
+        // char* for the resolved value (or leave it NULL + return false so the core uses its default).
+        private bool HandleGetVariable(IntPtr data)
+        {
+            if (data == IntPtr.Zero) return false;
+            try
+            {
+                var v = Marshal.PtrToStructure<retro_variable>(data);
+                string? key = Marshal.PtrToStringAnsi(v.key);
+                if (key == null || !_coreOptions.TryGetValue(key, out var val)) return false;
+
+                if (!_coreOptionPtrs.TryGetValue(key, out var ptr) || Marshal.PtrToStringAnsi(ptr) != val)
+                {
+                    // Fresh ptr; never free the old one here (the core may still reference it) — all are
+                    // freed in Dispose.
+                    ptr = Marshal.StringToHGlobalAnsi(val);
+                    _allocatedOptionPtrs.Add(ptr);
+                    _coreOptionPtrs[key] = ptr;
+                }
+                Marshal.WriteIntPtr(data, IntPtr.Size, ptr);   // retro_variable.value (second field)
+                _coreOptionsDirty = false;
+                return true;
+            }
+            catch { return false; }
+        }
+
+        // Insert disk 0 if the core booted with the disk ejected (FDS). Runs on the emu thread,
+        // right after retro_load_game, before the run loop — so the disk is present from frame 0 and
+        // the FDS BIOS reads it instead of waiting on "Set the Disk Card".
+        private void TryInsertFirstDisk()
+        {
+            try
+            {
+                if (_setEjectState == null) return;
+                bool ejected = _getEjectState?.Invoke() ?? true;   // assume ejected if the core doesn't say
+                if (!ejected) return;                              // already inserted (PS1/Saturn) — leave it
+                _setImageIndex?.Invoke(0);                         // select disk 0 (allowed while ejected)
+                _setEjectState(false);                             // insert
+                System.Diagnostics.Trace.WriteLine("[Emu] disk-control: inserted disk 0 (was ejected at boot)");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.WriteLine($"[Emu] disk-control insert failed: {ex.Message}");
             }
         }
 
@@ -274,6 +529,8 @@ namespace Emutastic.Emulator
             if (_rotationDeg != 0) bgra = RotateBgra(bgra, ref w, ref h, _rotationDeg);
 
             lock (_frameLock) { _frame = bgra; _frameW = w; _frameH = h; _frameSeq++; }
+            System.Threading.Interlocked.Increment(ref _frameCountSample);   // real produced-frame rate
+            FrameReady?.Invoke();                                            // push the frame to the window to present
         }
 
         // Rotate a tightly-packed BGRA buffer counter-clockwise by deg (90/180/270). Returns the
@@ -354,6 +611,9 @@ namespace Emutastic.Emulator
             if (_saveDirPtr != IntPtr.Zero) Marshal.FreeHGlobal(_saveDirPtr);
             if (_coreAssetsDirPtr != IntPtr.Zero) Marshal.FreeHGlobal(_coreAssetsDirPtr);
             _systemDirPtr = _saveDirPtr = _coreAssetsDirPtr = IntPtr.Zero;
+            foreach (var ptr in _allocatedOptionPtrs) if (ptr != IntPtr.Zero) Marshal.FreeHGlobal(ptr);
+            _allocatedOptionPtrs.Clear();
+            _coreOptionPtrs.Clear();
         }
     }
 }

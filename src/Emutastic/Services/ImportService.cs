@@ -400,8 +400,13 @@ namespace Emutastic.Services
             // Without these filters every game with samples gets a phantom samples-zip
             // entry, and every CHD-bearing game gets a phantom CHD entry classified as
             // a CD console (PS1/Saturn/SegaCD via AmbiguousExtensions) that fails on launch.
+            // Sort alphabetically so games import — and so their artwork downloads — in A→Z order.
+            // Windows/NTFS hands back EnumerateFiles results already sorted, which upstream relies on
+            // implicitly; ext4 returns them in arbitrary (inode) order, so without this the art fetch
+            // looks random. Sorting here restores the Windows behavior the user tracks against.
             var allFiles = Directory.EnumerateFiles(folderPath, "*", SearchOption.AllDirectories)
                 .Where(f => !IsMameSamplesFile(f) && !IsMameCompanionChd(f))
+                .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
             // Console-nav hint short-circuit: user dropped a folder while on a
@@ -1050,6 +1055,68 @@ namespace Emutastic.Services
                 }
                 finally { _hashSemaphore.Release(); }
             });
+        }
+
+        /// <summary>
+        /// Heals an interrupted import. Imports insert each game immediately with an empty hash, then
+        /// compute the hash + fetch artwork in a background task that holds <see cref="_hashSemaphore"/>
+        /// for its whole duration — including the (slow) network art fetch. On Windows the art fetch is
+        /// fast, so all hashes complete in seconds and closing the app only loses art (recoverable). On
+        /// Linux a slow/failing ScreenScraper keeps the 6 slots parked on downloads, so hashing barely
+        /// progresses and closing the app strands hundreds of games with no hash — and unhashed games are
+        /// invisible to the artwork retry (it matches on hash), so they never get art.
+        ///
+        /// This runs at startup, BEFORE the artwork retry: it re-hashes every stranded game in a fast
+        /// local-only pass (no network), so even another early close leaves them hashed and recoverable.
+        /// Once hashed they're picked up by RetryMissingArtworkAsync. (Beyond upstream, which has no such
+        /// resume because its Windows art path never strands hashing in the first place.)
+        /// </summary>
+        public async Task ResumeIncompleteImportsAsync()
+        {
+            var unhashed = _db.GetGamesWithoutHash();
+            if (unhashed.Count == 0) return;
+
+            ImportLog($"Resume: {unhashed.Count} game(s) stranded without a hash by an interrupted import — re-hashing");
+            int done = 0, total = unhashed.Count;
+
+            var tasks = new List<Task>();
+            foreach (var game in unhashed)
+            {
+                // ROM file gone (e.g. removable media unplugged) — can't hash; skip.
+                if (string.IsNullOrEmpty(game.RomPath) || !File.Exists(game.RomPath)) continue;
+
+                tasks.Add(Task.Run(async () =>
+                {
+                    await _hashSemaphore.WaitAsync();
+                    try
+                    {
+                        string hash = RomService.HashRom(game.RomPath);
+                        if (string.IsNullOrEmpty(hash)) return;
+                        _db.UpdateHash(game.Id, hash);
+
+                        // Same dedupe as the import path: collapse alternate-title ROMs that hash equal.
+                        int? existingId = _db.GetExistingGameIdByHash(hash, game.Console);
+                        if (existingId != null && existingId.Value != game.Id)
+                        {
+                            _db.DeleteGame(game.Id);
+                            ImportLog($"Resume: [{game.Title}] DUPLICATE of id={existingId.Value}, deleted id={game.Id}");
+                            return;
+                        }
+
+                        int d = Interlocked.Increment(ref done);
+                        int pct = (int)((d / (double)total) * 100);
+                        StatusChanged?.Invoke($"Finishing import — {pct}%  ({d} of {total})");
+                    }
+                    catch (Exception ex)
+                    {
+                        ImportLog($"Resume: hash failed for [{game.Title}]: {ex.Message}");
+                    }
+                    finally { _hashSemaphore.Release(); }
+                }));
+            }
+
+            await Task.WhenAll(tasks);
+            ImportLog($"Resume: re-hashed {done} game(s); artwork retry will now pick them up");
         }
 
         /// <summary>

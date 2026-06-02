@@ -124,7 +124,10 @@
                 <TextBlock Grid.Column="0" Text="Preferences" FontSize="13" FontWeight="SemiBold"
                            FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextPrimaryBrush}"
                            VerticalAlignment="Center" Margin="14,0,0,0"/>
-                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Spacing="6" Margin="0,0,12,0">
+                <StackPanel Grid.Column="2" Orientation="Horizontal"
+                            VerticalAlignment="{DynamicResource WinBtnStripVAlign}"
+                            Margin="{DynamicResource WinBtnStripMargin}"
+                            Spacing="{DynamicResource WinBtnStripSpacing}">
                     <Button Name="MinimizeButton" Theme="{DynamicResource ActiveMinButton}" ToolTip.Tip="Minimize"/>
                     <Button Name="MaximizeButton" Theme="{DynamicResource ActiveMaxButton}" ToolTip.Tip="Maximize"/>
                     <Button Name="CloseButton" Theme="{DynamicResource ActiveCloseButton}" ToolTip.Tip="Close"/>

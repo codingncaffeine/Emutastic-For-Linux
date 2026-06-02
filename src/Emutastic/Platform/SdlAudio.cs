@@ -41,6 +41,11 @@ namespace Emutastic.Platform
 
         private IntPtr _stream;
         private readonly int _sampleRate;
+        // Time-based queued estimate (frames submitted minus playback time elapsed). The raw byte
+        // count from SDL drops in device-buffer chunks (stair-steps), which makes the emu loop's
+        // backpressure/catch-up guards fire erratically → judder; a time estimate is smooth.
+        private long _framesQueued;
+        private readonly System.Diagnostics.Stopwatch _playClock = new();
 
         public SdlAudio(int sampleRate)
         {
@@ -61,17 +66,30 @@ namespace Emutastic.Platform
 
         public bool IsOpen => _stream != IntPtr.Zero;
 
-        /// <summary>Bytes currently queued/un-played. Used by the emu loop for backpressure.</summary>
+        /// <summary>Bytes currently queued/un-played (raw SDL value).</summary>
         public int QueuedBytes => _stream != IntPtr.Zero ? SDL_GetAudioStreamQueued(_stream) : 0;
 
-        /// <summary>Approximate milliseconds of audio still queued (4 bytes per stereo S16 frame).</summary>
-        public double QueuedMs => _stream == IntPtr.Zero ? 0 : QueuedBytes / 4.0 / _sampleRate * 1000.0;
+        /// <summary>Smooth estimate of milliseconds of audio still queued = frames submitted minus
+        /// playback time elapsed (the device consumes ~_sampleRate input-frames/sec). Used by the emu
+        /// loop's pacing guards; smooth so they don't fire on the raw byte stair-step.</summary>
+        public double QueuedMs
+        {
+            get
+            {
+                if (_stream == IntPtr.Zero || !_playClock.IsRunning) return 0;
+                double producedMs = (double)_framesQueued / _sampleRate * 1000.0;
+                double ms = producedMs - _playClock.Elapsed.TotalMilliseconds;
+                return ms > 0 ? ms : 0;
+            }
+        }
 
         /// <summary>Queue a batch of interleaved S16 stereo samples (libretro audio_sample_batch).</summary>
         public void QueueBatch(IntPtr data, int frames)
         {
             if (_stream == IntPtr.Zero || data == IntPtr.Zero || frames <= 0) return;
             SDL_PutAudioStreamData(_stream, data, frames * 4); // 2 channels * 2 bytes
+            if (!_playClock.IsRunning) _playClock.Start();     // playback clock starts at first audio
+            _framesQueued += frames;
         }
 
         /// <summary>Queue a single stereo sample pair (libretro audio_sample).</summary>
@@ -81,9 +99,16 @@ namespace Emutastic.Platform
             short* pair = stackalloc short[2];
             pair[0] = left; pair[1] = right;
             SDL_PutAudioStreamData(_stream, (IntPtr)pair, 4);
+            if (!_playClock.IsRunning) _playClock.Start();
+            _framesQueued++;
         }
 
-        public void Clear() { if (_stream != IntPtr.Zero) SDL_ClearAudioStream(_stream); }
+        public void Clear()
+        {
+            if (_stream != IntPtr.Zero) SDL_ClearAudioStream(_stream);
+            _framesQueued = 0;
+            _playClock.Reset();   // re-baseline the estimate after a flush
+        }
 
         public void Dispose()
         {

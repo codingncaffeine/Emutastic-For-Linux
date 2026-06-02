@@ -1934,7 +1934,7 @@ namespace Emutastic.Services
                 WHERE (CoverArtPath IS NULL OR CoverArtPath = '')
                 AND   (RomHash IS NOT NULL AND RomHash != '')
                 AND   ArtworkAttempts < 2
-                ORDER BY ArtworkAttempts ASC;";
+                ORDER BY ArtworkAttempts ASC, Title COLLATE NOCASE ASC;";
 
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
@@ -1949,6 +1949,42 @@ namespace Emutastic.Services
                     BackgroundColor = reader.IsDBNull(5) ? "#1F1F21" : reader.GetString(5),
                     AccentColor = reader.IsDBNull(6) ? "#E03535" : reader.GetString(6),
                     ArtworkAttempts = reader.IsDBNull(7) ? 0 : reader.GetInt32(7),
+                });
+            }
+            return games;
+        }
+
+        /// <summary>
+        /// Games stranded with an empty RomHash by an interrupted import — the app was closed before
+        /// the background hash+artwork task ran. Without a hash the artwork pipeline (which matches on
+        /// hash) silently excludes them, so they never get art. Used by the startup resume to re-hash
+        /// them. See ImportService.ResumeIncompleteImportsAsync.
+        /// </summary>
+        public List<Game> GetGamesWithoutHash()
+        {
+            var games = new List<Game>();
+            using var connection = new SqliteConnection(_connectionString);
+            connection.Open();
+            var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT Id, Title, Console, RomPath, BackgroundColor, AccentColor
+                FROM Games
+                WHERE (RomHash IS NULL OR RomHash = '')
+                AND   (RomPath IS NOT NULL AND RomPath != '')
+                ORDER BY Title COLLATE NOCASE ASC;";
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                games.Add(new Game
+                {
+                    Id = reader.GetInt32(0),
+                    Title = reader.GetString(1),
+                    Console = reader.GetString(2),
+                    RomHash = string.Empty,
+                    RomPath = AppPaths.FromStoragePath(reader.IsDBNull(3) ? "" : reader.GetString(3)),
+                    BackgroundColor = reader.IsDBNull(4) ? "#1F1F21" : reader.GetString(4),
+                    AccentColor = reader.IsDBNull(5) ? "#E03535" : reader.GetString(5),
                 });
             }
             return games;

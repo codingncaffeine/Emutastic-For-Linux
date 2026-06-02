@@ -24,3 +24,6 @@ spike/
 
 # Local API keys — never commit
 src/Emutastic/Secrets.cs
+
+# Local pre-change backups (not versioned)
+.snapshots/

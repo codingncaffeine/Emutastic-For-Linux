@@ -171,6 +171,14 @@
         <Style Selector="^:pressed /template/ Border#border">
             <Setter Property="Background" Value="{DynamicResource BgQuaternaryBrush}"/>
         </Style>
+        <!-- Persistent highlight on the currently-selected library/console (set in code-behind on
+             navigation) — same fill as hover, so it stays lit to show which console you're in. -->
+        <Style Selector="^.selected /template/ Border#border">
+            <Setter Property="Background" Value="{DynamicResource BgTertiaryBrush}"/>
+        </Style>
+        <Style Selector="^.selected">
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+        </Style>
     </ControlTheme>
 
     <!-- ── PRIMARY (accent) BUTTON ── -->
@@ -458,6 +466,158 @@
         <Style Selector="^:checked /template/ Rectangle"><Setter Property="Fill" Value="{DynamicResource ToolbarPressedTextBrush}"/></Style>
     </ControlTheme>
 
+    <!-- ── 2D / 3D BOX-ART TOGGLE ── same engraved-metallic segmented recipe as the view
+         toggles, but with a "2D"/"3D" text label. Appears next to the grid/list toggles only
+         when the current view has 3D box art (matches upstream BoxArt2D/BoxArt3D). -->
+    <ControlTheme x:Key="BoxArt2DToggle" TargetType="ToggleButton">
+        <Setter Property="Width" Value="28"/>
+        <Setter Property="Height" Value="26"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Border Name="outerBorder" Background="{DynamicResource ToolbarRaisedFillBrush}"
+                        BorderBrush="{DynamicResource ToolbarChiselBrush}" BorderThickness="1"
+                        CornerRadius="6,0,0,6">
+                    <Panel>
+                        <Border Name="topInner" BorderBrush="{DynamicResource ToolbarTopHighlightBrush}"
+                                BorderThickness="0,1,0,0" CornerRadius="5,0,0,5"/>
+                        <Border Name="bottomRim" BorderBrush="{DynamicResource ToolbarBottomRimBrush}"
+                                BorderThickness="0,0,0,1" CornerRadius="0,0,0,5" IsVisible="False"/>
+                        <TextBlock Name="lbl" Text="2D" FontSize="9" FontWeight="SemiBold"
+                                   FontFamily="{DynamicResource PrimaryFont}"
+                                   Foreground="{DynamicResource ToolbarRaisedTextBrush}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <TextBlock.Effect>
+                                <DropShadowEffect BlurRadius="0" OffsetX="0" OffsetY="1" Opacity="0.85" Color="Black"/>
+                            </TextBlock.Effect>
+                        </TextBlock>
+                    </Panel>
+                </Border>
+            </ControlTemplate>
+        </Setter>
+        <Style Selector="^:pointerover /template/ Border#outerBorder"><Setter Property="Background" Value="{DynamicResource ToolbarHoverFillBrush}"/></Style>
+        <Style Selector="^:checked /template/ Border#outerBorder"><Setter Property="Background" Value="{DynamicResource ToolbarPressedFillBrush}"/></Style>
+        <Style Selector="^:checked /template/ Border#topInner">
+            <Setter Property="BorderBrush" Value="{DynamicResource ToolbarTopShadowBrush}"/>
+            <Setter Property="BorderThickness" Value="0,2,0,0"/>
+        </Style>
+        <Style Selector="^:checked /template/ Border#bottomRim"><Setter Property="IsVisible" Value="True"/></Style>
+        <Style Selector="^:checked /template/ TextBlock#lbl"><Setter Property="Foreground" Value="{DynamicResource ToolbarPressedTextBrush}"/></Style>
+    </ControlTheme>
+
+    <ControlTheme x:Key="BoxArt3DToggle" TargetType="ToggleButton">
+        <Setter Property="Width" Value="28"/>
+        <Setter Property="Height" Value="26"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Border Name="outerBorder" Background="{DynamicResource ToolbarRaisedFillBrush}"
+                        BorderBrush="{DynamicResource ToolbarChiselBrush}" BorderThickness="0,1,1,1"
+                        CornerRadius="0,6,6,0">
+                    <Panel>
+                        <Border Name="topInner" BorderBrush="{DynamicResource ToolbarTopHighlightBrush}"
+                                BorderThickness="0,1,0,0" CornerRadius="0,5,0,0"/>
+                        <Border Name="bottomRim" BorderBrush="{DynamicResource ToolbarBottomRimBrush}"
+                                BorderThickness="0,0,0,1" CornerRadius="0,0,5,0" IsVisible="False"/>
+                        <TextBlock Name="lbl" Text="3D" FontSize="9" FontWeight="SemiBold"
+                                   FontFamily="{DynamicResource PrimaryFont}"
+                                   Foreground="{DynamicResource ToolbarRaisedTextBrush}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <TextBlock.Effect>
+                                <DropShadowEffect BlurRadius="0" OffsetX="0" OffsetY="1" Opacity="0.85" Color="Black"/>
+                            </TextBlock.Effect>
+                        </TextBlock>
+                    </Panel>
+                </Border>
+            </ControlTemplate>
+        </Setter>
+        <Style Selector="^:pointerover /template/ Border#outerBorder"><Setter Property="Background" Value="{DynamicResource ToolbarHoverFillBrush}"/></Style>
+        <Style Selector="^:checked /template/ Border#outerBorder"><Setter Property="Background" Value="{DynamicResource ToolbarPressedFillBrush}"/></Style>
+        <Style Selector="^:checked /template/ Border#topInner">
+            <Setter Property="BorderBrush" Value="{DynamicResource ToolbarTopShadowBrush}"/>
+            <Setter Property="BorderThickness" Value="0,2,0,0"/>
+        </Style>
+        <Style Selector="^:checked /template/ Border#bottomRim"><Setter Property="IsVisible" Value="True"/></Style>
+        <Style Selector="^:checked /template/ TextBlock#lbl"><Setter Property="Foreground" Value="{DynamicResource ToolbarPressedTextBrush}"/></Style>
+    </ControlTheme>
+
+    <!-- ── TOOLBAR SPACING SLIDER ── per-console card-spacing slider in the toolbar. Fully custom
+         (compact) template — a thin centered rail + a small brushed-metal disc thumb (classic-Mac
+         palette, hardcoded so it reads the same in every theme). The default Fluent slider is too
+         tall and its thumb too large for the 26px toolbar pill, so we retemplate rather than tweak. -->
+
+    <!-- Invisible track button: fills the space on each side of the thumb so a track click still
+         moves the value, but paints nothing. -->
+    <ControlTheme x:Key="ToolbarSliderTrackButton" TargetType="RepeatButton">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Template">
+            <ControlTemplate TargetType="RepeatButton">
+                <Border Background="Transparent"/>
+            </ControlTemplate>
+        </Setter>
+    </ControlTheme>
+
+    <!-- Small brushed-metal disc thumb (12px). -->
+    <ControlTheme x:Key="ToolbarSpacingSliderThumb" TargetType="Thumb">
+        <Setter Property="Width" Value="12"/>
+        <Setter Property="Height" Value="12"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Template">
+            <ControlTemplate TargetType="Thumb">
+                <Panel>
+                    <Ellipse Stroke="#5A5A5A" StrokeThickness="1">
+                        <Ellipse.Fill>
+                            <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                                <GradientStop Offset="0.0"  Color="#F2F2F2"/>
+                                <GradientStop Offset="0.55" Color="#C8C8C8"/>
+                                <GradientStop Offset="1.0"  Color="#8A8A8A"/>
+                            </LinearGradientBrush>
+                        </Ellipse.Fill>
+                    </Ellipse>
+                    <!-- specular highlight on the top half for the 3D pop -->
+                    <Ellipse Width="6" Height="3" VerticalAlignment="Top" Margin="0,2,0,0">
+                        <Ellipse.Fill>
+                            <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                                <GradientStop Offset="0.0" Color="#80FFFFFF"/>
+                                <GradientStop Offset="1.0" Color="#00FFFFFF"/>
+                            </LinearGradientBrush>
+                        </Ellipse.Fill>
+                    </Ellipse>
+                </Panel>
+            </ControlTemplate>
+        </Setter>
+    </ControlTheme>
+
+    <ControlTheme x:Key="ToolbarSpacingSlider" TargetType="Slider">
+        <Setter Property="MinHeight" Value="0"/>
+        <Setter Property="Height" Value="24"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="Template">
+            <ControlTemplate TargetType="Slider">
+                <Grid VerticalAlignment="Center">
+                    <!-- thin recessed rail, vertically centered -->
+                    <Border Height="4" CornerRadius="2" VerticalAlignment="Center"
+                            Background="{DynamicResource ToolbarChiselBrush}"/>
+                    <Track Name="PART_Track" Orientation="Horizontal"
+                           Minimum="{TemplateBinding Minimum}"
+                           Maximum="{TemplateBinding Maximum}"
+                           Value="{TemplateBinding Value, Mode=TwoWay}">
+                        <Track.DecreaseButton>
+                            <RepeatButton Theme="{StaticResource ToolbarSliderTrackButton}"/>
+                        </Track.DecreaseButton>
+                        <Track.IncreaseButton>
+                            <RepeatButton Theme="{StaticResource ToolbarSliderTrackButton}"/>
+                        </Track.IncreaseButton>
+                        <Track.Thumb>
+                            <Thumb Theme="{StaticResource ToolbarSpacingSliderThumb}"/>
+                        </Track.Thumb>
+                    </Track>
+                </Grid>
+            </ControlTemplate>
+        </Setter>
+    </ControlTheme>
+
     <!-- ── SEARCH FIELD TEXTBOX ── strips all of Fluent's chrome (border + the focus
          underline adorner) so the recessed Border that wraps it is the only visible frame.
          Without this the stock TextBox paints a box and an accent underline on focus. -->
@@ -552,7 +712,7 @@
 
     <!-- Windows 11 — flat square buttons with glyphs; gray hover, red close hover -->
     <ControlTheme x:Key="Win11MinButton" TargetType="Button">
-        <Setter Property="Width" Value="40"/><Setter Property="Height" Value="28"/><Setter Property="Cursor" Value="Arrow"/>
+        <Setter Property="Width" Value="46"/><Setter Property="Height" Value="32"/><Setter Property="VerticalAlignment" Value="Top"/><Setter Property="Cursor" Value="Arrow"/>
         <Setter Property="Template"><ControlTemplate>
             <Border Name="bg" Background="Transparent" CornerRadius="0">
                 <TextBlock Name="g" Text="&#x2212;" FontSize="14" Foreground="{DynamicResource TextPrimaryBrush}"
@@ -561,7 +721,7 @@
         <Style Selector="^:pointerover /template/ Border#bg"><Setter Property="Background" Value="#22FFFFFF"/></Style>
     </ControlTheme>
     <ControlTheme x:Key="Win11MaxButton" TargetType="Button">
-        <Setter Property="Width" Value="40"/><Setter Property="Height" Value="28"/><Setter Property="Cursor" Value="Arrow"/>
+        <Setter Property="Width" Value="46"/><Setter Property="Height" Value="32"/><Setter Property="VerticalAlignment" Value="Top"/><Setter Property="Cursor" Value="Arrow"/>
         <Setter Property="Template"><ControlTemplate>
             <Border Name="bg" Background="Transparent" CornerRadius="0">
                 <TextBlock Name="g" Text="&#x25A1;" FontSize="13" Foreground="{DynamicResource TextPrimaryBrush}"
@@ -570,14 +730,18 @@
         <Style Selector="^:pointerover /template/ Border#bg"><Setter Property="Background" Value="#22FFFFFF"/></Style>
     </ControlTheme>
     <ControlTheme x:Key="Win11CloseButton" TargetType="Button">
-        <Setter Property="Width" Value="40"/><Setter Property="Height" Value="28"/><Setter Property="Cursor" Value="Arrow"/>
+        <Setter Property="Width" Value="46"/><Setter Property="Height" Value="32"/><Setter Property="VerticalAlignment" Value="Top"/><Setter Property="Cursor" Value="Arrow"/>
         <Setter Property="Template"><ControlTemplate>
             <Border Name="bg" Background="Transparent" CornerRadius="0">
                 <TextBlock Name="g" Text="&#x2715;" FontSize="12" Foreground="{DynamicResource TextPrimaryBrush}"
                            HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Border></ControlTemplate></Setter>
-        <Style Selector="^:pointerover /template/ Border#bg"><Setter Property="Background" Value="#E81123"/></Style>
+        <!-- Actual Windows 11 close-button red (#C42B1C); pressed dims to 90% opacity. The old
+             #E81123 was the brighter Windows 10 red ("blood red"). -->
+        <Style Selector="^:pointerover /template/ Border#bg"><Setter Property="Background" Value="#C42B1C"/></Style>
         <Style Selector="^:pointerover /template/ TextBlock#g"><Setter Property="Foreground" Value="White"/></Style>
+        <Style Selector="^:pressed /template/ Border#bg"><Setter Property="Background" Value="#E6C42B1C"/></Style>
+        <Style Selector="^:pressed /template/ TextBlock#g"><Setter Property="Foreground" Value="White"/></Style>
     </ControlTheme>
 
     <!-- Linux-native (Adwaita/Breeze-ish) — round buttons with a subtle fill + glyph -->

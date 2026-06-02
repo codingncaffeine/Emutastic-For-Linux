@@ -198,6 +198,45 @@ namespace Emutastic.Converters
             });
         }
 
+        /// <summary>Cache-only lookup (no decode). Returns a warm bitmap or null. Used by the
+        /// async grid-image loader so realization never blocks the UI thread on a JPEG decode.</summary>
+        public static Bitmap? GetCached(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return null;
+            lock (_strongLock)
+            {
+                if (_strong.TryGetValue(path!, out var s) && _strongIndex.TryGetValue(path!, out var node))
+                {
+                    _strongOrder.Remove(node);
+                    _strongOrder.AddFirst(node);
+                    return s;
+                }
+            }
+            if (_weak.TryGetValue(path!, out var w) && w.TryGetTarget(out var cached))
+            {
+                Promote(path!, cached);
+                return cached;
+            }
+            return null;
+        }
+
+        /// <summary>Return the cached bitmap, or decode it off the UI thread and cache it.</summary>
+        public static Task<Bitmap?> LoadAsync(string path)
+        {
+            var cached = GetCached(path);
+            if (cached != null) return Task.FromResult<Bitmap?>(cached);
+            return Task.Run(() =>
+            {
+                var bmp = Decode(path);
+                if (bmp != null)
+                {
+                    _weak[path] = new WeakReference<Bitmap>(bmp);
+                    Promote(path, bmp);
+                }
+                return bmp;
+            });
+        }
+
         public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
         {
             try
@@ -329,7 +368,13 @@ namespace Emutastic.Converters
                 {
                     var uri = new Uri($"avares://Emutastic/Assets/system_icons/{f}");
                     using var s = AssetLoader.Open(uri);
-                    return new Bitmap(s);
+                    // Sidebar icons render at 20×20; decode them small instead of at full JPEG
+                    // resolution (some sources are 500px+/280KB). Decoding 30+ full-res images during
+                    // MainWindow XAML inflation was the dominant startup cost. 48px covers 2× HiDPI.
+                    using var ms = new MemoryStream();
+                    s.CopyTo(ms);
+                    ms.Position = 0;
+                    return Bitmap.DecodeToWidth(ms, 48);
                 }
                 catch { return null; }
             });
