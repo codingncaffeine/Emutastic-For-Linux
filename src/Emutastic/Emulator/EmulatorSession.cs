@@ -24,8 +24,6 @@ namespace Emutastic.Emulator
     {
         // ---- libretro environment command numbers (libretro.h) ----
         const uint ENV_SET_ROTATION = 1;   // core requests screen rotation (value × 90° CCW)
-        const uint ENV_SET_SYSTEM_AV_INFO = 32;  // core re-announces fps/sample_rate/geometry mid-run
-        const uint ENV_SET_GEOMETRY = 37;        // core re-announces geometry/aspect only
         const uint ENV_GET_OVERSCAN = 2;
         const uint ENV_GET_CAN_DUPE = 3;
         const uint ENV_SET_PERFORMANCE_LEVEL = 8;
@@ -231,8 +229,6 @@ namespace Emutastic.Emulator
 
         private void RunLoop()
         {
-            // Recomputed each frame from _fps — the env callback (SET_SYSTEM_AV_INFO) may refine the
-            // rate mid-run (Famicom/FDS settles its timing after the BIOS boots the disk).
             double targetFrameMs = 1000.0 / _fps;
             // Software-core timing (upstream "Stopwatch-primary" model, see Emulation-Timing wiki):
             // a high-res frame timer paces production; audio thresholds are only guards. Pure
@@ -283,7 +279,6 @@ namespace Emutastic.Emulator
 
                 // Stopwatch pacing: sleep most of the remaining budget, then SPIN the last ~1ms for
                 // sub-millisecond accuracy → steady frame production (the fix for chunky 60fps).
-                targetFrameMs = 1000.0 / _fps;   // pick up any mid-run SET_SYSTEM_AV_INFO rate change
                 double remaining = targetFrameMs - frameTimer.Elapsed.TotalMilliseconds;
                 if (remaining > 1.5) Thread.Sleep((int)(remaining - 1.0));
                 while (_running && frameTimer.Elapsed.TotalMilliseconds < targetFrameMs) Thread.SpinWait(10);
@@ -308,33 +303,6 @@ namespace Emutastic.Emulator
                     // value 0..3 → 0/90/180/270° counter-clockwise (vertical arcade games etc.)
                     if (data != IntPtr.Zero) _rotationDeg = (Marshal.ReadInt32(data) & 3) * 90;
                     return true;
-                case ENV_SET_SYSTEM_AV_INFO:
-                {
-                    // The core re-announces its av_info mid-run. Famicom/FDS via Nestopia does this
-                    // after the BIOS boots the disk (region/timing settle), refining fps from the
-                    // initial estimate — without honoring it we keep pacing to the stale rate, which
-                    // beats against real time → the "chunky" judder. Update the loop target (the loop
-                    // re-reads _fps each frame). Mirror upstream: don't re-open audio on a rate change;
-                    // and let a hardware-forced rate (e.g. Dreamcast 60) win over the core's report.
-                    if (data == IntPtr.Zero) return false;
-                    var av = Marshal.PtrToStructure<retro_system_av_info>(data);
-                    if (_handler.HardwareTargetFps <= 0)
-                    {
-                        double f = av.timing.fps;
-                        if (f > 0 && f <= 1000 && !double.IsNaN(f)) _fps = f;
-                    }
-                    DisplayAspectRatio = _handler.GetDisplayAspectRatio(av.geometry.base_width, av.geometry.base_height, av.geometry.aspect_ratio);
-                    return true;
-                }
-                case ENV_SET_GEOMETRY:
-                {
-                    // Geometry/aspect-only re-announcement (no timing change). We don't dynamically
-                    // resize the display today, but acknowledge it and refresh the aspect estimate.
-                    if (data == IntPtr.Zero) return false;
-                    var geom = Marshal.PtrToStructure<retro_game_geometry>(data);
-                    DisplayAspectRatio = _handler.GetDisplayAspectRatio(geom.base_width, geom.base_height, geom.aspect_ratio);
-                    return true;
-                }
                 case ENV_GET_SYSTEM_DIRECTORY:
                     if (data != IntPtr.Zero) Marshal.WriteIntPtr(data, _systemDirPtr);
                     return true;
