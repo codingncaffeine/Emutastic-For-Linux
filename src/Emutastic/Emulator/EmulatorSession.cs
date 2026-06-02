@@ -89,9 +89,15 @@ namespace Emutastic.Emulator
         /// <summary>Request a core reset; applied on the emu thread to avoid racing retro_run.</summary>
         public void RequestReset() => _resetRequested = true;
 
-        // latest converted frame (BGRA8888), guarded by _frameLock
+        // latest converted frame (BGRA8888), guarded by _frameLock. Buffers are REUSED, not allocated
+        // per frame: a fresh 245KB/frame alloc at 60fps churned the Large Object Heap (~15MB/s) and
+        // triggered ~4 gen2 GC pauses/sec → visible stutter. _convBuf is the emu thread's working buffer;
+        // it's swapped with _frame under the lock (zero-copy); TrySnapshot copies _frame → _uiBuf (UI-only)
+        // under the lock so the emu can keep reusing buffers without racing the blit.
         private readonly object _frameLock = new();
-        private byte[]? _frame;
+        private byte[]? _frame;       // front buffer (most recent complete frame)
+        private byte[]? _convBuf;     // emu working buffer (filled by Video_cb, then swapped into _frame)
+        private byte[]? _uiBuf;       // UI copy target (TrySnapshot writes it, PumpFrame reads it)
         private int _frameW, _frameH;
         private volatile int _rotationDeg;   // 0/90/180/270, set by ENV_SET_ROTATION
         private long _frameSeq;
@@ -450,7 +456,9 @@ namespace Emutastic.Emulator
         {
             if (data == IntPtr.Zero || width == 0 || height == 0) return; // duplicate frame
             int w = (int)width, h = (int)height, pitchB = (int)pitch;
-            var bgra = new byte[w * h * 4];
+            int need = w * h * 4;
+            if (_convBuf == null || _convBuf.Length != need) _convBuf = new byte[need];  // reused; realloc only on size change
+            var bgra = _convBuf;
             byte* src = (byte*)data;
             fixed (byte* dst0 = bgra)
             {
@@ -494,9 +502,18 @@ namespace Emutastic.Emulator
             }
             // Honor a core-requested rotation by rotating the BGRA buffer (and swapping dims for
             // 90/270) so the displayed Image is upright with the correct aspect — no UI transform.
+            // Rotated games (90/270) get a fresh rotated buffer (rare path; not reused). For the common
+            // un-rotated case bgra IS _convBuf, so the swap below recycles the previous front buffer.
             if (_rotationDeg != 0) bgra = RotateBgra(bgra, ref w, ref h, _rotationDeg);
 
-            lock (_frameLock) { _frame = bgra; _frameW = w; _frameH = h; _frameSeq++; }
+            lock (_frameLock)
+            {
+                var prev = _frame;
+                _frame = bgra; _frameW = w; _frameH = h; _frameSeq++;
+                // Recycle the previous front buffer as the next working buffer (un-rotated path only,
+                // and only if it's the right size) so we ping-pong two buffers with zero allocation.
+                if (_rotationDeg == 0 && prev != null && prev.Length == need) _convBuf = prev;
+            }
             System.Threading.Interlocked.Increment(ref _frameCountSample);   // real produced-frame rate
             FrameReady?.Invoke();                                            // push the frame to the window to present
         }
@@ -534,15 +551,20 @@ namespace Emutastic.Emulator
 
         /// <summary>
         /// Hands the UI the latest frame if it's newer than <paramref name="lastSeq"/>.
-        /// Returns false when no new frame is available. The returned buffer is immutable
-        /// (the emu thread allocates a fresh one per frame), so it's safe to read off-lock.
+        /// Returns false when no new frame is available. Copies into the reusable _uiBuf UNDER the lock
+        /// (the emu thread reuses/ping-pongs its buffers, so the front buffer must not be read off-lock);
+        /// the returned buffer is UI-thread-owned, so PumpFrame can blit it without holding the lock.
         /// </summary>
         public bool TrySnapshot(ref long lastSeq, out byte[]? buf, out int w, out int h)
         {
             lock (_frameLock)
             {
                 if (_frame == null || _frameSeq == lastSeq) { buf = null; w = h = 0; return false; }
-                lastSeq = _frameSeq; buf = _frame; w = _frameW; h = _frameH; return true;
+                lastSeq = _frameSeq; w = _frameW; h = _frameH;
+                int need = w * h * 4;
+                if (_uiBuf == null || _uiBuf.Length != need) _uiBuf = new byte[need];
+                System.Buffer.BlockCopy(_frame, 0, _uiBuf, 0, need);
+                buf = _uiBuf; return true;
             }
         }
 
