@@ -1732,29 +1732,7 @@ public partial class PreferencesWindow : Window
         catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"[Cores] update check failed: {ex.Message}"); }
     }
 
-    private static string FormatCoreName(string dllName)
-    {
-        string name = dllName.Replace("_libretro.so", "", StringComparison.OrdinalIgnoreCase).Replace("_libretro.dll", "", StringComparison.OrdinalIgnoreCase);
-        return name switch
-        {
-            "nestopia" => "Nestopia", "fceumm" => "FCE Ultra MM", "quicknes" => "QuickNES",
-            "snes9x" => "Snes9x", "snes9x2002" => "Snes9x 2002", "snes9x2005" => "Snes9x 2005",
-            "snes9x2005_plus" => "Snes9x 2005 Plus", "snes9x2010" => "Snes9x 2010", "bsnes" => "bsnes",
-            "parallel_n64" => "Parallel N64", "mupen64plus_next" => "Mupen64Plus-Next", "dolphin" => "Dolphin",
-            "mgba" => "mGBA", "gambatte" => "Gambatte", "sameboy" => "SameBoy", "desmume" => "DeSmuME",
-            "melonds" => "melonDS", "azahar" => "Azahar (3DS)", "mednafen_vb" => "Mednafen Virtual Boy",
-            "genesis_plus_gx" => "Genesis Plus GX", "picodrive" => "PicoDrive", "kronos" => "Kronos",
-            "mednafen_saturn" => "Mednafen Saturn", "yabause" => "Yabause", "mednafen_psx" => "Mednafen PSX (Beetle)",
-            "pcsx_rearmed" => "PCSX-ReARMed", "ppsspp" => "PPSSPP", "mednafen_pce" => "Mednafen PCE",
-            "mednafen_pce_fast" => "Mednafen PCE Fast", "mednafen_ngp" => "Mednafen Neo Geo Pocket",
-            "gearcoleco" => "GearColeco", "stella" => "Stella", "stella2014" => "Stella 2014", "stella2023" => "Stella 2023",
-            "prosystem" => "ProSystem", "flycast" => "Flycast (Dreamcast)", "virtualjaguar" => "Virtual Jaguar",
-            "bluemsx" => "blueMSX", "vecx" => "Vecx", "opera" => "Opera (3DO)", "same_cdi" => "SAME CDi",
-            "fbneo" => "FBNeo (Final Burn Neo)", "geolith" => "Geolith (Neo Geo)",
-            "mame2003_plus" => "MAME 2003-Plus", "mednafen_psx_hw" => "Mednafen PSX HW (Beetle)",
-            _ => name.Length == 0 ? name : char.ToUpper(name[0]) + name[1..].Replace("_", " "),
-        };
-    }
+    private static string FormatCoreName(string dllName) => Services.CoreOptionsService.DisplayNameFor(dllName);
 
     // ════════════════════════════════════════════════════════════════════════
     //  Controls panel (CI3) — per-console input mapping with live key/gamepad capture.

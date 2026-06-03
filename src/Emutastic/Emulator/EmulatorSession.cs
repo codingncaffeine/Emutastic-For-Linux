@@ -323,6 +323,11 @@ namespace Emutastic.Emulator
         private readonly Dictionary<string, IntPtr> _coreOptionPtrs = new();
         private readonly List<IntPtr> _allocatedOptionPtrs = new();
         private volatile bool _coreOptionsDirty;   // false until SET_VARIABLES announces options (upstream parity)
+        // Schema captured from SET_VARIABLES, persisted after a successful load so the Preferences
+        // "Core Options" tab lists this core (upstream: every core exposes options after first run).
+        private readonly List<Models.CoreOptionEntry> _coreOptionSchema = new();
+        private readonly Services.CoreOptionsService _coreOptionsStore = new();
+        private readonly string _coreName;   // file stem, e.g. "parallel_n64_libretro" — the schema/values key
 
         [StructLayout(LayoutKind.Sequential)]
         private struct retro_variable { public IntPtr key; public IntPtr value; }
@@ -334,6 +339,12 @@ namespace Emutastic.Emulator
             _console = console;
             _handler = ConsoleHandlerFactory.Create(console);
             foreach (var kv in _handler.GetDefaultCoreOptions())   // pre-seed this console's curated options
+                _coreOptions[kv.Key] = kv.Value;
+            // User choices from the Preferences "Core Options" tab override the handler's curated
+            // defaults (upstream priority order). Values the core won't accept are repaired against
+            // its valid list in ParseSetVariables.
+            _coreName = System.IO.Path.GetFileNameWithoutExtension(corePath);
+            foreach (var kv in _coreOptionsStore.LoadValues(_coreName))
                 _coreOptions[kv.Key] = kv.Value;
             _input = new SdlInput
             {
@@ -380,6 +391,20 @@ namespace Emutastic.Emulator
                 {
                     error = _core.LastError ?? "retro_load_game failed (the core rejected the ROM).";
                     return false;
+                }
+
+                // Persist the option schema announced via SET_VARIABLES so the Preferences
+                // "Core Options" tab lists this core from now on (upstream saves at the same point —
+                // after retro_load_game succeeds, so a core that rejects the ROM never registers).
+                if (_coreOptionSchema.Count > 0)
+                {
+                    _coreOptionsStore.SaveSchema(_coreName, new Services.CoreOptionsSchema
+                    {
+                        DisplayName = Services.CoreOptionsService.DisplayNameFor(_coreName),
+                        ConsoleName = _console,
+                        Options = new List<Models.CoreOptionEntry>(_coreOptionSchema),
+                    });
+                    Trace.WriteLine($"[Emu] Core options schema saved: {_coreName} ({_coreOptionSchema.Count} options)");
                 }
 
                 // Per-console controller-port setup (base sets ports 0–3 to JOYPAD; PS1 → DualShock on
@@ -1138,6 +1163,7 @@ namespace Emutastic.Emulator
             if (data == IntPtr.Zero) return;
             try
             {
+                _coreOptionSchema.Clear();   // a core may re-announce; the latest set wins
                 int stride = Marshal.SizeOf<retro_variable>();
                 IntPtr p = data;
                 for (int n = 0; n < 4096; n++, p = IntPtr.Add(p, stride))   // cap: a malformed/non-terminated array can't run off into unmapped memory
@@ -1161,6 +1187,16 @@ namespace Emutastic.Emulator
                     // core wouldn't accept (not in its valid set) so we never feed it a bad option.
                     if (!_coreOptions.TryGetValue(key!, out var cur) || Array.IndexOf(vals, cur) < 0)
                         _coreOptions[key!] = vals[0];
+
+                    // Capture for the Preferences tab (filtered values, like upstream — the combo must
+                    // not offer values FilterCoreOptionValues removed, e.g. GameCube's buggy 1x/2x).
+                    _coreOptionSchema.Add(new Models.CoreOptionEntry
+                    {
+                        Key = key!,
+                        Description = semi >= 0 ? desc[..semi].Trim() : key!,
+                        ValidValues = vals,
+                        DefaultValue = vals[0],
+                    });
                 }
                 _coreOptionsDirty = true;
             }
