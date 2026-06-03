@@ -39,7 +39,7 @@ namespace Emutastic.Services
             new() { FileName = "azahar_libretro.so",          DisplayName = "Azahar (3DS)",          Systems = ["3DS"],                               Recommended = true  },
             new() { FileName = "mednafen_vb_libretro.so",      DisplayName = "Mednafen Virtual Boy",  Systems = ["VirtualBoy"],                        Recommended = true  },
             new() { FileName = "genesis_plus_gx_libretro.so",  DisplayName = "Genesis Plus GX",       Systems = ["Genesis", "SegaCD", "SMS", "GameGear", "SG1000"], Recommended = true  },
-            new() { FileName = "picodrive_libretro.so",        DisplayName = "PicoDrive",             Systems = ["Genesis", "Sega32X", "SMS"],         Recommended = false },
+            new() { FileName = "picodrive_libretro.so",        DisplayName = "PicoDrive",             Systems = ["Genesis", "Sega32X", "SMS"],         Recommended = true  },  // ONLY Sega 32X core → must be in "Download All Recommended" (diverges from upstream Windows, which leaves 32X uncovered)
             new() { FileName = "mednafen_saturn_libretro.so",  DisplayName = "Mednafen Saturn (Beetle)", Systems = ["Saturn"],                         Recommended = true  },
             new() { FileName = "kronos_libretro.so",           DisplayName = "Kronos",                Systems = ["Saturn"],                            Recommended = false },
             new() { FileName = "yabause_libretro.so",          DisplayName = "Yabause",               Systems = ["Saturn"],                            Recommended = false },
