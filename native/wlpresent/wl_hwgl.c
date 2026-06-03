@@ -130,14 +130,18 @@ int wlp_hw_readback(void* out, int w, int h, int bottom_left) {
     if (H.BindFramebuffer) H.BindFramebuffer(GL_READ_FRAMEBUFFER, H.fbo);
     glPixelStorei(GL_PACK_ALIGNMENT, 4);
     int stride = w * 4, need = stride * h;
+    unsigned char *o = (unsigned char*)out;
     if (bottom_left) {
         if (need > H.rbcap) { free(H.rb); H.rb = malloc(need); H.rbcap = need; }
         glReadPixels(0, 0, w, h, GL_BGRA, GL_UNSIGNED_BYTE, H.rb);
-        unsigned char *o = (unsigned char*)out;
         for (int y = 0; y < h; y++) memcpy(o + y * stride, H.rb + (h - 1 - y) * stride, stride);
     } else {
         glReadPixels(0, 0, w, h, GL_BGRA, GL_UNSIGNED_BYTE, out);
     }
+    // Force opaque alpha. The core's FBO alpha is undefined, and the window surface has an alpha channel
+    // (for rounded corners) — non-255 alpha makes the game composite transparent / wash to white. (The
+    // software present path likewise hard-sets alpha=255.)
+    for (int i = 3; i < need; i += 4) o[i] = 0xFF;
     return 0;
 }
 
