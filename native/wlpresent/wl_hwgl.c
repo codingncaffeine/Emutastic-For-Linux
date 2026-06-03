@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 
 #ifndef GL_BGRA
 #define GL_BGRA 0x80E1
@@ -44,6 +45,11 @@
 #define GL_PIXEL_PACK_BUFFER 0x88EB
 #define GL_STREAM_READ 0x88E1
 #define GL_READ_ONLY 0x88B8
+// Sync objects (GL 3.2 / ARB_sync) — for the non-blocking readback ring
+#define GL_SYNC_GPU_COMMANDS_COMPLETE 0x9117
+#define GL_ALREADY_SIGNALED 0x911A
+#define GL_TIMEOUT_EXPIRED 0x911B
+#define GL_CONDITION_SATISFIED 0x911C
 
 typedef void (*fb_gen_t)(GLsizei, GLuint*);
 typedef void (*fb_bind_t)(GLenum, GLuint);
@@ -58,6 +64,9 @@ typedef void (*bind_buf_t)(GLenum, GLuint);
 typedef void (*buf_data_t)(GLenum, long, const void*, GLenum);
 typedef void* (*map_buf_t)(GLenum, GLenum);
 typedef unsigned char (*unmap_buf_t)(GLenum);
+typedef void* (*fence_sync_t)(GLenum, GLbitfield);
+typedef GLenum (*client_wait_t)(void*, GLbitfield, unsigned long long);
+typedef void (*del_sync_t)(void*);
 
 static struct {
     EGLDisplay dpy; EGLContext ctx; EGLConfig cfg;
@@ -66,11 +75,29 @@ static struct {
     unsigned char *rb; int rbcap;
     fb_gen_t GenFramebuffers; fb_bind_t BindFramebuffer; fb_tex2d_t FramebufferTexture2D;
     rb_gen_t GenRenderbuffers; rb_bind_t BindRenderbuffer; rb_storage_t RenderbufferStorage; fb_rb_t FramebufferRenderbuffer;
-    // async readback ring (2 pixel-pack buffers): issue glReadPixels into one (non-blocking) while
-    // mapping the previous one — pipelines the GPU→CPU copy so it never stalls the emu thread.
+    // Non-blocking readback ring (4 pixel-pack buffers + fence syncs): issue glReadPixels+fence
+    // each frame; map only buffers whose fence has ALREADY signaled. The emu thread NEVER waits on
+    // the GPU — critical on low GPU clocks (light N64 load keeps an AMD mobile chip at its minimum
+    // DPM state, where one frame's render+readback latency exceeds 16.7ms; blocking there cost
+    // 8-15ms/frame and capped the emu thread at ~43fps).
     gen_bufs_t GenBuffers; bind_buf_t BindBuffer; buf_data_t BufferData; map_buf_t MapBuffer; unmap_buf_t UnmapBuffer;
-    GLuint pbo[2]; int pbo_w[2], pbo_h[2], pbo_valid[2], pbo_head, pbo_ok;
+    fence_sync_t FenceSync; client_wait_t ClientWaitSync; del_sync_t DeleteSync;
+#define WLP_PBO_RING 4
+    GLuint pbo[WLP_PBO_RING]; int pbo_w[WLP_PBO_RING], pbo_h[WLP_PBO_RING];
+    void *pbo_sync[WLP_PBO_RING];                 // NULL = slot free
+    unsigned long long pbo_seq[WLP_PBO_RING], seq; // issue order, to pick the newest completed
+    int pbo_ok;
+    // diagnostics: which device/driver the surfaceless context actually landed on (llvmpipe vs
+    // real GPU flips readback cost ~1ms ↔ ~11ms), and where readback time goes (issue vs map).
+    char info[256];
+    double issue_ms, map_ms;   // EMA, same alpha as the C# hwReadback EMA
+    double mapcall_ms, copy_ms; // map_ms split: MapBuffer call (GPU sync) vs pixel copy (memory speed)
 } H;
+
+static double now_ms(void) {
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
+}
 
 // ctx_type: 1=OPENGL(compat) 2=GLES2 3=OPENGL_CORE 4=GLES3 (6=VULKAN → not handled here). Returns 1 ok.
 int wlp_hw_init(int ctx_type, int major, int minor, int want_depth, int want_stencil, int maxw, int maxh) {
@@ -127,25 +154,39 @@ int wlp_hw_init(int ctx_type, int major, int minor, int want_depth, int want_ste
     H.BindFramebuffer(GL_FRAMEBUFFER, H.fbo);
     glViewport(0, 0, maxw, maxh);
 
-    // Async readback PBOs (2). If any entry point is missing we fall back to synchronous glReadPixels.
-    H.GenBuffers  = (gen_bufs_t) eglGetProcAddress("glGenBuffers");
-    H.BindBuffer  = (bind_buf_t) eglGetProcAddress("glBindBuffer");
-    H.BufferData  = (buf_data_t) eglGetProcAddress("glBufferData");
-    H.MapBuffer   = (map_buf_t)  eglGetProcAddress("glMapBuffer");
-    H.UnmapBuffer = (unmap_buf_t)eglGetProcAddress("glUnmapBuffer");
-    H.pbo_ok = H.GenBuffers && H.BindBuffer && H.BufferData && H.MapBuffer && H.UnmapBuffer;
+    // Async readback PBO ring. If any entry point is missing we fall back to synchronous glReadPixels.
+    H.GenBuffers     = (gen_bufs_t)   eglGetProcAddress("glGenBuffers");
+    H.BindBuffer     = (bind_buf_t)   eglGetProcAddress("glBindBuffer");
+    H.BufferData     = (buf_data_t)   eglGetProcAddress("glBufferData");
+    H.MapBuffer      = (map_buf_t)    eglGetProcAddress("glMapBuffer");
+    H.UnmapBuffer    = (unmap_buf_t)  eglGetProcAddress("glUnmapBuffer");
+    H.FenceSync      = (fence_sync_t) eglGetProcAddress("glFenceSync");
+    H.ClientWaitSync = (client_wait_t)eglGetProcAddress("glClientWaitSync");
+    H.DeleteSync     = (del_sync_t)   eglGetProcAddress("glDeleteSync");
+    H.pbo_ok = H.GenBuffers && H.BindBuffer && H.BufferData && H.MapBuffer && H.UnmapBuffer
+            && H.FenceSync && H.ClientWaitSync && H.DeleteSync;
     if (H.pbo_ok) {
-        H.GenBuffers(2, H.pbo);
-        for (int i = 0; i < 2; i++) {
+        H.GenBuffers(WLP_PBO_RING, H.pbo);
+        for (int i = 0; i < WLP_PBO_RING; i++) {
             H.BindBuffer(GL_PIXEL_PACK_BUFFER, H.pbo[i]);
             H.BufferData(GL_PIXEL_PACK_BUFFER, (long)maxw * maxh * 4, NULL, GL_STREAM_READ);
-            H.pbo_valid[i] = 0;
+            H.pbo_sync[i] = NULL;
         }
         H.BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     }
-    fprintf(stderr, "[wlp.hw] GL HW-render ctx type=%d %dx%d depth=%d fbo=%u asyncReadback=%d\n", ctx_type, maxw, maxh, want_depth, H.fbo, H.pbo_ok);
+    // Capture the actual device/driver for the managed log (stderr is dropped when launched
+    // from the app — this string is what tells fast-1ms (llvmpipe RAM copy) from slow-11ms
+    // (real-GPU PCIe readback) sessions apart).
+    const char *ren = (const char*)glGetString(GL_RENDERER), *ven = (const char*)glGetString(GL_VENDOR), *ver = (const char*)glGetString(GL_VERSION);
+    snprintf(H.info, sizeof H.info, "renderer=%s vendor=%s version=%s asyncReadback=%d",
+             ren ? ren : "?", ven ? ven : "?", ver ? ver : "?", H.pbo_ok);
+    fprintf(stderr, "[wlp.hw] GL HW-render ctx type=%d %dx%d depth=%d fbo=%u %s\n", ctx_type, maxw, maxh, want_depth, H.fbo, H.info);
     return 1;
 }
+
+const char* wlp_hw_info(void) { return H.info; }
+void wlp_hw_readback_times(double* issue, double* map) { if (issue) *issue = H.issue_ms; if (map) *map = H.map_ms; }
+void wlp_hw_readback_times2(double* mapcall, double* copy) { if (mapcall) *mapcall = H.mapcall_ms; if (copy) *copy = H.copy_ms; }
 
 void wlp_hw_make_current(void) { if (H.ctx) eglMakeCurrent(H.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, H.ctx); }
 unsigned int wlp_hw_fbo(void) { return H.fbo; }
@@ -181,26 +222,64 @@ int wlp_hw_readback(void* out, int cur_w, int cur_h, int bottom_left, int* out_w
         return 1;
     }
 
-    int head = H.pbo_head, tail = head ^ 1;
-    // Issue the CURRENT frame's read into pbo[head] — async (returns immediately).
-    H.BindBuffer(GL_PIXEL_PACK_BUFFER, H.pbo[head]);
-    glReadPixels(0, 0, cur_w, cur_h, GL_BGRA, GL_UNSIGNED_BYTE, 0);
-    H.pbo_w[head] = cur_w; H.pbo_h[head] = cur_h; H.pbo_valid[head] = 1;
-
+    // NEVER-BLOCK ring: map only buffers whose fence has ALREADY signaled (zero-timeout check).
+    // If the GPU is running behind (minimum DPM clocks make even a 640x480 frame's latency exceed
+    // 16.7ms), we return the newest COMPLETED frame — or nothing — instead of waiting. The emu
+    // thread keeps its 60Hz cadence no matter how late the GPU is; video lags 1-3 frames.
+    double t0 = now_ms();
+    int newest = -1;
+    for (int i = 0; i < WLP_PBO_RING; i++) {
+        if (!H.pbo_sync[i]) continue;
+        GLenum st = H.ClientWaitSync(H.pbo_sync[i], 0, 0);
+        if (st == GL_ALREADY_SIGNALED || st == GL_CONDITION_SATISFIED) {
+            if (newest < 0 || H.pbo_seq[i] > H.pbo_seq[newest]) newest = i;
+        }
+    }
     int produced = 0;
-    if (H.pbo_valid[tail]) {   // map the PREVIOUS frame (already transferred → little/no stall)
-        int tw = H.pbo_w[tail], th = H.pbo_h[tail];
-        H.BindBuffer(GL_PIXEL_PACK_BUFFER, H.pbo[tail]);
+    double t1 = t0;
+    if (newest >= 0) {
+        // Free every completed slot OLDER than the one we're returning (superseded frames).
+        for (int i = 0; i < WLP_PBO_RING; i++) {
+            if (i == newest || !H.pbo_sync[i] || H.pbo_seq[i] >= H.pbo_seq[newest]) continue;
+            GLenum st = H.ClientWaitSync(H.pbo_sync[i], 0, 0);
+            if (st == GL_ALREADY_SIGNALED || st == GL_CONDITION_SATISFIED) { H.DeleteSync(H.pbo_sync[i]); H.pbo_sync[i] = NULL; }
+        }
+        int tw = H.pbo_w[newest], th = H.pbo_h[newest];
+        H.BindBuffer(GL_PIXEL_PACK_BUFFER, H.pbo[newest]);
+        double tm0 = now_ms();
         unsigned char *src = (unsigned char*)H.MapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
+        double tm1 = now_ms();
         if (src) {
             copy_flip_opaque(o, src, tw, th, bottom_left);
+            double tm2 = now_ms();
+            H.copy_ms += 0.05 * ((tm2 - tm1) - H.copy_ms);
             H.UnmapBuffer(GL_PIXEL_PACK_BUFFER);
             if (out_w) *out_w = tw; if (out_h) *out_h = th;
             produced = 1;
         }
+        H.mapcall_ms += 0.05 * ((tm1 - tm0) - H.mapcall_ms);
+        H.DeleteSync(H.pbo_sync[newest]); H.pbo_sync[newest] = NULL;
+        t1 = now_ms();
+    }
+
+    // Issue the CURRENT frame's read into a free slot + fence + FLUSH (so the GPU starts now —
+    // unflushed batches were the original 1ms↔11ms session lottery). All slots pending = GPU is
+    // >3 frames behind: drop this frame's readback rather than stall.
+    int free_slot = -1;
+    for (int i = 0; i < WLP_PBO_RING; i++) if (!H.pbo_sync[i]) { free_slot = i; break; }
+    if (free_slot >= 0) {
+        H.BindBuffer(GL_PIXEL_PACK_BUFFER, H.pbo[free_slot]);
+        glReadPixels(0, 0, cur_w, cur_h, GL_BGRA, GL_UNSIGNED_BYTE, 0);
+        H.pbo_sync[free_slot] = H.FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        glFlush();
+        H.pbo_w[free_slot] = cur_w; H.pbo_h[free_slot] = cur_h; H.pbo_seq[free_slot] = ++H.seq;
     }
     H.BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-    H.pbo_head = tail;
+    // "map" = fence scan + map + copy of the completed frame; "issue" = readPixels + fence + flush.
+    // EMA alpha matches the C# hwReadback EMA so the numbers line up.
+    double t2 = now_ms();
+    H.map_ms   += 0.05 * ((t1 - t0) - H.map_ms);
+    H.issue_ms += 0.05 * ((t2 - t1) - H.issue_ms);
     return produced;
 }
 

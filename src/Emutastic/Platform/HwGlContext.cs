@@ -26,6 +26,9 @@ namespace Emutastic.Platform
         [DllImport(LIB)] static extern IntPtr wlp_hw_proc([MarshalAs(UnmanagedType.LPStr)] string sym);
         [DllImport(LIB)] static extern int wlp_hw_readback(IntPtr outBgra, int curW, int curH, int bottomLeft, out int outW, out int outH);
         [DllImport(LIB)] static extern void wlp_hw_destroy();
+        [DllImport(LIB)] static extern IntPtr wlp_hw_info();
+        [DllImport(LIB)] static extern void wlp_hw_readback_times(out double issueMs, out double mapMs);
+        [DllImport(LIB)] static extern void wlp_hw_readback_times2(out double mapcallMs, out double copyMs);
 
         /// <summary>Create the offscreen GL context + FBO (call on the emu thread, after retro_load_game).</summary>
         public static bool Init(int ctxType, int major, int minor, bool depth, bool stencil, int maxW, int maxH)
@@ -35,6 +38,19 @@ namespace Emutastic.Platform
         public static uint Fbo() => wlp_hw_fbo();
         public static IntPtr Proc(string sym) => wlp_hw_proc(sym);
         public static void Destroy() => wlp_hw_destroy();
+
+        /// <summary>GL_RENDERER/vendor/version + asyncReadback flag — which device the surfaceless
+        /// context actually landed on (llvmpipe ↔ real GPU flips readback cost ~1ms ↔ ~11ms).</summary>
+        public static string Info() => Marshal.PtrToStringAnsi(wlp_hw_info()) ?? "";
+
+        /// <summary>Readback EMA split: issue = glReadPixels enqueue, map = MapBuffer wait + copy,
+        /// further split into mapcall (GPU sync) vs copy (mapped-memory read speed).</summary>
+        public static (double issueMs, double mapMs, double mapcallMs, double copyMs) ReadbackTimes()
+        {
+            wlp_hw_readback_times(out double i, out double m);
+            wlp_hw_readback_times2(out double mc, out double cp);
+            return (i, m, mc, cp);
+        }
 
         /// <summary>Issue the current FBO read and return the PREVIOUS frame's pixels into <paramref name="bgra"/>
         /// (async PBO; 1-frame latency, no GPU stall). <paramref name="bgra"/> must be FBO-max-sized.

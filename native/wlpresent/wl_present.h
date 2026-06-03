@@ -58,6 +58,11 @@ void* wlp_hw_proc(const char* sym);          // resolve a GL symbol (for get_pro
 // out must hold up to the FBO's max size. Returns 1 if out was filled, 0 if not (first frame).
 int  wlp_hw_readback(void* out, int cur_w, int cur_h, int bottom_left, int* out_w, int* out_h);
 void wlp_hw_destroy(void);
+// Diagnostics: GL_RENDERER/vendor/version + asyncReadback flag (valid after wlp_hw_init), and
+// the readback EMA split — issue (glReadPixels enqueue) vs map (MapBuffer wait + copy).
+const char* wlp_hw_info(void);
+void wlp_hw_readback_times(double* issue_ms, double* map_ms);
+void wlp_hw_readback_times2(double* mapcall_ms, double* copy_ms);  // map_ms split: GPU sync vs pixel copy
 
 // Current window size (pixels).
 void wlp_size(void* h, int* w, int* hh);

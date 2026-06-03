@@ -91,6 +91,7 @@ namespace Emutastic.Emulator
         // ── GL hardware render for 3D cores (Phase 1). SET_HW_RENDER hands us a retro_hw_render_callback;
         //    we render the core into libwlpresent's offscreen FBO and read it back to the normal frame. ──
         const uint ENV_SET_HW_RENDER = 14;
+        static readonly IntPtr RETRO_HW_FRAME_BUFFER_VALID = (IntPtr)(-1);   // Video_cb data sentinel for HW frames
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void HwContextResetFn();
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate UIntPtr HwGetFramebufferFn();
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate IntPtr HwGetProcAddressFn([MarshalAs(UnmanagedType.LPStr)] string sym);
@@ -100,7 +101,6 @@ namespace Emutastic.Emulator
         private HwGetFramebufferFn? _hwGetFb;        // kept alive — pointer handed to the core
         private HwGetProcAddressFn? _hwGetProc;      // kept alive — pointer handed to the core
         private byte[]? _hwBufA, _hwBufB;            // true double-buffer for HW readback (never write the front)
-        private uint _hwLastW, _hwLastH;             // last known HW frame dims (dupe calls pass 0×0)
         private double _hwReadbackMs;                // smoothed glReadPixels readback cost (diagnostic)
 
         private Thread? _thread;
@@ -742,7 +742,14 @@ namespace Emutastic.Emulator
                 {
                     _audio.SampleDrc(out double qms, out double ratio, out long underruns);
                     double fps = _frameMsEma > 0 ? 1000.0 / _frameMsEma : 0;
-                    string hwRb = _hwRenderActive ? $" hwReadback={_hwReadbackMs:F2}ms" : "";
+                    string hwRb = "";
+                    if (_hwRenderActive)
+                    {
+                        // issue = glReadPixels enqueue (big ⇒ driver syncing on the FBO), map = PBO map
+                        // wait + copy (big ⇒ DMA not done / slow PCIe copy). Both 0 ⇒ sync fallback path.
+                        var (issueMs, mapMs, mapcallMs, copyMs) = Platform.HwGlContext.ReadbackTimes();
+                        hwRb = $" hwReadback={_hwReadbackMs:F2}ms(issue={issueMs:F2} map={mapMs:F2}=sync{mapcallMs:F2}+copy{copyMs:F2})";
+                    }
                     Trace.WriteLine($"[Emu] DECOUPLED emu={_frameMsEma:F2}ms(~{fps:F1}fps) DRC q={qms:F0}ms ratio={ratio:F5} underruns={underruns}{hwRb}");
                 }
                 if (!_paused && (++_srmAutoSaveTick % 600) == 0) SaveSram();
@@ -1264,6 +1271,9 @@ namespace Emutastic.Emulator
             int maxBytes = Math.Max(1, maxW * maxH * 4);
             _hwBufA = new byte[maxBytes]; _hwBufB = new byte[maxBytes];
             Trace.WriteLine($"[Emu] HW-render context ready ({maxW}x{maxH}); calling context_reset");
+            // Which device did the surfaceless EGL context land on? llvmpipe ↔ real GPU flips the
+            // readback cost ~1ms ↔ ~11ms, and the native stderr line is dropped when app-launched.
+            Trace.WriteLine($"[Emu] HW-render {Platform.HwGlContext.Info()}");
             try { _hwContextReset?.Invoke(); } catch (Exception ex) { Trace.WriteLine($"[Emu] context_reset threw: {ex}"); }
         }
 
@@ -1404,28 +1414,35 @@ namespace Emutastic.Emulator
             // where the HW context is current. The SW pixel-copy path below is never used by HW cores.
             if (_hwRenderActive)
             {
-                // Match upstream OnVideoRefresh: in HW mode EVERY call reads back and counts — including
-                // dupe frames (data == 0). N64 cores dupe VIs when the game renders below 60 internally
-                // (OoT = 20fps); Windows counts those as frames, so the fps display must here too.
-                // Dupe calls can pass 0×0 dims — fall back to the last known frame size (upstream uses
-                // its _fboWidth/_fboHeight the same way).
-                if (width > 0 && height > 0) { _hwLastW = width; _hwLastH = height; }
-                uint rw = _hwLastW, rh = _hwLastH;
-                if (rw > 0 && rh > 0 && _hwBufA != null && _hwBufB != null)
+                // Dupe frame (data != VALID): COUNT it for the fps display — N64 cores dupe VIs when the
+                // game renders below 60 internally (OoT = 20fps) and Windows' counter includes dupes, so
+                // ours must too — but do NOT redo the GPU readback. Upstream re-reads the FBO on dupes,
+                // but on our driver per-call readback at 60Hz tripled hwReadback (1ms → ~11ms) and dragged
+                // the emu thread to ~43fps in real (focused) play. The present thread keeps showing the
+                // latest frame regardless, so skipping the readback loses nothing.
+                if (data != RETRO_HW_FRAME_BUFFER_VALID || width == 0 || height == 0)
+                {
+                    System.Threading.Interlocked.Increment(ref _frameCountSample);
+                    return;
+                }
+                if (_hwBufA != null && _hwBufB != null)
                 {
                     // TRUE double-buffer: always read into the buffer the present thread is NOT holding,
                     // so it can't copy a half-written frame (the transparent-flash cause). Async PBO readback
                     // returns the PREVIOUS frame + its dims (ow/oh) — present those, not the current cb dims.
                     byte[] back = ReferenceEquals(_frame, _hwBufA) ? _hwBufB : _hwBufA;
                     long t0 = Stopwatch.GetTimestamp();
-                    bool ok = Platform.HwGlContext.Readback(back, (int)rw, (int)rh, _hwBottomLeft, out int ow, out int oh);
+                    bool ok = Platform.HwGlContext.Readback(back, (int)width, (int)height, _hwBottomLeft, out int ow, out int oh);
                     _hwReadbackMs += 0.05 * ((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency - _hwReadbackMs);
                     if (ok && ow > 0 && oh > 0)
                     {
                         lock (_frameLock) { _frame = back; _frameW = ow; _frameH = oh; _frameSeq++; }
-                        System.Threading.Interlocked.Increment(ref _frameCountSample);
                         FrameReady?.Invoke();
                     }
+                    // Count the frame even when the never-block ring had no completed readback yet
+                    // (the core DID render; its pixels just land 1-3 frames later) — the fps display
+                    // must reflect the core's cadence, like Windows.
+                    System.Threading.Interlocked.Increment(ref _frameCountSample);
                 }
                 return;
             }
