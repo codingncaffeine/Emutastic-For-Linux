@@ -54,6 +54,18 @@ namespace Emutastic.Services.ConsoleHandlers
             // Force OpenGL — only a GL context is set up
             ["dolphin_gfx_backend"]            = "OGL",
             ["dolphin_renderer"]               = "Hardware",
+            // Synchronous UBERSHADERS (mode 1) — the only compilation mode that needs no worker
+            // thread. Dolphin can't create its shader-compiler worker against our surfaceless EGL
+            // context ("Failed to create shared context for shader compiling"), so the default
+            // specialized mode (0) compiles EVERY new shader inline on the emu thread → 0-1fps
+            // slideshow until a scene's shaders are done (the Linux GameCube 1fps bug, 2026-06-03).
+            // Ubershaders compile a small fixed set on demand, cached globally and persistently
+            // (Saves/User/Cache/Shaders/OpenGL-uber-pipeline-*.cache) — measured 0-1fps → 57.8fps
+            // on Mario Kart DD once the cache warmed; fresh scenes still dip while it fills.
+            ["dolphin_shader_compilation_mode"] = "1",
+            // Do NOT precompile the full uber set at boot: at this GPU's idle clocks that stalled
+            // boot for 60s+. On-demand compiles amortize, and the global cache makes them one-time.
+            ["dolphin_wait_for_shaders"]        = "disabled",
             // Internal resolution. NOT 1x: at native res Dolphin's framebuffer-indirection
             // render lands tucked in the bottom-left corner of our managed FBO (documented in
             // the GameCube wiki page). The image fills the buffer correctly from ~3x up; 4x is
