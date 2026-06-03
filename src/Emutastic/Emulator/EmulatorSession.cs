@@ -100,6 +100,8 @@ namespace Emutastic.Emulator
         private HwContextResetFn? _hwContextReset, _hwContextDestroy;
         private HwGetFramebufferFn? _hwGetFb;        // kept alive — pointer handed to the core
         private HwGetProcAddressFn? _hwGetProc;      // kept alive — pointer handed to the core
+        private byte[]? _hwBufA, _hwBufB;            // true double-buffer for HW readback (never write the front)
+        private double _hwReadbackMs;                // smoothed glReadPixels readback cost (diagnostic)
 
         private Thread? _thread;
         private volatile bool _running;
@@ -740,7 +742,8 @@ namespace Emutastic.Emulator
                 {
                     _audio.SampleDrc(out double qms, out double ratio, out long underruns);
                     double fps = _frameMsEma > 0 ? 1000.0 / _frameMsEma : 0;
-                    Trace.WriteLine($"[Emu] DECOUPLED emu={_frameMsEma:F2}ms(~{fps:F1}fps) DRC q={qms:F0}ms ratio={ratio:F5} underruns={underruns}");
+                    string hwRb = _hwRenderActive ? $" hwReadback={_hwReadbackMs:F2}ms" : "";
+                    Trace.WriteLine($"[Emu] DECOUPLED emu={_frameMsEma:F2}ms(~{fps:F1}fps) DRC q={qms:F0}ms ratio={ratio:F5} underruns={underruns}{hwRb}");
                 }
                 if (!_paused && (++_srmAutoSaveTick % 600) == 0) SaveSram();
             }
@@ -1401,15 +1404,20 @@ namespace Emutastic.Emulator
                 if (data == RETRO_HW_FRAME_BUFFER_VALID && width > 0 && height > 0)
                 {
                     int hw = (int)width, hh = (int)height, hneed = hw * hh * 4;
-                    if (_convBuf == null || _convBuf.Length != hneed) _convBuf = new byte[hneed];
-                    if (Platform.HwGlContext.Readback(_convBuf, hw, hh, _hwBottomLeft))
+                    // TRUE double-buffer: always read into the buffer the present thread is NOT holding
+                    // (_frame). Writing the front buffer (the old single-buffer "ping-pong" did) let the
+                    // present copy a half-written frame — including pixels still carrying the FBO's
+                    // non-opaque alpha before the alpha-force pass — i.e. the random transparent flash.
+                    if (_hwBufA == null || _hwBufA.Length != hneed) _hwBufA = new byte[hneed];
+                    if (_hwBufB == null || _hwBufB.Length != hneed) _hwBufB = new byte[hneed];
+                    byte[] back = ReferenceEquals(_frame, _hwBufA) ? _hwBufB : _hwBufA;
+                    long t0 = Stopwatch.GetTimestamp();
+                    bool ok = Platform.HwGlContext.Readback(back, hw, hh, _hwBottomLeft);
+                    _hwReadbackMs = _hwReadbackMs <= 0 ? 0 : _hwReadbackMs;
+                    _hwReadbackMs += 0.05 * ((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency - _hwReadbackMs);
+                    if (ok)
                     {
-                        lock (_frameLock)
-                        {
-                            var prevHw = _frame;
-                            _frame = _convBuf; _frameW = hw; _frameH = hh; _frameSeq++;
-                            if (prevHw != null && prevHw.Length == hneed) _convBuf = prevHw;   // ping-pong
-                        }
+                        lock (_frameLock) { _frame = back; _frameW = hw; _frameH = hh; _frameSeq++; }
                         System.Threading.Interlocked.Increment(ref _frameCountSample);
                         FrameReady?.Invoke();
                     }
