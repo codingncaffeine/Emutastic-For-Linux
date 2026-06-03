@@ -35,7 +35,10 @@ namespace Emutastic.Services.ConsoleHandlers
 
         public override Dictionary<string, string> GetDefaultCoreOptions() => new()
         {
-            ["parallel-n64-gfxplugin"]             = "parallel",
+            // GL HLE plugin (GPU-accelerated) — the Phase-1 GL HW-render path. NOT "parallel" (ParaLLEl-RDP
+            // is Vulkan-only; with no Vulkan yet the core falls back to SOFTWARE angrylion → slow). Switch
+            // back to "parallel" once Vulkan HW-render (Phase 2) lands, for ParaLLEl-RDP accuracy/upscaling.
+            ["parallel-n64-gfxplugin"]             = "glide64",
             ["parallel-n64-cpucore"]               = "dynamic_recompiler",
             ["parallel-n64-disable_expmem"]        = "disabled",
             ["parallel-n64-framerate"]             = "fullspeed",
