@@ -840,7 +840,10 @@ namespace Emutastic.Emulator
         private void PresentToplevelProc(System.Threading.ManualResetEventSlim ready)
         {
             double ar = DisplayAspectRatio > 0 ? DisplayAspectRatio : 4.0 / 3.0;
-            int winH = 720, winW = Math.Max(1, (int)Math.Round(winH * ar));
+            // Size the window so the GAME AREA (window minus the title/status chrome) equals the display
+            // aspect — otherwise the chrome makes the area wider than DAR and the game can't fill it.
+            int chrome = (int)GlOsd.TitleBarHeight + (int)GlOsd.StatusBarHeight;
+            int winH = 720, winW = Math.Max(1, (int)Math.Round((winH - chrome) * ar));
             _wlTop = WlToplevelPresenter.TryCreate(winW, winH, out string? err);
             if (_wlTop == null)
             {
@@ -871,6 +874,7 @@ namespace Emutastic.Emulator
             string winStyle = App.Configuration?.GetThemeConfiguration()?.WindowButtonStyle ?? "macOS";
             string title = $"Emutastic — {CoreName}";
             _wlTop.SetInsets((int)GlOsd.TitleBarHeight, (int)GlOsd.StatusBarHeight);
+            _wlTop.SetAspect(DisplayAspectRatio);   // render at the display aspect (0 → frame pixel ratio)
 
             Action<int, bool> onBtn = (button, down) =>
             {

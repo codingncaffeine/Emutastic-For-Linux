@@ -40,6 +40,7 @@ namespace Emutastic.Platform
         [DllImport(LIB)] static extern int wlp_poll_event(IntPtr h, out int type, out int a, out int b);
         [DllImport(LIB)] static extern void wlp_set_overlay(IntPtr h, IntPtr rgba, int w, int hh);
         [DllImport(LIB)] static extern void wlp_set_insets(IntPtr h, int top, int bottom);
+        [DllImport(LIB)] static extern void wlp_set_aspect(IntPtr h, double dar);
         [DllImport(LIB)] static extern void wlp_minimize(IntPtr h);
         [DllImport(LIB)] static extern void wlp_toggle_maximize(IntPtr h);
         [DllImport(LIB)] static extern int wlp_is_maximized(IntPtr h);
@@ -136,6 +137,8 @@ namespace Emutastic.Platform
 
         /// <summary>Reserve title-bar (top) + status-bar (bottom) chrome; the game is fit between them.</summary>
         public void SetInsets(int top, int bottom) { if (_h != IntPtr.Zero) wlp_set_insets(_h, top, bottom); }
+        /// <summary>Display aspect ratio to render at (4:3 = 1.333…); 0 = use the frame's pixel ratio.</summary>
+        public void SetAspect(double dar) { if (_h != IntPtr.Zero) wlp_set_aspect(_h, dar); }
         public void Minimize()       { if (_h != IntPtr.Zero) wlp_minimize(_h); }
         public void ToggleMaximize() { if (_h != IntPtr.Zero) wlp_toggle_maximize(_h); }
         public bool IsMaximized => _h != IntPtr.Zero && wlp_is_maximized(_h) != 0;

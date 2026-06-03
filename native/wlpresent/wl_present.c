@@ -54,6 +54,7 @@ typedef struct {
     struct zxdg_toplevel_decoration_v1 *deco;
     int maximized;             // tracked from xdg_toplevel.configure states
     int ins_top, ins_bottom;   // chrome insets (title bar / status bar) — game is fit BETWEEN them
+    double dar;                // display aspect ratio to render at (0 = use the frame's pixel ratio)
     int w, h;
     int configured, closed;
     GLuint tex; int texw, texh;
@@ -336,8 +337,13 @@ int wlp_present(void *h, const void *bgra, int fw, int fh) {
     // Fit the game into the area BETWEEN the chrome insets (title bar on top, status bar on bottom), so
     // the game is framed by the bars instead of being covered by them — matching the Windows layout.
     int availH = s->h - s->ins_top - s->ins_bottom; if (availH < 1) availH = s->h;
-    double scale = (double)s->w / fw; double sy = (double)availH / fh; if (sy < scale) scale = sy;
-    int qw = (int)(fw * scale + 0.5), qh = (int)(fh * scale + 0.5);
+    // Render at the DISPLAY aspect ratio (stretch the framebuffer's pixels to it), not the raw pixel
+    // ratio — consoles like CD-i output a frame whose pixel ratio differs from its 4:3 display aspect.
+    // Fall back to the frame's pixel ratio when no DAR was set.
+    double dar = s->dar > 0.0 ? s->dar : (double)fw / fh;
+    int qw, qh;
+    if ((double)s->w / availH > dar) { qh = availH; qw = (int)(availH * dar + 0.5); }   // area wider than DAR → bound by height
+    else { qw = s->w; qh = (int)(s->w / dar + 0.5); }                                   // area taller → bound by width
     int qx = (s->w - qw) / 2;
     int qy = s->ins_bottom + (availH - qh) / 2;   // GL y is bottom-up: ins_bottom is the low edge
     glViewport(qx, qy, qw, qh);
@@ -399,6 +405,11 @@ void wlp_set_overlay(void *h, const void *rgba, int w, int hh) {
 void wlp_set_insets(void *h, int top, int bottom) {
     wlp *s = h; if (!s) return;
     s->ins_top = top < 0 ? 0 : top; s->ins_bottom = bottom < 0 ? 0 : bottom;
+}
+
+// Set the display aspect ratio to render at (e.g. 4:3 = 1.3333). 0 = use the frame's pixel ratio.
+void wlp_set_aspect(void *h, double dar) {
+    wlp *s = h; if (s) s->dar = dar > 0.0 ? dar : 0.0;
 }
 
 void wlp_minimize(void *h) { wlp *s = h; if (s && s->top) xdg_toplevel_set_minimized(s->top); }

@@ -37,6 +37,9 @@ void wlp_set_overlay(void* h, const void* rgba, int w, int hh);
 // is aspect-fit BETWEEN them instead of being covered by the OSD bars. Call once after create / on resize.
 void wlp_set_insets(void* h, int top, int bottom);
 
+// Display aspect ratio to render the game at (4:3 = 1.3333…). 0 = use the frame's raw pixel ratio.
+void wlp_set_aspect(void* h, double dar);
+
 // Window management (driven by the themed title-bar buttons).
 void wlp_minimize(void* h);
 void wlp_toggle_maximize(void* h);
