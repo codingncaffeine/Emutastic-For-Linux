@@ -167,8 +167,11 @@ public partial class App : Application
             var swWin = Services.StartupTrace.Start();
             if (files.Length >= 2)
             {
-                desktop.MainWindow = new Emutastic.Views.EmulatorWindow(
-                    new Emutastic.Emulator.EmulatorSession(files[0], files[1]));
+                var session = new Emutastic.Emulator.EmulatorSession(files[0], files[1]);
+                // Overlay feasibility test: a transparent overlay floated over the in-process GL game.
+                desktop.MainWindow = System.Environment.GetEnvironmentVariable("EMUTASTIC_OVERLAY_TEST") == "1"
+                    ? new Emutastic.Views.GameOverlayWindow(session)
+                    : new Emutastic.Views.EmulatorWindow(session);
             }
             else
             {

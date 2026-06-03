@@ -1,0 +1,133 @@
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Reflection;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using Avalonia.Threading;
+using Emutastic.Emulator;
+
+namespace Emutastic.Services
+{
+    /// <summary>
+    /// Parent-side launcher for games. Default (legacy) path opens the in-process Avalonia
+    /// <see cref="Views.EmulatorWindow"/>. When <c>EMUTASTIC_PRESENT=gl</c> it instead spawns a separate
+    /// <c>--game-host</c> child process (Branch B — see docs/gl-present-phase1-host-process-design.md) and
+    /// supervises it OFF the UI thread. While any child game is alive it sets
+    /// <see cref="EmulatorSession.ExternalGameActive"/> so the parent's ControllerManager stops pumping
+    /// the gamepads the child now owns.
+    /// </summary>
+    public static class GameHostLauncher
+    {
+        private static int _active;   // live child game processes
+
+        /// <summary>Launch a game. <paramref name="onExit"/> is invoked on the UI thread when the game
+        /// ends (result is null on a crash / missing results file).</summary>
+        public static void Launch(string corePath, string romPath, string console, Action<GameHostResult?>? onExit = null)
+        {
+            // GL present is now the DEFAULT path: the separate --game-host process runs the decoupled
+            // pacing (audio-clock emu thread + vsync present thread), which on this hardware gives correct
+            // speed + clean audio where the legacy in-process WriteableBitmap path stuttered. Set
+            // EMUTASTIC_PRESENT=writeable to revert to that legacy window.
+            string present = (Environment.GetEnvironmentVariable("EMUTASTIC_PRESENT") ?? "gl").Trim();
+            bool gl = !string.Equals(present, "writeable", StringComparison.OrdinalIgnoreCase);
+            // EMUTASTIC_GAMEHOST=0 forces the in-process path even in GL mode (debug/escape hatch + lets us
+            // A/B in-process vs separate-process GL on the real machine).
+            bool useHost = gl && Environment.GetEnvironmentVariable("EMUTASTIC_GAMEHOST") != "0";
+            if (!useHost)
+            {
+                // Legacy in-process path — unchanged behavior, the default until GL ships (Phase 5).
+                var win = new Views.EmulatorWindow(new EmulatorSession(corePath, romPath, console));
+                if (onExit != null) win.Closed += (_, _) => onExit(new GameHostResult { ExitCode = 0, PlaySeconds = 0 });
+                win.Show();
+                return;
+            }
+            SpawnHost(corePath, romPath, console, onExit);
+        }
+
+        private static void SpawnHost(string corePath, string romPath, string console, Action<GameHostResult?>? onExit)
+        {
+            string results = Path.Combine(Path.GetTempPath(), $"emutastic-host-{Guid.NewGuid():N}.json");
+            var psi = new ProcessStartInfo
+            {
+                RedirectStandardInput = true,   // closing this stdin pipe = graceful-quit request to the child
+                UseShellExecute = false,
+            };
+
+            // Re-launch ourselves in --game-host mode. Handle both `dotnet Emutastic.dll` and a native apphost.
+            string self = Environment.ProcessPath ?? "dotnet";
+            psi.FileName = self;
+            if (Path.GetFileNameWithoutExtension(self).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+            {
+                string dll = Assembly.GetEntryAssembly()?.Location ?? "";
+                if (!string.IsNullOrEmpty(dll)) psi.ArgumentList.Add(dll);
+            }
+            psi.ArgumentList.Add("--game-host");
+            psi.ArgumentList.Add(corePath);
+            psi.ArgumentList.Add(romPath);
+            if (!string.IsNullOrEmpty(console)) { psi.ArgumentList.Add("--console"); psi.ArgumentList.Add(console); }
+            psi.ArgumentList.Add("--results"); psi.ArgumentList.Add(results);
+            psi.ArgumentList.Add("--parent-stdin");   // we hold the child's stdin; closing it = graceful quit
+
+            // Native Wayland for the game window (RetroArch's backend — the smooth path). The parent Avalonia
+            // app runs on X11/Xwayland, so without forcing this the child also picks x11/Xwayland → no EGL
+            // FIFO → unsynced/juddery present. Only on a Wayland session, and don't override an explicit pick.
+            if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SDL_VIDEODRIVER"))
+                && (string.Equals(Environment.GetEnvironmentVariable("XDG_SESSION_TYPE"), "wayland", StringComparison.OrdinalIgnoreCase)
+                    || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY"))))
+                psi.Environment["SDL_VIDEODRIVER"] = "wayland";
+
+            Process proc;
+            try { proc = Process.Start(psi)!; }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Launcher] failed to spawn game host: {ex.Message}");
+                onExit?.Invoke(null);
+                return;
+            }
+
+            Interlocked.Increment(ref _active);
+            EmulatorSession.ExternalGameActive = true;
+            Trace.WriteLine($"[Launcher] game host pid={proc.Id} core={corePath} rom={romPath}");
+
+            // Supervise off the UI thread (GOLDEN RULE). Never blocks the dispatcher.
+            _ = Task.Run(async () =>
+            {
+                GameHostResult? result = null;
+                try
+                {
+                    await proc.WaitForExitAsync().ConfigureAwait(false);
+                    result = TryReadResults(results, proc.ExitCode);
+                }
+                catch (Exception ex) { Trace.WriteLine($"[Launcher] supervise error: {ex.Message}"); }
+                finally
+                {
+                    try { File.Delete(results); } catch { }
+                    if (Interlocked.Decrement(ref _active) == 0) EmulatorSession.ExternalGameActive = false;
+                }
+
+                // Phase 1.5 hook: persist play-stats here (parent owns the DB + Game.Id). Today the app
+                // records none (UpdatePlayCount/UpdatePlayTime have no callers), so we only log for now.
+                Trace.WriteLine($"[Launcher] game host exited: code={result?.ExitCode}, playSeconds={result?.PlaySeconds}");
+
+                if (onExit != null) Dispatcher.UIThread.Post(() => onExit(result));
+            });
+        }
+
+        private static GameHostResult? TryReadResults(string path, int exitCode)
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    var r = JsonSerializer.Deserialize<GameHostResult>(File.ReadAllText(path));
+                    if (r != null) return r;
+                }
+            }
+            catch (Exception ex) { Trace.WriteLine($"[Launcher] results read failed: {ex.Message}"); }
+            // No file (or unreadable): a non-zero process exit means a crash; report it as such.
+            return exitCode == 0 ? new GameHostResult { ExitCode = 0, PlaySeconds = 0 } : null;
+        }
+    }
+}

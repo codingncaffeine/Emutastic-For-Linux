@@ -1,0 +1,271 @@
+using System;
+using System.Runtime.InteropServices;
+using static Emutastic.Platform.Gl;
+
+namespace Emutastic.Platform
+{
+    /// <summary>
+    /// RetroArch-model GL present: a single SDL3-owned window + GL context, BGRA frame uploaded to a
+    /// texture and drawn as an aspect-preserving fullscreen quad, then <c>SDL_GL_SwapWindow</c> with
+    /// swap-interval 1 — the BLOCKING vsync swap is the sole frame clock. SDL picks native-Wayland EGL or
+    /// X11 GLX automatically (on a Wayland session = native Wayland, like RetroArch's wayland_ctx). One
+    /// uncontended window, nothing composited over it — the thing that made RetroArch smooth here.
+    /// Call <see cref="Present"/> from the emu thread; it blocks to vsync, pacing the loop.
+    /// </summary>
+    public sealed unsafe class GlPresenter : IDisposable
+    {
+        private IntPtr _window, _ctx;
+        // Rotating upload textures. Uploading into the SAME texture the previous frame is still being
+        // drawn from forces the driver to stall the glTexSubImage until that draw completes (CPU↔GPU
+        // serialize), which intermittently blows the vsync deadline → dropped frames (the "swap blocks
+        // but we still only hit ~50fps" symptom vs RetroArch's steady 60). Cycle through N so each upload
+        // targets a texture no longer in flight — RetroArch's PBO / max_swapchain_images=3 idea.
+        const int TexCount = 3;
+        private readonly uint[] _texes = new uint[TexCount];
+        private readonly int[] _texW = new int[TexCount];
+        private readonly int[] _texH = new int[TexCount];
+        private int _texIndex;
+        // Direct-EGL present (set when SelfPaced): bypasses SDL_GL_SwapWindow's per-frame frame-callback
+        // throttle so Mesa's FIFO can pipeline. Zero => fall back to SDL_GL_SwapWindow.
+        private IntPtr _eglDpy, _eglSurf;
+        private readonly byte[] _evBuf = new byte[256];   // SDL_Event union drain buffer
+        public string? LastError { get; private set; }
+        public IntPtr Window => _window;
+
+        // SDL3 event ids (SDL_events.h). We service the GL window's own events on the emu thread inside
+        // Present() — the window is FOCUSED (the whole point: an inactive surface gets throttled), so its
+        // keyboard + close events are how the player drives the game now that it lives outside Avalonia.
+        // SDL3 event ids (SDL_events.h). NOTE: window events start at SDL_EVENT_WINDOW_SHOWN=0x202;
+        // CLOSE_REQUESTED is 0x210 (0x202 + 14). Using 0x202 here read every window's SHOWN event as a
+        // close → the loop exited one frame after present #1. Keep these exact.
+        const uint SDL_EVENT_QUIT = 0x100, SDL_EVENT_WINDOW_MOUSE_LEAVE = 0x20D,
+                   SDL_EVENT_WINDOW_CLOSE_REQUESTED = 0x210,
+                   SDL_EVENT_KEY_DOWN = 0x300, SDL_EVENT_KEY_UP = 0x301,
+                   SDL_EVENT_MOUSE_MOTION = 0x400;
+
+        /// <summary>Mouse moved inside the game window (hover-reveal an overlay). Emu thread.</summary>
+        public event Action? MouseMoved;
+        /// <summary>Mouse left the game window (hide the overlay). Emu thread.</summary>
+        public event Action? MouseLeft;
+
+        /// <summary>Set once the window/app asked to close (window X or Ctrl-Q). The emu loop polls this.</summary>
+        public bool CloseRequested { get; private set; }
+
+        /// <summary>Raised from <see cref="Present"/> (emu thread) for each non-repeat key transition:
+        /// (SDL scancode, isDown). The session maps scancodes → libretro ids / shortcuts.</summary>
+        public event Action<int, bool>? KeyEvent;
+
+        /// <summary>Wall-clock ms the last <see cref="Present"/> spent BLOCKED in the vsync swap. The emu
+        /// loop watches this: if it stays near zero the swap isn't actually pacing us (vsync off / sw
+        /// raster) and the loop must re-engage its Stopwatch limiter instead of free-running (hazard #2).</summary>
+        public double LastSwapMs { get; private set; }
+
+        /// <summary>True when we run Mesa-FIFO pacing (SDL interval 0 + eglSwapInterval 1): FIFO backpressure
+        /// caps us at refresh rate, so the loop must NOT add its stopwatch limiter (that fights FIFO and
+        /// adds jitter). The loop treats GL present as paced when this is set, regardless of swap-block ms.</summary>
+        public bool SelfPaced { get; private set; }
+
+        /// <summary>True when the game window currently holds keyboard focus. An unfocused window gets
+        /// throttled by KWin (~47fps) — so if smoothness drops, this tells us whether focus is the cause
+        /// (e.g. an overlay stealing it) vs something else.</summary>
+        public bool IsFocused => _window != IntPtr.Zero && (SDL_GetWindowFlags(_window) & SDL_WINDOW_INPUT_FOCUS) != 0;
+
+        /// <summary>Current screen position + size of the game window (logical units), so an overlay window
+        /// can be positioned over it. False if the window isn't up yet.</summary>
+        public bool TryGetWindowRect(out int x, out int y, out int w, out int h)
+        {
+            x = y = w = h = 0;
+            if (_window == IntPtr.Zero) return false;
+            return SDL_GetWindowPosition(_window, out x, out y) && SDL_GetWindowSize(_window, out w, out h);
+        }
+
+        public static GlPresenter? TryCreate(int width, int height, bool fullscreen, out string? error)
+        {
+            error = null;
+            try { return new GlPresenter(width, height, fullscreen); }
+            catch (Exception ex) { error = ex.Message; return null; }
+        }
+
+        private GlPresenter(int width, int height, bool fullscreen)
+        {
+            if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) throw new InvalidOperationException($"SDL_InitSubSystem(VIDEO): {SdlError()}");
+            SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+            SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY); // fixed-function quad
+            SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+            SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
+
+            ulong flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE;
+            _window = SDL_CreateWindow("Emutastic", Math.Max(1, width), Math.Max(1, height), flags);
+            if (_window == IntPtr.Zero) throw new InvalidOperationException($"SDL_CreateWindow: {SdlError()}");
+            if (fullscreen) SDL_SetWindowFullscreen(_window, true);
+
+            SDL_ShowWindow(_window);
+            SDL_RaiseWindow(_window);   // take focus so KWin doesn't throttle us as an inactive surface
+            _ctx = SDL_GL_CreateContext(_window);
+            if (_ctx == IntPtr.Zero) throw new InvalidOperationException($"SDL_GL_CreateContext: {SdlError()}");
+            SDL_GL_MakeCurrent(_window, _ctx);
+            // Vsync (interval 1) is the clock. EMUTASTIC_GL_VSYNC=0 disables the blocking swap — a
+            // diagnostic for the "swap never returns in-process behind Avalonia" hang: if frames flow
+            // with it off, the block was waiting on a vsync/frame-callback that isn't being delivered.
+            int want = Environment.GetEnvironmentVariable("EMUTASTIC_GL_VSYNC") == "0" ? 0 : 1;
+            // MESA-FIFO mode (default on Wayland): DON'T let SDL throttle the swap. SDL3's Wayland backend,
+            // with swap interval > 0, registers a wl_surface frame callback and BLOCKS on it every frame
+            // inside SDL_GL_SwapWindow — serializing to ONE frame in flight, so each swap eats a whole
+            // vblank and the CPU work after it overruns the next refresh (~50fps). RetroArch instead leaves
+            // the swap to Mesa's Wayland WSI FIFO (pipelined: returns as soon as a buffer is free, work
+            // overlaps scanout, compositor still presents each frame at exactly one vblank). So: tell SDL
+            // interval 0 (no SDL block) but force eglSwapInterval(1) so Mesa keeps doing FIFO. FIFO
+            // backpressure (swap blocks once the buffer pool is full) caps us at refresh rate — so we also
+            // mark the presenter self-paced and skip the stopwatch, which would only add jitter.
+            // Prefer native-Wayland EGL FIFO (eglSwapInterval(1)) and then tell SDL NOT to also throttle the
+            // swap (its per-frame frame-callback block serializes us). CRITICAL: on x11/GLX (Xwayland — e.g.
+            // when the game-host is launched under the Avalonia app) eglGetCurrentDisplay is null, so we
+            // CANNOT set EGL FIFO — in that case we MUST keep SDL's vsync (interval=want), or the swap runs
+            // UNSYNCED (tearing + the present thread spinning at hundreds of fps = "less smooth in the app").
+            bool mesaFifoReq = want != 0 && Environment.GetEnvironmentVariable("EMUTASTIC_GL_MESA_FIFO") != "0";
+            IntPtr edpy = IntPtr.Zero;
+            try { edpy = eglGetCurrentDisplay(); } catch { }
+            bool mesaFifo = mesaFifoReq && edpy != IntPtr.Zero;   // native-Wayland EGL available
+            // Set SDL's interval FIRST — its SetSwapInterval also pushes that value onto the EGL surface.
+            // 0 when we'll drive FIFO via EGL ourselves; else `want` (SDL's own vsync — the x11/GLX fallback).
+            SDL_GL_SetSwapInterval(mesaFifo ? 0 : want);
+            SDL_GL_GetSwapInterval(out int iv);
+            // Now, AFTER SDL, force eglSwapInterval(1) so the Mesa surface is FIFO. This MUST come last —
+            // doing it before SDL_GL_SetSwapInterval(0) lets SDL clobber it back to 0 (→ swap never blocks →
+            // present thread spins at thousands of fps). On x11/GLX edpy is null → mesaFifo=false → we kept
+            // SDL's vsync above instead.
+            bool eglOk = false; string eglMsg;
+            if (mesaFifo)
+            {
+                try { eglOk = eglSwapInterval(edpy, 1); } catch { }
+                eglMsg = $"eglSwapInterval(1)={eglOk} dpy=0x{edpy.ToInt64():X}";
+            }
+            else eglMsg = edpy == IntPtr.Zero ? "eglGetCurrentDisplay=null (x11/GLX → SDL vsync)" : "mesaFifo off";
+            mesaFifo = mesaFifo && eglOk;
+            SelfPaced = mesaFifo;
+            // Cache the EGL display+surface so Present() can call eglSwapBuffers directly (skip SDL's
+            // throttling SwapWindow). Only when self-paced and both handles are valid.
+            if (SelfPaced)
+            {
+                try { _eglDpy = edpy; _eglSurf = eglGetCurrentSurface(EGL_DRAW); } catch { }
+                if (_eglDpy == IntPtr.Zero || _eglSurf == IntPtr.Zero) { _eglDpy = IntPtr.Zero; _eglSurf = IntPtr.Zero; }
+            }
+            string vdrv = "?";
+            try { var p = SDL_GetCurrentVideoDriver(); if (p != IntPtr.Zero) vdrv = Marshal.PtrToStringUTF8(p) ?? "?"; } catch { }
+            System.Diagnostics.Trace.WriteLine($"[Gl] window {width}x{height} fullscreen={fullscreen} videoDriver={vdrv} mesaFifo={mesaFifo} selfPaced={SelfPaced} swapInterval={iv} (wanted {want}) [{eglMsg}]");
+
+            for (int i = 0; i < TexCount; i++)
+            {
+                glGenTextures(1, out _texes[i]);
+                glBindTexture(GL_TEXTURE_2D, _texes[i]);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (int)GL_NEAREST);   // crisp pixels
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (int)GL_NEAREST);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, (int)GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, (int)GL_CLAMP_TO_EDGE);
+            }
+            glEnable(GL_TEXTURE_2D);
+            glClearColor(0, 0, 0, 1);
+        }
+
+        /// <summary>Drain + dispatch the window's events (keeps the compositor serviced AND delivers input).
+        /// Must be called on the thread that owns the window. Present() calls this; the decoupled present
+        /// thread also calls it directly when there's no frame yet to draw.</summary>
+        public void PumpEvents()
+        {
+            if (_window == IntPtr.Zero) return;
+            while (SDL_PollEvent(_evBuf))
+            {
+                uint type = BitConverter.ToUInt32(_evBuf, 0);
+                switch (type)
+                {
+                    case SDL_EVENT_QUIT:
+                    case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+                        CloseRequested = true;
+                        break;
+                    case SDL_EVENT_KEY_DOWN:
+                    case SDL_EVENT_KEY_UP:
+                        // SDL_KeyboardEvent layout: type(u32)@0, reserved(u32)@4, timestamp(u64)@8,
+                        // windowID(u32)@16, which(u32)@20, scancode(u32)@24, key(u32)@28, mod(u16)@32,
+                        // raw(u16)@34, down(bool)@36, repeat(bool)@37.
+                        if (_evBuf[37] == 0)   // ignore auto-repeat; we only want real transitions
+                            KeyEvent?.Invoke((int)BitConverter.ToUInt32(_evBuf, 24), type == SDL_EVENT_KEY_DOWN);
+                        break;
+                    case SDL_EVENT_MOUSE_MOTION:       MouseMoved?.Invoke(); break;
+                    case SDL_EVENT_WINDOW_MOUSE_LEAVE: MouseLeft?.Invoke(); break;
+                }
+            }
+        }
+
+        /// <summary>Upload one BGRA frame, draw it aspect-fit, and swap (blocks to vsync → paces the loop).</summary>
+        public bool Present(byte[] bgra, int frameW, int frameH)
+        {
+            if (_window == IntPtr.Zero || frameW <= 0 || frameH <= 0) return false;
+            PumpEvents();
+
+            // (context is already current on this emu thread since construction; the per-frame
+            // SDL_GL_MakeCurrent here was redundant and eglMakeCurrent can force a driver sync —
+            // dropped to stop serializing ~a few ms of work on top of every vsync swap.)
+            // Advance the rotation so this upload targets a texture the GPU isn't still reading for the
+            // previous present (avoids the upload→draw serialization stall).
+            _texIndex = (_texIndex + 1) % TexCount;
+            glBindTexture(GL_TEXTURE_2D, _texes[_texIndex]);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+            fixed (byte* p = bgra)
+            {
+                if (frameW != _texW[_texIndex] || frameH != _texH[_texIndex])
+                {
+                    glTexImage2D(GL_TEXTURE_2D, 0, (int)GL_RGBA8, frameW, frameH, 0, GL_BGRA, GL_UNSIGNED_BYTE, (IntPtr)p);
+                    _texW[_texIndex] = frameW; _texH[_texIndex] = frameH;
+                }
+                else
+                {
+                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, frameW, frameH, GL_BGRA, GL_UNSIGNED_BYTE, (IntPtr)p);
+                }
+            }
+
+            SDL_GetWindowSizeInPixels(_window, out int winW, out int winH);
+            if (winW <= 0 || winH <= 0) { winW = frameW; winH = frameH; }
+            glViewport(0, 0, winW, winH);
+            glClear(GL_COLOR_BUFFER_BIT);
+
+            // Aspect-preserving (Uniform/contain) viewport, centred. GL viewport origin is bottom-left.
+            double scale = Math.Min((double)winW / frameW, (double)winH / frameH);
+            int fw = (int)Math.Round(frameW * scale), fh = (int)Math.Round(frameH * scale);
+            glViewport((winW - fw) / 2, (winH - fh) / 2, fw, fh);
+
+            // Fullscreen quad; texcoord t=0 → top so the top-down frame shows upright.
+            glBegin(GL_QUADS);
+            glTexCoord2f(0, 0); glVertex2f(-1, 1);
+            glTexCoord2f(1, 0); glVertex2f(1, 1);
+            glTexCoord2f(1, 1); glVertex2f(1, -1);
+            glTexCoord2f(0, 1); glVertex2f(-1, -1);
+            glEnd();
+
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            // Direct EGL present (Mesa FIFO, pipelined) when self-paced; else SDL's blocking swap.
+            bool ok = (_eglDpy != IntPtr.Zero && _eglSurf != IntPtr.Zero)
+                ? eglSwapBuffers(_eglDpy, _eglSurf)
+                : SDL_GL_SwapWindow(_window);
+            LastSwapMs = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            return ok;
+        }
+
+        public void SetFullscreen(bool fullscreen)
+        {
+            if (_window != IntPtr.Zero) SDL_SetWindowFullscreen(_window, fullscreen);
+        }
+
+        public void Dispose()
+        {
+            if (_ctx != IntPtr.Zero)
+            {
+                SDL_GL_MakeCurrent(_window, _ctx);
+                for (int i = 0; i < TexCount; i++)
+                    if (_texes[i] != 0) { glDeleteTextures(1, ref _texes[i]); _texes[i] = 0; }
+            }
+            if (_ctx != IntPtr.Zero) { SDL_GL_DestroyContext(_ctx); _ctx = IntPtr.Zero; }
+            if (_window != IntPtr.Zero) { SDL_DestroyWindow(_window); _window = IntPtr.Zero; }
+            SDL_QuitSubSystem(SDL_INIT_VIDEO);
+        }
+    }
+}

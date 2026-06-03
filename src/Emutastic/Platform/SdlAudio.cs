@@ -35,6 +35,10 @@ namespace Emutastic.Platform
         [DllImport("SDL3")] [return: MarshalAs(UnmanagedType.I1)] static extern bool SDL_PauseAudioStreamDevice(IntPtr stream);
         [DllImport("SDL3")] [return: MarshalAs(UnmanagedType.I1)] static extern bool SDL_PutAudioStreamData(IntPtr stream, IntPtr buf, int len);
         [DllImport("SDL3")] static extern int SDL_GetAudioStreamQueued(IntPtr stream);
+        // Dynamic rate control: scales the rate at which the stream consumes its INPUT (a speed ratio,
+        // 0.01..100, default 1.0). >1 = consume faster (drain the input queue) + slightly higher pitch.
+        // This is the INVERSE of RetroArch's src_ratio (out/in); we account for that in the servo sign.
+        [DllImport("SDL3")] [return: MarshalAs(UnmanagedType.I1)] static extern bool SDL_SetAudioStreamFrequencyRatio(IntPtr stream, float ratio);
         [DllImport("SDL3")] [return: MarshalAs(UnmanagedType.I1)] static extern bool SDL_ClearAudioStream(IntPtr stream);
         [DllImport("SDL3")] static extern void SDL_DestroyAudioStream(IntPtr stream);
         [DllImport("SDL3")] static extern IntPtr SDL_GetError();
@@ -46,6 +50,23 @@ namespace Emutastic.Platform
         // backpressure/catch-up guards fire erratically → judder; a time estimate is smooth.
         private long _framesQueued;
         private readonly System.Diagnostics.Stopwatch _playClock = new();
+
+        // ---- Dynamic Rate Control (RetroArch-style) ----
+        // Servo the resampler ratio by <=0.5% to hold the input queue at a target cushion, so audio
+        // neither underruns nor runs away. Replaces the coarse whole-frame catch-up/skip with a smooth,
+        // inaudible nudge. Controls on the REAL input-side queue (SDL_GetAudioStreamQueued), not the
+        // synthetic wall-clock estimate and not the output side (which sits near zero for a device-pulled
+        // stream). See docs/frame-pacing-and-vsync.md.
+        const double DrcTargetMs    = 150.0;   // cushion setpoint (= prefill level ≈ "half full")
+        const double DrcKp          = 5e-5;    // ratio per ms of error; ~100ms error -> ~0.5%
+        const double DrcMaxDelta    = 0.005;   // ±0.5% clamp (RetroArch audio_rate_control_delta)
+        const double DrcSlewPerCall = 3e-4;    // max ratio change per call -> gradual, inaudible
+        const double DrcSmoothing   = 0.10;    // EMA factor for the occupancy signal (rejects chunking)
+        private double _drcQueuedMsAvg;        // low-passed input-queue occupancy (ms)
+        private float  _drcRatio = 1.0f;       // currently applied frequency ratio
+        private bool   _drcStarted;
+        private bool   _drcLastAboveZero = true; // edge tracking so one stall counts as one underrun
+        private long   _underruns;             // count of distinct underrun events (instrumentation)
 
         public SdlAudio(int sampleRate)
         {
@@ -83,6 +104,59 @@ namespace Emutastic.Platform
             }
         }
 
+        /// <summary>REAL input-side queued audio in ms — the standing backlog the device still has to
+        /// pull and play. SDL_GetAudioStreamQueued returns bytes put in but not yet consumed (input
+        /// format: S16 stereo = 4 bytes/frame). Unlike <see cref="QueuedMs"/> (a wall-clock estimate) this
+        /// reflects the actual device drain, so it's the correct control signal for pacing + DRC.</summary>
+        public double QueuedMsReal
+        {
+            get
+            {
+                if (_stream == IntPtr.Zero) return 0;
+                int bytes = SDL_GetAudioStreamQueued(_stream);
+                return bytes > 0 ? bytes / 4.0 / _sampleRate * 1000.0 : 0;
+            }
+        }
+
+        /// <summary>The DRC-smoothed input-queue occupancy (ms) — the EMA the rate controller servos.
+        /// The emu loop's coarse watermark guards use THIS, not raw <see cref="QueuedMsReal"/>: a single
+        /// device gulp can dip the raw stair-stepped value under the watermark and fire a spurious
+        /// whole-frame catch-up (the prior judder-regression mode). Updated by <see cref="ApplyDrc"/>.</summary>
+        public double QueuedMsSmoothed => _drcStarted ? _drcQueuedMsAvg : QueuedMsReal;
+
+        /// <summary>RetroArch-style dynamic rate control: nudge the resampler ratio by ≤0.5% to keep the
+        /// input queue centered on <paramref name="targetMs"/>, so audio stays glued to the device clock
+        /// without coarse whole-frame corrections. Call once per produced frame, after prefill. Sign:
+        /// queue too FULL (error&gt;0) ⇒ consume input FASTER ⇒ ratio&gt;1 (SDL's ratio is a speed ratio, the
+        /// inverse of RetroArch's src_ratio). Steady-state parks slightly off target (P-only) — harmless,
+        /// stays well inside the watermark backstops.</summary>
+        public void ApplyDrc(double targetMs = DrcTargetMs)
+        {
+            if (_stream == IntPtr.Zero || !_playClock.IsRunning) return; // still prefilling / no device
+            double q = QueuedMsReal;
+            if (q <= 0 && _drcLastAboveZero) _underruns++;   // count the edge, not every zero-frame
+            _drcLastAboveZero = q > 0;
+            // Low-pass the occupancy so resampler/device chunking can't drive audible ratio swings.
+            _drcQueuedMsAvg = _drcStarted ? _drcQueuedMsAvg + DrcSmoothing * (q - _drcQueuedMsAvg) : q;
+            _drcStarted = true;
+
+            double error = _drcQueuedMsAvg - targetMs;  // >0 = too full => drain faster (ratio>1)
+            float desired = (float)Math.Clamp(1.0 + DrcKp * error, 1.0 - DrcMaxDelta, 1.0 + DrcMaxDelta);
+            // Slew-limit: bound per-call ratio change so corrections are gradual (the needed steady
+            // correction is only ~0.2% ≈ 3.4 cents — inaudible when approached slowly).
+            float step = Math.Clamp(desired - _drcRatio, (float)-DrcSlewPerCall, (float)DrcSlewPerCall);
+            _drcRatio += step;
+            SDL_SetAudioStreamFrequencyRatio(_stream, _drcRatio);
+        }
+
+        /// <summary>Sample DRC state for the status bar / logs (smooth queue ms, applied ratio, underruns).</summary>
+        public void SampleDrc(out double queuedMs, out double ratio, out long underruns)
+        {
+            queuedMs = _drcStarted ? _drcQueuedMsAvg : QueuedMsReal;
+            ratio = _drcRatio;
+            underruns = _underruns;
+        }
+
         /// <summary>Queue a batch of interleaved S16 stereo samples (libretro audio_sample_batch).</summary>
         public void QueueBatch(IntPtr data, int frames)
         {
@@ -108,6 +182,8 @@ namespace Emutastic.Platform
             if (_stream != IntPtr.Zero) SDL_ClearAudioStream(_stream);
             _framesQueued = 0;
             _playClock.Reset();   // re-baseline the estimate after a flush
+            _drcStarted = false; _drcQueuedMsAvg = 0; _drcRatio = 1.0f; _drcLastAboveZero = true;
+            if (_stream != IntPtr.Zero) SDL_SetAudioStreamFrequencyRatio(_stream, 1.0f);
         }
 
         public void Dispose()

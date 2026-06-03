@@ -118,6 +118,156 @@ namespace Emutastic.Emulator
         /// on this (push) — paced by the core, a single clock — instead of pulling on a timer.</summary>
         public event Action? FrameReady;
 
+        // ── Vulkan present integration (see docs/frame-pacing-and-vsync.md) ──
+        // OPT-IN (EMUTASTIC_VULKAN=1). A dedicated present thread floats a borderless top-level Vulkan
+        // window (VkOverlay) over the Avalonia window's video viewport — the upstream WS_POPUP model and
+        // the ONLY config that hit clean vsync on KWin/Xwayland (a reparented child = ~28fps). Emulation
+        // stays on its own steady Stopwatch thread; the overlay present is vsync-paced and decoupled.
+        // The UI thread only feeds a target screen rect + fullscreen flag. Any failure → WriteableBitmap.
+        private VkOverlay? _overlay;
+        private volatile bool _ovHasTarget;
+        private volatile int _ovX, _ovY, _ovW = 1280, _ovH = 720;
+        private volatile bool _ovFullscreen;
+        private volatile uint _ovGeomGen;     // bumped by the UI thread on any geometry/state change
+        private uint _ovGeomApplied;          // last gen applied (emu thread)
+        private bool _overlayTried;           // one-shot overlay-create attempt
+        private volatile bool _vulkanOk;
+        private double _presentMsEma;         // smoothed present-block time (instrumentation + pace gate)
+        private double _frameMaxMs;           // worst frame-to-frame time this log interval (jitter peak)
+        private int _frameHitches;            // frames >1.5× refresh this interval (periodic-stall detector)
+        private double _frameMsEma;           // smoothed frame-to-frame period (cadence readout)
+
+        // Frame-PACING method (EMUTASTIC_PACING) — the lever for in-game smoothness (see
+        // focus-on-pacing-method): "stopwatch" (default, high-res timer to 60.0), "audio" (sound-clock:
+        // pace by the audio device draining one frame — perfectly steady, true 60.0988 rate, no timer
+        // wobble), "spin" (pure busy-spin to the budget, lowest timer wobble). A/B on the real machine.
+        private readonly string _pacing = (Environment.GetEnvironmentVariable("EMUTASTIC_PACING") ?? "stopwatch").Trim().ToLowerInvariant();
+        // Audio DRC is OPT-IN (EMUTASTIC_DRC=1). It was added this session and regressed 2D smoothness
+        // (matches the memory: a prior DRC attempt made jitter WORSE). Default OFF restores the pre-Vulkan
+        // behavior: plain Stopwatch + the smooth TIME-BASED audio estimate for the guards.
+        private readonly bool _drc = Environment.GetEnvironmentVariable("EMUTASTIC_DRC") == "1";
+
+        // ── GL present (the proven RetroArch model: own SDL3-GL window, vsync swap = the clock) ──
+        // EMUTASTIC_PRESENT = writeable (default) | vulkan | gl. "gl" is OPT-IN while we debug an
+        // in-process hang: the emu thread owns a focused GlPresenter window and presents each produced
+        // frame through it, the BLOCKING vsync swap pacing the loop (none of the Stopwatch/audio/overlay
+        // pacing runs). Window creation + present #1 work, but the loop then parks — suspected interaction
+        // between SDL's GL context and Avalonia's Mesa renderer in one process. Default stays on the known-
+        // good WriteableBitmap path so a normal launch is never affected until the GL path is proven.
+        private readonly string _present = (Environment.GetEnvironmentVariable("EMUTASTIC_PRESENT") ?? "writeable").Trim().ToLowerInvariant();
+        private GlPresenter? _gl;
+        private bool _glFullscreen;
+        private long _glPresents;   // bring-up diagnostic: count of GL presents (heartbeat / first-present log)
+        private double _glSwapMsEma; // smoothed vsync-swap block time → no-vsync-fallback gate (hazard #2)
+        // GL "spike model": exactly one retro_run per present (vsync = the only clock). The audio
+        // backpressure skip / low-watermark catch-up runs the core a VARIABLE number of times per present,
+        // which jitters the swap rhythm — the spike (run-once-present) was the only smooth config. Default
+        // ON for the GL path; EMUTASTIC_GL_SIMPLE=0 reverts to the old variable loop for A/B.
+        private readonly bool _glSimpleEnabled = Environment.GetEnvironmentVariable("EMUTASTIC_GL_SIMPLE") != "0";
+        // DECOUPLED present (EMUTASTIC_GL_PRESENT_THREAD=1): RetroArch's pacing model. The emu thread runs
+        // the core at real-time, paced by AUDIO backpressure (block until the device drains the frame we
+        // just produced — RetroArch's audio_sync). A separate PRESENT thread owns the GL window and shows
+        // the latest frame at vsync. A missed vblank then just repeats a frame instead of slowing the core,
+        // so emulation speed/audio stay correct regardless of present hitches. Relaunch to A/B vs the
+        // single-threaded swap-is-the-clock path. DEFAULT ON; EMUTASTIC_GL_PRESENT_THREAD=0 reverts to the
+        // old single-threaded path for A/B.
+        private readonly bool _presentThreadMode = Environment.GetEnvironmentVariable("EMUTASTIC_GL_PRESENT_THREAD") != "0";
+        private byte[]? _presentBuf;   // present-thread-owned copy of the latest frame (decoupled mode)
+        // DIAGNOSTIC ONLY (EMUTASTIC_NO_INPUTPOLL=1): skip the per-frame SDL pump/gamepad update to test
+        // whether per-frame input polling is what jitters the present. Game won't respond to input.
+        private readonly bool _noInputPoll = Environment.GetEnvironmentVariable("EMUTASTIC_NO_INPUTPOLL") == "1";
+        // Spike-comparable smoothness stats for the GL path (mean/stddev/min/max over a ~5s window).
+        private double _glStatSum, _glStatSumSq, _glStatMin = double.MaxValue, _glStatMax, _glStatWorkMax;
+        private int _glStatCount, _glStatGc2Base = -1;
+
+        // Battery save-RAM (.srm) persistence. Loaded from disk after the core boots, autosaved every
+        // few seconds while running, and flushed on exit — there was NO save persistence before, and
+        // Dispose() can leak a hung core, so periodic autosave (not just flush-on-exit) is the safety net.
+        private string? _srmPath;
+        private long _srmAutoSaveTick;     // loop counter for the periodic autosave cadence
+        private byte[]? _lastSrm;          // last bytes written, to skip unchanged writes
+
+        /// <summary>True while a game runs in a SEPARATE host process (set by the parent's launcher).
+        /// The parent's ControllerManager must stop pumping SDL gamepads while this is set, since the
+        /// in-process <see cref="AnyActive"/> guard can't see a child process holding the same pads.</summary>
+        public static volatile bool ExternalGameActive;
+
+        /// <summary>Mouse moved inside / left the GL game window (raised on the emu thread). An overlay
+        /// uses these to hover-reveal then auto-hide, so nothing shows during normal play.</summary>
+        public event Action? GameMouseMoved;
+        public event Action? GameMouseLeft;
+        private void OnGlMouseMoved() => GameMouseMoved?.Invoke();
+        private void OnGlMouseLeft() => GameMouseLeft?.Invoke();
+
+        /// <summary>Ask the loop to stop and exit cleanly (flushes SRAM). Used by the host's quit signals
+        /// (stdin EOF / SIGTERM) — distinct from Dispose, which also tears down native resources.</summary>
+        public void RequestQuit() => _running = false;
+
+        /// <summary>Blocks until the emulation thread has exited (the GL window closed or RequestQuit).
+        /// The game host calls this on its main thread to keep the process alive for the session.</summary>
+        public void WaitForExit() => _thread?.Join();
+
+        private bool _runInline;
+        /// <summary>Like <see cref="Start"/>, but runs the emulation loop + GL window on the CALLING thread
+        /// (blocks until the game exits) instead of a background thread — the spike model, which the screen-
+        /// sync prefers on Linux. The game host calls this on its main thread.</summary>
+        public bool RunInline(out string? error)
+        {
+            _runInline = true;
+            return Start(out error);   // Start() runs RunLoop() inline and returns once the game exits
+        }
+
+        /// <summary>Screen rect of the GL game window (for positioning an overlay over it). False if the
+        /// GL window isn't up (or not in GL mode).</summary>
+        public bool TryGetGameWindowRect(out int x, out int y, out int w, out int h)
+        {
+            x = y = w = h = 0;
+            return _gl != null && _gl.TryGetWindowRect(out x, out y, out w, out h);
+        }
+
+        // SDL3 scancode → libretro player-1 joypad id (defaults; mirrors EmulatorWindow.KeyMap). Per-console
+        // configured keybindings are honored on the gamepad path already; wiring the GL keyboard to the
+        // Controls panel is a follow-up — these defaults keep a ROM playable from the keyboard meanwhile.
+        private static readonly Dictionary<int, int> _glKeyMap = new()
+        {
+            { 82, 4 }, { 81, 5 }, { 80, 6 }, { 79, 7 },   // Up / Down / Left / Right
+            { 29, 0 }, { 27, 8 }, { 4, 1 }, { 22, 9 },     // Z=B, X=A, A=Y, S=X
+            { 40, 3 }, { 229, 2 }, { 20, 10 }, { 26, 11 }, // Enter=START, RShift=SELECT, Q=L, W=R
+        };
+        const int SC_ESCAPE = 41, SC_F11 = 68, SC_P = 19;
+
+        // Emu-thread handler for the GL window's keyboard. Game buttons feed SdlInput's player-1 fallback;
+        // a few non-game scancodes drive the session (quit / fullscreen / pause).
+        private void OnGlKey(int scancode, bool down)
+        {
+            if (_glKeyMap.TryGetValue(scancode, out int id)) { _input.SetKeyboardButton(id, down); return; }
+            if (!down) return;
+            switch (scancode)
+            {
+                case SC_ESCAPE: _running = false; break;
+                case SC_F11:    _glFullscreen = !_glFullscreen; _gl?.SetFullscreen(_glFullscreen); break;
+                case SC_P:      _paused = !_paused; break;
+            }
+        }
+
+        /// <summary>UI thread feeds the overlay's target: the video viewport's screen position + pixel
+        /// size and whether the window is fullscreen. Cheap; the present thread applies changes.</summary>
+        public void SetOverlayGeometry(int screenX, int screenY, int pixelW, int pixelH, bool fullscreen)
+        {
+            _ovX = screenX; _ovY = screenY;
+            if (pixelW > 0) _ovW = pixelW;
+            if (pixelH > 0) _ovH = pixelH;
+            _ovFullscreen = fullscreen;
+            _ovHasTarget = true;
+            unchecked { _ovGeomGen++; }
+        }
+
+        public bool VulkanPresentActive => _vulkanOk;
+
+        /// <summary>Resolved on the present thread: true = Vulkan overlay active (hide the WriteableBitmap
+        /// Image), false = using the WriteableBitmap path.</summary>
+        public event Action<bool>? PresenterResolved;
+
         /// <summary>Sample-and-reset the real fps + average retro_run time since the last call
         /// (drives the bottom status bar). Safe to call from the UI thread.</summary>
         public void SampleStats(out int frames, out double avgRunMs)
@@ -188,6 +338,8 @@ namespace Emutastic.Emulator
                 string sysDir = _handler.ResolveSystemDirectory(AppPaths.GetFolder("System"), coreDir);
                 string saveDir = AppPaths.GetFolder("Saves");
                 _handler.PrepareSaveDirectory(saveDir);   // create any console-specific subdirs (e.g. dc/)
+                // Battery save lives next to the ROM's name in the Saves dir (RetroArch's <rom>.srm scheme).
+                _srmPath = System.IO.Path.Combine(saveDir, System.IO.Path.GetFileNameWithoutExtension(_romPath) + ".srm");
                 _systemDirPtr = Marshal.StringToHGlobalAnsi(sysDir);
                 _saveDirPtr = Marshal.StringToHGlobalAnsi(saveDir);
                 _coreAssetsDirPtr = Marshal.StringToHGlobalAnsi(coreDir);
@@ -208,6 +360,7 @@ namespace Emutastic.Emulator
                 // disk ejected (FDS BIOS "Set the Disk Card"), insert disk 0 so the game boots. Discs
                 // that are already inserted (PS1/Saturn) are left alone.
                 TryInsertFirstDisk();
+                LoadSram();   // restore battery save before the first frame runs
 
                 _fps = _core.AvInfo.timing.fps > 0 ? _core.AvInfo.timing.fps : 60.0;
                 double hwFps = _handler.HardwareTargetFps;   // console-forced rate (e.g. Dreamcast 60); -1 = use core
@@ -218,12 +371,27 @@ namespace Emutastic.Emulator
                 var geo = _core.AvInfo.geometry;
                 DisplayAspectRatio = _handler.GetDisplayAspectRatio(geo.base_width, geo.base_height, geo.aspect_ratio);
                 _sampleRate = _core.AvInfo.timing.sample_rate > 0 ? _core.AvInfo.timing.sample_rate : 44100;
-                _audio = new SdlAudio((int)Math.Round(_sampleRate));
+                // DIAGNOSTIC ONLY (EMUTASTIC_NO_AUDIO=1): skip opening the sound device to test whether the
+                // audio subsystem is what's dragging the present off a clean 60. Never a shipping setting.
+                if (Environment.GetEnvironmentVariable("EMUTASTIC_NO_AUDIO") != "1")
+                    _audio = new SdlAudio((int)Math.Round(_sampleRate));
+                else
+                    Trace.WriteLine("[Emu] EMUTASTIC_NO_AUDIO=1 — running WITHOUT sound (diagnostic)");
 
                 _running = true;
                 System.Threading.Interlocked.Increment(ref _activeCount);
-                _thread = new Thread(RunLoop) { IsBackground = true, Name = "EmuLoop" };
-                _thread.Start();
+                if (_runInline)
+                {
+                    // Run the loop (and the GL window/present) on the CALLING thread — the spike model.
+                    // On Linux the screen-sync behaves far better for a window driven by the main thread
+                    // than a background one. The host has nothing else for its main thread to do.
+                    RunLoop();   // blocks until the game exits
+                }
+                else
+                {
+                    _thread = new Thread(RunLoop) { IsBackground = true, Name = "EmuLoop" };
+                    _thread.Start();
+                }
                 return true;
             }
             catch (Exception ex)
@@ -248,7 +416,39 @@ namespace Emutastic.Emulator
             for (int guard = 0; _running && _audio != null && _audio.IsOpen && _audio.QueuedMs < prefillMs && guard < 60; guard++)
                 try { _core!.Run(); } catch (Exception ex) { Trace.WriteLine($"[Emu] retro_run threw (prefill): {ex}"); break; }
 
+            // DECOUPLED mode: present runs on its own thread, emu thread is paced by audio. Branch out
+            // entirely (it owns the GL window + its own loop + cleanup) and return.
+            if (_present == "gl" && _presentThreadMode)
+            {
+                RunDecoupled(targetFrameMs, prefillMs);
+                return;
+            }
+
+            // Bring up the GL window on THIS (emu) thread so its GL context + event pump live here.
+            // Sized to the display aspect (cosmetic — GlPresenter aspect-fits any frame); 4:3 default.
+            if (_present == "gl")
+            {
+                double ar = DisplayAspectRatio > 0 ? DisplayAspectRatio : 4.0 / 3.0;
+                int winH = 720, winW = Math.Max(1, (int)Math.Round(winH * ar));
+                _glFullscreen = Environment.GetEnvironmentVariable("EMUTASTIC_GL_FULLSCREEN") == "1";
+                _gl = GlPresenter.TryCreate(winW, winH, _glFullscreen, out string? glErr);
+                if (_gl == null)
+                {
+                    Trace.WriteLine($"[Emu] GL present unavailable ({glErr}); falling back to WriteableBitmap path");
+                    PresenterResolved?.Invoke(false);
+                }
+                else
+                {
+                    _gl.KeyEvent += OnGlKey;
+                    _gl.MouseMoved += OnGlMouseMoved;
+                    _gl.MouseLeft += OnGlMouseLeft;
+                    Trace.WriteLine("[Emu] GL present ACTIVE (SDL3 GL window, vsync swap = the clock)");
+                    PresenterResolved?.Invoke(true);   // tells the Avalonia window to hide its WriteableBitmap
+                }
+            }
+
             var frameTimer = Stopwatch.StartNew();
+            long drcLogTick = 0;
             while (_running)
             {
                 // Reset is honored even while paused (so the pill's Reset isn't dead when paused).
@@ -257,39 +457,359 @@ namespace Emutastic.Emulator
                 // Paused: stop advancing the core (frame stays frozen) but keep the thread responsive.
                 if (_paused) { Thread.Sleep(16); frameTimer.Restart(); continue; }
 
-                _input.Poll();
+                if (!_noInputPoll) _input.Poll();
 
-                // Backpressure: if audio has run well ahead (core got ahead of real time), SKIP this
-                // frame's run so the buffer drains during the pacing wait — don't spin-then-run, which
-                // adds audio faster than it drains and burns CPU.
-                bool overBuffered = _audio != null && _audio.QueuedMs > backpressureMs;
-                if (!overBuffered)
+                // Dynamic rate control: fine-tune the resampler ratio each frame to hold the audio queue
+                // centered (RetroArch's model). This is the PRIMARY audio-sync mechanism now; the coarse
+                // backpressure/low-watermark guards below are only far-extreme backstops. All four servo
+                // the same REAL input-queue signal so they don't fight each other.
+                // DRC is opt-in (regressed 2D smoothness; off by default). Also off in "audio" pacing
+                // (the buffer drain is the clock, resampling would fight it).
+                if (_gl != null && _glSimpleEnabled)
                 {
+                    // SPIKE MODEL (the only config ever measured smooth): exactly ONE retro_run per present;
+                    // the blocking vsync swap is the sole clock. Sound STAYS ON — it's kept in sync purely
+                    // by the gentle resample nudge (DRC), NOT by skipping/repeating game frames (which is a
+                    // video action and was jittering the picture). One run per refresh = steady rhythm.
+                    _audio?.ApplyDrc();
                     long runT0 = frameTimer.ElapsedTicks;
                     try { _core!.Run(); } catch (Exception ex) { Trace.WriteLine($"[Emu] retro_run threw: {ex}"); break; }
                     System.Threading.Interlocked.Add(ref _coreRunTicks, frameTimer.ElapsedTicks - runT0);
                     System.Threading.Interlocked.Increment(ref _coreRunCalls);
+                }
+                else
+                {
+                    if (_drc && _pacing != "audio") _audio?.ApplyDrc();
 
-                    // Low-watermark catch-up: buffer dipped below the cushion → run one extra frame so
-                    // audio refills instead of underrunning (the latest video frame still wins). Counted
-                    // in the stats so the fps readout stays honest.
-                    if (_running && _audio != null && _audio.QueuedMs < lowWatermark)
+                    // Backpressure: if audio has run well ahead (core got ahead of real time), SKIP this
+                    // frame's run so the buffer drains during the pacing wait — don't spin-then-run, which
+                    // adds audio faster than it drains and burns CPU.
+                    bool overBuffered = _audio != null && _audio.QueuedMs > backpressureMs;
+                    if (!overBuffered)
                     {
-                        _input.Poll();
-                        long t2 = frameTimer.ElapsedTicks;
+                        long runT0 = frameTimer.ElapsedTicks;
                         try { _core!.Run(); } catch (Exception ex) { Trace.WriteLine($"[Emu] retro_run threw: {ex}"); break; }
-                        System.Threading.Interlocked.Add(ref _coreRunTicks, frameTimer.ElapsedTicks - t2);
+                        System.Threading.Interlocked.Add(ref _coreRunTicks, frameTimer.ElapsedTicks - runT0);
                         System.Threading.Interlocked.Increment(ref _coreRunCalls);
+
+                        // Low-watermark catch-up: buffer dipped below the cushion → run one extra frame so
+                        // audio refills instead of underrunning (the latest video frame still wins). Counted
+                        // in the stats so the fps readout stays honest.
+                        if (_running && _audio != null && _audio.QueuedMs < lowWatermark)   // smooth time-based estimate
+                        {
+                            _input.Poll();
+                            long t2 = frameTimer.ElapsedTicks;
+                            try { _core!.Run(); } catch (Exception ex) { Trace.WriteLine($"[Emu] retro_run threw: {ex}"); break; }
+                            System.Threading.Interlocked.Add(ref _coreRunTicks, frameTimer.ElapsedTicks - t2);
+                            System.Threading.Interlocked.Increment(ref _coreRunCalls);
+                        }
                     }
                 }
 
-                // Stopwatch pacing: sleep most of the remaining budget, then SPIN the last ~1ms for
-                // sub-millisecond accuracy → steady frame production (the fix for chunky 60fps).
-                double remaining = targetFrameMs - frameTimer.Elapsed.TotalMilliseconds;
-                if (remaining > 1.5) Thread.Sleep((int)(remaining - 1.0));
-                while (_running && frameTimer.Elapsed.TotalMilliseconds < targetFrameMs) Thread.SpinWait(10);
+                // Present + pace. When the overlay is up, its BLOCKING vsync present is the SINGLE clock
+                // (RetroArch's model): one retro_run per refresh → phase-locked, killing the 60.0-vs-panel
+                // beat that reads as "60fps but jittery". Strict FIFO → even refresh intervals. The
+                // Stopwatch runs only with no overlay (WriteableBitmap), or if the present didn't actually
+                // block (no real vsync) so we never free-run.
+                bool presentPaced = false;
+                if (_gl != null)
+                {
+                    // GL path: the blocking vsync swap IS the clock. One present per refresh → phase-locked,
+                    // even intervals. No Stopwatch/audio/spin pacing runs (presentPaced short-circuits it).
+                    if (_gl.CloseRequested) { _running = false; break; }
+                    byte[]? buf; int pw, ph;
+                    lock (_frameLock) { buf = _frame; pw = _frameW; ph = _frameH; }
+                    if (buf != null)
+                    {
+                        // Bring-up diagnostic: log the first present's enter/return so a hang in the
+                        // blocking swap is unmistakable, then a heartbeat every ~60 frames.
+                        if (_glPresents == 0) Trace.WriteLine($"[Gl] present #1 ENTER ({pw}x{ph})");
+                        _gl.Present(buf, pw, ph);   // blocks to vsync → paces the loop
+                        if (_glPresents == 0) Trace.WriteLine("[Gl] present #1 RETURNED (swap is unblocking)");
+                        if ((++_glPresents % 60) == 0) Trace.WriteLine($"[Gl] heartbeat: {_glPresents} presents");
+                        // Hazard #2: gate on the SMOOTHED swap-block time (like the Vulkan path). If the
+                        // swap actually blocks to vsync it paces us; if it returns fast (vsync off / sw
+                        // raster) the EMA stays low → presentPaced=false → the Stopwatch limiter below
+                        // re-engages so the loop never free-runs uncapped.
+                        _glSwapMsEma = _glSwapMsEma <= 0 ? _gl.LastSwapMs : _glSwapMsEma + 0.05 * (_gl.LastSwapMs - _glSwapMsEma);
+                        // Mesa-FIFO present is self-paced (FIFO backpressure caps the rate); trust it and
+                        // skip the stopwatch. Otherwise gate on the swap-block time as before.
+                        presentPaced = _gl.SelfPaced || _glSwapMsEma > targetFrameMs * 0.5;
+                    }
+                    else { Thread.Sleep(1); presentPaced = true; }   // no frame yet (boot) → don't busy-spin
+                }
+                else if (EnsureOverlay() && _overlay != null)
+                {
+                    uint gen = _ovGeomGen;
+                    if (gen != _ovGeomApplied)
+                    {
+                        _ovGeomApplied = gen;
+                        try { if (!_overlay.Update(_ovX, _ovY, _ovW, _ovH, _ovFullscreen, out _)) FailOverlay(); }
+                        catch (Exception ex) { Trace.WriteLine($"[Emu] overlay update threw: {ex.Message}"); }
+                    }
+                    if (_overlay != null)
+                    {
+                        byte[]? buf; int pw, ph;
+                        lock (_frameLock) { buf = _frame; pw = _frameW; ph = _frameH; }
+                        if (buf != null)
+                        {
+                            long pt0 = frameTimer.ElapsedTicks;
+                            // Present, then BLOCK until it's actually on screen (present_wait) → the next
+                            // retro_run is locked to the real display cadence (CVDisplayLink model). Falls
+                            // back to acquire-pacing if present_wait is unavailable.
+                            try { _overlay.Present(buf, pw, ph); _overlay.WaitForLastPresent(); }
+                            catch (Exception ex) { Trace.WriteLine($"[Emu] overlay present threw: {ex.Message}"); FailOverlay(); }
+                            double pm = (frameTimer.ElapsedTicks - pt0) * 1000.0 / Stopwatch.Frequency;
+                            _presentMsEma = _presentMsEma <= 0 ? pm : _presentMsEma + 0.05 * (pm - _presentMsEma);
+                        }
+                    }
+                    // Smoothed gate (not per-frame) so a single fast present can't flip us into Stopwatch.
+                    presentPaced = _vulkanOk && _presentMsEma > targetFrameMs * 0.5;
+                }
+
+                if (!presentPaced)
+                {
+                    if (_pacing == "audio" && _audio != null && _audio.IsOpen)
+                    {
+                        // SOUND CLOCK: retro_run just added ~1 frame of audio; wait for the device to drain
+                        // back to the cushion. The device consumes at exactly sample_rate → this paces the
+                        // loop to real time, steadily, at the core's true rate — no Stopwatch wobble. Capped
+                        // at 4× the budget so a silent scene can't stall.
+                        int guard = 0;
+                        while (_running && _audio.QueuedMsReal > prefillMs
+                               && frameTimer.Elapsed.TotalMilliseconds < targetFrameMs * 4 && guard++ < 8000)
+                        {
+                            if (_audio.QueuedMsReal - prefillMs > 4) Thread.Sleep(1); else Thread.SpinWait(60);
+                        }
+                    }
+                    else if (_pacing == "spin")
+                    {
+                        // Pure busy-spin to the budget: no Thread.Sleep at all → lowest timer wobble (burns a core).
+                        while (_running && frameTimer.Elapsed.TotalMilliseconds < targetFrameMs) Thread.SpinWait(40);
+                    }
+                    else
+                    {
+                        // STOPWATCH (default): sleep most of the budget, spin the last ~1ms for sub-ms accuracy.
+                        double remaining = targetFrameMs - frameTimer.Elapsed.TotalMilliseconds;
+                        if (remaining > 1.5) Thread.Sleep((int)(remaining - 1.0));
+                        while (_running && frameTimer.Elapsed.TotalMilliseconds < targetFrameMs) Thread.SpinWait(10);
+                    }
+                }
+                // Universal frame-cadence instrumentation: the full frame-to-frame period (work + pacing),
+                // for ANY pacing method / present path — this is the actual smoothness signal.
+                double frameMs = frameTimer.Elapsed.TotalMilliseconds;
                 frameTimer.Restart();
+                if (frameMs > _frameMaxMs) _frameMaxMs = frameMs;
+                if (frameMs > targetFrameMs * 1.5) _frameHitches++;
+                _frameMsEma = _frameMsEma <= 0 ? frameMs : _frameMsEma + 0.05 * (frameMs - _frameMsEma);
+
+                // GL smoothness readout, directly comparable to the spike (mean/stddev/min/max + focus),
+                // every ~300 frames (~5s). The KEY line to grep: tells us if the GL path is smooth and
+                // whether the window is focused (an unfocused window is throttled → not the code's fault).
+                if (_gl != null)
+                {
+                    if (_glStatGc2Base < 0) _glStatGc2Base = GC.CollectionCount(2);
+                    double workMs = frameMs - _gl.LastSwapMs;   // CPU work outside the blocking swap
+                    if (workMs > _glStatWorkMax) _glStatWorkMax = workMs;
+                    _glStatSum += frameMs; _glStatSumSq += frameMs * frameMs; _glStatCount++;
+                    if (frameMs < _glStatMin) _glStatMin = frameMs;
+                    if (frameMs > _glStatMax) _glStatMax = frameMs;
+                    if (_glStatCount >= 300)
+                    {
+                        double mean = _glStatSum / _glStatCount;
+                        double variance = Math.Max(0, _glStatSumSq / _glStatCount - mean * mean);
+                        // gen2gc>0 in a spiky window => GC pause is the stutter. workMax high (vs swap) =>
+                        // the stall is in our CPU work, not the present.
+                        int gc2now = GC.CollectionCount(2); int gen2gc = gc2now - _glStatGc2Base; _glStatGc2Base = gc2now;
+                        string statLine = $"[GlStats] {_glStatCount}f mean={mean:F2}ms ({1000.0 / mean:F1}fps) stddev={Math.Sqrt(variance):F2}ms min={_glStatMin:F2} max={_glStatMax:F2} workMax={_glStatWorkMax:F1}ms gen2gc={gen2gc} focus={_gl.IsFocused} swapEma={_glSwapMsEma:F2}ms";
+                        Trace.WriteLine(statLine);
+                        // Bulletproof readout: also append straight to /tmp, independent of any Trace/log setup.
+                        try { System.IO.File.AppendAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "emutastic-glstats.log"), statLine + "\n"); } catch { }
+                        _glStatSum = _glStatSumSq = _glStatMax = _glStatWorkMax = 0; _glStatMin = double.MaxValue; _glStatCount = 0;
+                    }
+                }
+
+                // Pacing/cadence instrumentation (~once / 10s).
+                if (_audio != null && (++drcLogTick % 600) == 0)
+                {
+                    _audio.SampleDrc(out double qms, out double ratio, out long underruns);
+                    double fps = _frameMsEma > 0 ? 1000.0 / _frameMsEma : 0;
+                    Trace.WriteLine($"[Emu] pacing={_pacing} frame={_frameMsEma:F2}ms(~{fps:F1}fps) max={_frameMaxMs:F1}ms hitches={_frameHitches} vk={_vulkanOk} pwait={_overlay?.PresentWaitAvailable ?? false}  DRC q={qms:F0}ms ratio={ratio:F5}");
+                    _frameMaxMs = 0; _frameHitches = 0;
+                }
+
+                // Periodic SRAM autosave (~every 10s). Cheap (skips unchanged) and the only thing that
+                // survives a hung-core leak / crash / SIGKILL, since flush-on-exit may never run.
+                if (!_paused && (++_srmAutoSaveTick % 600) == 0) SaveSram();
             }
+
+            SaveSram();   // flush battery save on clean exit (emu thread, core still loaded)
+            try { _overlay?.Dispose(); } catch { }   // overlay created + used on this thread → tear down here
+            _overlay = null; _vulkanOk = false;
+            if (_gl != null) { _gl.KeyEvent -= OnGlKey; _gl.MouseMoved -= OnGlMouseMoved; _gl.MouseLeft -= OnGlMouseLeft; try { _gl.Dispose(); } catch { } _gl = null; }
+        }
+
+        // RetroArch-style decoupled pacing (EMUTASTIC_GL_PRESENT_THREAD=1). Emu thread = core paced by
+        // audio backpressure (real-time clock); present thread = GL window showing the latest frame at
+        // vsync. A missed vblank repeats a frame instead of slowing the core, so emulation speed + audio
+        // stay correct regardless of present hitches.
+        private void RunDecoupled(double targetFrameMs, double cushionMs)
+        {
+            using var ready = new System.Threading.ManualResetEventSlim(false);
+            var presentThread = new Thread(() => PresentThreadProc(ready)) { IsBackground = true, Name = "GlPresent" };
+            presentThread.Start();
+            ready.Wait();
+            if (_gl == null) { Trace.WriteLine("[Emu] decoupled: GL present failed to start; stopping"); _running = false; }
+
+            var frameTimer = Stopwatch.StartNew();
+            long drcLogTick = 0;
+            while (_running)
+            {
+                if (_resetRequested) { _resetRequested = false; try { _core!.Reset(); } catch (Exception ex) { Trace.WriteLine($"[Emu] reset threw: {ex}"); } }
+                if (_paused) { Thread.Sleep(16); frameTimer.Restart(); continue; }
+                if (!_noInputPoll) _input.Poll();
+                _audio?.ApplyDrc();
+
+                long runT0 = frameTimer.ElapsedTicks;
+                try { _core!.Run(); } catch (Exception ex) { Trace.WriteLine($"[Emu] retro_run threw: {ex}"); break; }
+                System.Threading.Interlocked.Add(ref _coreRunTicks, frameTimer.ElapsedTicks - runT0);
+                System.Threading.Interlocked.Increment(ref _coreRunCalls);
+
+                // AUDIO IS THE CLOCK (RetroArch audio_sync): block until the device drains the ~1 frame of
+                // audio we just produced back to the cushion. The device consumes at sample_rate → this
+                // paces the loop to real-time, steadily, independent of the present thread's vsync.
+                if (_audio != null && _audio.IsOpen)
+                {
+                    int guard = 0;
+                    while (_running && _audio.QueuedMsReal > cushionMs && guard++ < 8000)
+                    {
+                        if (_audio.QueuedMsReal - cushionMs > 4) Thread.Sleep(1); else Thread.SpinWait(60);
+                    }
+                }
+                else
+                {
+                    while (_running && frameTimer.Elapsed.TotalMilliseconds < targetFrameMs) Thread.SpinWait(40);
+                }
+                double frameMs = frameTimer.Elapsed.TotalMilliseconds; frameTimer.Restart();
+                _frameMsEma = _frameMsEma <= 0 ? frameMs : _frameMsEma + 0.05 * (frameMs - _frameMsEma);
+
+                var glRef = _gl;
+                if (glRef != null && glRef.CloseRequested) { _running = false; break; }
+
+                if (_audio != null && (++drcLogTick % 600) == 0)
+                {
+                    _audio.SampleDrc(out double qms, out double ratio, out long underruns);
+                    double fps = _frameMsEma > 0 ? 1000.0 / _frameMsEma : 0;
+                    Trace.WriteLine($"[Emu] DECOUPLED emu={_frameMsEma:F2}ms(~{fps:F1}fps) DRC q={qms:F0}ms ratio={ratio:F5} underruns={underruns}");
+                }
+                if (!_paused && (++_srmAutoSaveTick % 600) == 0) SaveSram();
+            }
+
+            _running = false;
+            try { presentThread.Join(1500); } catch { }
+            SaveSram();   // flush battery save on clean exit (emu thread, core still loaded)
+        }
+
+        // Present thread: owns the GL window + context + event pump. Shows the latest produced frame at
+        // vsync; never runs the core. GlStats logged here = the TRUE display cadence.
+        private void PresentThreadProc(System.Threading.ManualResetEventSlim ready)
+        {
+            double ar = DisplayAspectRatio > 0 ? DisplayAspectRatio : 4.0 / 3.0;
+            int winH = 720, winW = Math.Max(1, (int)Math.Round(winH * ar));
+            _glFullscreen = Environment.GetEnvironmentVariable("EMUTASTIC_GL_FULLSCREEN") == "1";
+            _gl = GlPresenter.TryCreate(winW, winH, _glFullscreen, out string? glErr);
+            if (_gl == null)
+            {
+                Trace.WriteLine($"[Emu] decoupled GL present unavailable ({glErr})");
+                PresenterResolved?.Invoke(false);
+                ready.Set();
+                return;
+            }
+            _gl.KeyEvent += OnGlKey; _gl.MouseMoved += OnGlMouseMoved; _gl.MouseLeft += OnGlMouseLeft;
+            Trace.WriteLine("[Emu] GL present ACTIVE (DECOUPLED: present thread + audio-clock emu thread)");
+            PresenterResolved?.Invoke(true);
+            ready.Set();
+
+            var pt = Stopwatch.StartNew();
+            while (_running && !_gl.CloseRequested)
+            {
+                // Copy the latest frame UNDER the lock into a present-owned buffer (the emu thread
+                // ping-pongs its two buffers, so the front buffer must not be read off-lock).
+                byte[]? toPresent = null; int pw = 0, ph = 0;
+                lock (_frameLock)
+                {
+                    if (_frame != null)
+                    {
+                        pw = _frameW; ph = _frameH; int need = pw * ph * 4;
+                        if (_presentBuf == null || _presentBuf.Length != need) _presentBuf = new byte[need];
+                        System.Buffer.BlockCopy(_frame, 0, _presentBuf, 0, need);
+                        toPresent = _presentBuf;
+                    }
+                }
+                if (toPresent != null) _gl.Present(toPresent, pw, ph);   // pumps events + vsync swap
+                else { _gl.PumpEvents(); Thread.Sleep(2); }
+
+                double frameMs = pt.Elapsed.TotalMilliseconds; pt.Restart();
+                _glSwapMsEma = _glSwapMsEma <= 0 ? _gl.LastSwapMs : _glSwapMsEma + 0.05 * (_gl.LastSwapMs - _glSwapMsEma);
+                if (_glStatGc2Base < 0) _glStatGc2Base = GC.CollectionCount(2);
+                double workMs = frameMs - _gl.LastSwapMs; if (workMs > _glStatWorkMax) _glStatWorkMax = workMs;
+                _glStatSum += frameMs; _glStatSumSq += frameMs * frameMs; _glStatCount++;
+                if (frameMs < _glStatMin) _glStatMin = frameMs;
+                if (frameMs > _glStatMax) _glStatMax = frameMs;
+                if (_glStatCount >= 300)
+                {
+                    double mean = _glStatSum / _glStatCount;
+                    double variance = Math.Max(0, _glStatSumSq / _glStatCount - mean * mean);
+                    int gc2now = GC.CollectionCount(2); int gen2gc = gc2now - _glStatGc2Base; _glStatGc2Base = gc2now;
+                    Trace.WriteLine($"[GlStats] DECOUPLED {_glStatCount}f mean={mean:F2}ms ({1000.0 / mean:F1}fps) stddev={Math.Sqrt(variance):F2}ms min={_glStatMin:F2} max={_glStatMax:F2} workMax={_glStatWorkMax:F1}ms gen2gc={gen2gc} focus={_gl.IsFocused} swapEma={_glSwapMsEma:F2}ms");
+                    _glStatSum = _glStatSumSq = _glStatMax = _glStatWorkMax = 0; _glStatMin = double.MaxValue; _glStatCount = 0;
+                }
+            }
+
+            _running = false;   // window closed → stop the emu thread
+            var gl = _gl; _gl = null;
+            if (gl != null)
+            {
+                gl.KeyEvent -= OnGlKey; gl.MouseMoved -= OnGlMouseMoved; gl.MouseLeft -= OnGlMouseLeft;
+                try { gl.Dispose(); } catch { }
+            }
+        }
+
+        // Build the Vulkan overlay window on the EMU thread once the UI gives us a target rect (opt-in
+        // EMUTASTIC_VULKAN=1). One-shot. Success → the RunLoop couples emulation to its vsync present
+        // (one retro_run per refresh → phase-locked, no beat). Failure → WriteableBitmap path.
+        private bool EnsureOverlay()
+        {
+            if (_overlay != null) return true;
+            if (_overlayTried) return false;
+            if (!_ovHasTarget) return false;            // wait for first geometry (don't set _overlayTried yet)
+            _overlayTried = true;
+            if (Environment.GetEnvironmentVariable("EMUTASTIC_VULKAN") != "1")
+            {
+                Trace.WriteLine("[Emu] Vulkan present opt-in (set EMUTASTIC_VULKAN=1); using WriteableBitmap path");
+                PresenterResolved?.Invoke(false);
+                return false;
+            }
+            var ov = new VkOverlay();
+            if (!ov.Create(_ovX, _ovY, _ovW, _ovH, _ovFullscreen))
+            {
+                Trace.WriteLine($"[Emu] Vulkan overlay unavailable ({ov.LastError}); WriteableBitmap fallback");
+                ov.Dispose();
+                PresenterResolved?.Invoke(false);
+                return false;
+            }
+            _overlay = ov; _ovGeomApplied = _ovGeomGen; _vulkanOk = true;
+            Trace.WriteLine($"[Emu] Vulkan present ACTIVE (overlay; present_wait={ov.PresentWaitAvailable})");
+            PresenterResolved?.Invoke(true);
+            return true;
+        }
+
+        private void FailOverlay()
+        {
+            _vulkanOk = false;
+            try { _overlay?.Dispose(); } catch { /* best-effort */ }
+            _overlay = null;
+            PresenterResolved?.Invoke(false);
         }
 
         // ---- libretro callbacks ----
@@ -438,6 +958,42 @@ namespace Emutastic.Emulator
             {
                 System.Diagnostics.Trace.WriteLine($"[Emu] disk-control insert failed: {ex.Message}");
             }
+        }
+
+        // Restore the battery save into the core's SRAM region, if a .srm exists and the core has SRAM.
+        private void LoadSram()
+        {
+            try
+            {
+                if (_srmPath == null || !System.IO.File.Exists(_srmPath)) return;
+                var data = System.IO.File.ReadAllBytes(_srmPath);
+                if (data.Length > 0 && (_core?.LoadSaveRam(data) ?? false))
+                {
+                    _lastSrm = data;
+                    Trace.WriteLine($"[Emu] SRAM loaded ({data.Length} bytes) from {_srmPath}");
+                }
+            }
+            catch (Exception ex) { Trace.WriteLine($"[Emu] SRAM load failed: {ex.Message}"); }
+        }
+
+        // Persist the core's SRAM to disk if it changed since the last write. Atomic (temp + replace) so a
+        // crash mid-write can't corrupt the save. Called periodically from the loop and on exit. Runs on
+        // the emu thread only (reads the live core memory). Returns quietly if the core exposes no SRAM.
+        private void SaveSram()
+        {
+            try
+            {
+                if (_srmPath == null) return;
+                byte[]? data = _core?.GetSaveRam();
+                if (data == null || data.Length == 0) return;
+                if (_lastSrm != null && _lastSrm.Length == data.Length && data.AsSpan().SequenceEqual(_lastSrm)) return; // unchanged
+                string tmp = _srmPath + ".tmp";
+                System.IO.File.WriteAllBytes(tmp, data);
+                System.IO.File.Move(tmp, _srmPath, overwrite: true);
+                _lastSrm = data;
+                Trace.WriteLine($"[Emu] SRAM saved ({data.Length} bytes)");
+            }
+            catch (Exception ex) { Trace.WriteLine($"[Emu] SRAM save failed: {ex.Message}"); }
         }
 
         private void RetroLog_cb(uint level, IntPtr fmt, IntPtr a0, IntPtr a1, IntPtr a2, IntPtr a3)
@@ -590,10 +1146,13 @@ namespace Emutastic.Emulator
             if (!joined)
             {
                 System.Diagnostics.Trace.WriteLine(
-                    "[Emu] emulation thread did not exit; leaking core/SDL handles to avoid use-after-free.");
+                    "[Emu] emulation thread did not exit; leaking core/SDL/Vulkan handles to avoid use-after-free.");
                 return;
             }
 
+            try { _overlay?.Dispose(); } catch { }   // present thread joined → safe to tear down Vulkan + X Display
+            _overlay = null;
+            _vulkanOk = false;
             _audio?.Dispose();
             _input.Dispose();
             _core?.Dispose();

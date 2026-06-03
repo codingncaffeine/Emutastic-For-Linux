@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:pe="using:Emutastic.Views.PauseEffects"
+        xmlns:platform="using:Emutastic.Platform"
         x:Class="Emutastic.Views.EmulatorWindow"
         Icon="/Assets/banners and icons/emutastic-logo.png"
         Width="768" Height="720" MinWidth="480" MinHeight="360"
@@ -29,11 +30,13 @@
 
     <!-- Themed shell to match the rest of the app (rounded chrome + dark title bar). Software frames
          blit into the Screen Image; the HW (GL/Vulkan) path swaps it for a NativeControlHost child. -->
+    <!-- NOTE: no DropShadowEffect here. An Avalonia Effect renders its whole subtree to an offscreen
+         target and re-applies (here a 30px blur) whenever the subtree invalidates — and the live game
+         Image invalidates 60x/sec, so the blur was being recomputed every frame over the entire window,
+         causing gameplay stutter. Upstream (WPF) uses native chrome and the OS draws the window shadow;
+         on Linux the WM/compositor draws it too, so we just drop the in-app shadow. -->
     <Border x:Name="OuterBorder" Background="{DynamicResource BgPrimaryBrush}"
             BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1" CornerRadius="10">
-        <Border.Effect>
-            <DropShadowEffect BlurRadius="30" OffsetX="0" OffsetY="0" Opacity="0.6" Color="{DynamicResource ShadowColor}"/>
-        </Border.Effect>
         <Border CornerRadius="10" ClipToBounds="True">
             <Grid RowDefinitions="38,*,Auto">
                 <!-- ══ TITLE BAR ══ -->
@@ -56,7 +59,10 @@
                 </Grid>
 
                 <!-- ══ SCREEN + in-game overlay ══ -->
-                <Panel Grid.Row="1" Background="Black">
+                <!-- GameViewport: the video region. When the Vulkan overlay is active it floats a
+                     borderless top-level window exactly over this Panel (screen rect via PointToScreen);
+                     otherwise the WriteableBitmap Image renders here (automatic fallback). -->
+                <Panel Grid.Row="1" Name="GameViewport" Background="Black">
                     <Image Name="Screen" Stretch="Uniform"/>
 
                     <!-- Pause-effect animation (over the frozen frame; never eats input). -->

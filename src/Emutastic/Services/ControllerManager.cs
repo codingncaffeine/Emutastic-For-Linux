@@ -105,8 +105,9 @@ namespace Emutastic.Services
         private void Poll()
         {
             if (!_initialized || _disposed) return;
-            // Only pump SDL ourselves when no emu loop is doing it (avoids concurrent multi-thread pump).
-            if (!EmulatorSession.AnyActive) { SDL_PumpEvents(); SDL_UpdateGamepads(); }
+            // Only pump SDL ourselves when no game owns the pads — in-process (AnyActive) OR in a
+            // separate --game-host child (ExternalGameActive). Two pumpers over one device queue contend.
+            if (!EmulatorSession.AnyActive && !EmulatorSession.ExternalGameActive) { SDL_PumpEvents(); SDL_UpdateGamepads(); }
             if (++_refreshCounter >= 60) { _refreshCounter = 0; Refresh(); }   // ~1Hz hotplug rescan
 
             if (!RawMode || _activeDevice < 0 || _activeDevice >= _pads.Count) return;

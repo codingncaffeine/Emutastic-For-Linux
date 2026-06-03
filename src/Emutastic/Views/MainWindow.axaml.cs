@@ -757,7 +757,9 @@ public partial class MainWindow : Window
         }
         try
         {
-            new EmulatorWindow(new EmulatorSession(corePath, romPath, game.Console ?? "")).Show();
+            // Routes to the legacy in-process EmulatorWindow, or (EMUTASTIC_PRESENT=gl) a separate
+            // --game-host process. See docs/gl-present-phase1-host-process-design.md.
+            Services.GameHostLauncher.Launch(corePath, romPath, game.Console ?? "");
         }
         catch (Exception ex)
         {

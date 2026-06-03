@@ -366,11 +366,10 @@ public partial class GameDetailWindow : Window
         }
         try
         {
-            var emu = new EmulatorWindow(new EmulatorSession(corePath, romPath, _game.Console ?? ""));
-            // The emulator session mutates _game's play stats; refresh the pills when it
-            // closes so the still-open card reflects the latest play/last-played numbers.
-            emu.Closed += (_, _) => { if (IsVisible) RefreshStats(); };
-            emu.Show();
+            // Legacy in-process EmulatorWindow, or (EMUTASTIC_PRESENT=gl) a separate --game-host process.
+            // Refresh the pills when the game ends so the still-open card reflects latest play stats.
+            Services.GameHostLauncher.Launch(corePath, romPath, _game.Console ?? "",
+                _ => { if (IsVisible) RefreshStats(); });
         }
         catch (Exception ex)
         {

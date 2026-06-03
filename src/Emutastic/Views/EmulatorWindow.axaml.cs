@@ -9,6 +9,7 @@ using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
 using Emutastic.Emulator;
+using Emutastic.Platform;
 
 namespace Emutastic.Views
 {
@@ -21,6 +22,10 @@ namespace Emutastic.Views
     {
         private readonly EmulatorSession _session;
         private readonly Image _screen;
+        private Panel? _gameViewport;         // the video region the Vulkan overlay floats over
+        private bool _vulkanActive;           // true once the present thread confirms the Vulkan overlay is live
+        private bool _overlayFullscreen;      // F11 toggles overlay fullscreen (KWin direct-scanout = clean 60)
+        private int _lastOvX = int.MinValue, _lastOvY, _lastOvW, _lastOvH; private bool _lastOvFs;
         private WriteableBitmap? _bmp;
         private int _bmpW, _bmpH;
         private long _lastSeq;
@@ -59,6 +64,17 @@ namespace Emutastic.Views
             _session = session;
             _screen = this.FindControl<Image>("Screen")!;
             RenderOptions.SetBitmapInterpolationMode(_screen, BitmapInterpolationMode.None); // crisp pixels
+
+            // Vulkan overlay: feed the present thread the video viewport's screen rect (+ fullscreen flag)
+            // whenever layout or window position changes; hide the WriteableBitmap Image once the overlay
+            // is confirmed live (or keep the Image on fallback).
+            _gameViewport = this.FindControl<Panel>("GameViewport");
+            _session.PresenterResolved += ok => Dispatcher.UIThread.Post(() => OnPresenterResolved(ok));
+            if (_gameViewport != null)
+            {
+                _gameViewport.LayoutUpdated += (_, _) => PushOverlayGeometry();
+                PositionChanged += (_, _) => PushOverlayGeometry();
+            }
 
             SetupEmulatorLog(session);
 
@@ -178,6 +194,7 @@ namespace Emutastic.Views
 
         private void PumpFrame()
         {
+            if (_vulkanActive) return;   // game is presented by the Vulkan surface on the emu thread
             if (!_session.TrySnapshot(ref _lastSeq, out byte[]? buf, out int w, out int h) || buf == null)
                 return;
 
@@ -209,9 +226,45 @@ namespace Emutastic.Views
             _screen.InvalidateVisual();
         }
 
+        // ── Vulkan overlay plumbing ──
+        // Feed the present thread the video viewport's SCREEN rect (physical px) + fullscreen flag.
+        // Deduped so repeated LayoutUpdated ticks with the same rect don't churn the overlay.
+        private void PushOverlayGeometry()
+        {
+            if (_gameViewport == null) return;
+            double scale = RenderScaling;
+            int w = Math.Max(1, (int)(_gameViewport.Bounds.Width * scale));
+            int h = Math.Max(1, (int)(_gameViewport.Bounds.Height * scale));
+            int sx = 0, sy = 0;
+            if (!_overlayFullscreen)
+            {
+                try { var tl = _gameViewport.PointToScreen(new Point(0, 0)); sx = tl.X; sy = tl.Y; }
+                catch { return; }   // not laid out / not attached yet
+            }
+            if (sx == _lastOvX && sy == _lastOvY && w == _lastOvW && h == _lastOvH && _overlayFullscreen == _lastOvFs) return;
+            _lastOvX = sx; _lastOvY = sy; _lastOvW = w; _lastOvH = h; _lastOvFs = _overlayFullscreen;
+            _session.SetOverlayGeometry(sx, sy, w, h, _overlayFullscreen);
+        }
+
+        // Present thread resolved whether the Vulkan overlay is live: hide the WriteableBitmap Image (the
+        // overlay window shows the game on top), or keep the Image (automatic fallback).
+        private void OnPresenterResolved(bool ok)
+        {
+            _vulkanActive = ok;
+            _screen.IsVisible = !ok;
+            if (ok) PushOverlayGeometry();
+        }
+
+        private void ToggleOverlayFullscreen()
+        {
+            _overlayFullscreen = !_overlayFullscreen;
+            PushOverlayGeometry();
+        }
+
         protected override void OnKeyDown(KeyEventArgs e)
         {
             base.OnKeyDown(e);
+            if (e.Key == Key.F11) { ToggleOverlayFullscreen(); e.Handled = true; return; }  // overlay fullscreen (scanout)
             if (ResolveRetroKey(e.Key, out int id)) { _session.Input.SetKeyboardButton(id, true); e.Handled = true; }
         }
 
