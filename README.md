@@ -161,11 +161,25 @@ Linux PC; paths are stored relative to `PortableData/` so the install travels in
 
 Requires the **.NET 10 SDK** and **Avalonia 12**.
 
+The Wayland game window is presented through a small native shim (`native/wlpresent/`, an own
+`xdg_toplevel` + EGL/GL presenter — the path that hits a clean windowed 60 fps). The build compiles it
+automatically (an MSBuild target invokes `native/wlpresent/build.sh` and copies `libwlpresent.so` beside
+the app), so building from source needs the C toolchain + Wayland/OpenGL **development** packages:
+
+```sh
+sudo apt install build-essential pkg-config libwayland-dev libegl-dev libgl-dev
+```
+
 ```sh
 git clone git@github.com:codingncaffeine/Emutastic-For-Linux.git
 cd Emutastic-For-Linux
 dotnet build src/Emutastic.slnx -c Release
 ```
+
+> These `-dev` packages are **only needed to build from source** — they ship the headers the shim is
+> compiled against. End users running a packaged release (`.deb`/AppImage/Flatpak) don't need them: the
+> compiled `libwlpresent.so` is bundled in the package. If the dev packages are missing the managed build
+> still succeeds, but the native game window won't be produced.
 
 ---
 
