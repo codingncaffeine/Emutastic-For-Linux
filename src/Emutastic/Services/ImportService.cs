@@ -420,8 +420,17 @@ namespace Emutastic.Services
                 {
                     if (!RomService.IsRomFile(file)) continue;
                     if (_batchSkipSet.Contains(file)) continue; // skip individual discs that were bundled
-                    string pathToImport = await ResolveImportPathAsync(file, _activeHintedConsole);
-                    await ImportRomFileAsync(pathToImport, _activeHintedConsole, Path.GetFileName(pathToImport));
+                    if (HasUnambiguousDifferentConsole(file, _activeHintedConsole))
+                    {
+                        // Extension clearly identifies a different system (e.g. .ngp under the NeoCD nav)
+                        // → detect it properly instead of mis-filing it under the selected console.
+                        await ImportSingleRomAsync(file);
+                    }
+                    else
+                    {
+                        string pathToImport = await ResolveImportPathAsync(file, _activeHintedConsole);
+                        await ImportRomFileAsync(pathToImport, _activeHintedConsole, Path.GetFileName(pathToImport));
+                    }
                     Interlocked.Increment(ref _progressCurrent);
                     ProgressChanged?.Invoke(_progressCurrent, _progressTotal);
                 }
@@ -448,6 +457,21 @@ namespace Emutastic.Services
         /// duplicate of itself. Case-insensitive; matches "samples", "Samples",
         /// "SAMPLES" at any depth in the path.
         /// </summary>
+        // The console-nav hint is a FALLBACK for fragile-to-detect formats (DOS folders, bare .exe,
+        // ambiguous disc images like .bin/.cue/.iso), NOT a blanket override. If a file's extension
+        // UNAMBIGUOUSLY identifies a different console (e.g. .ngp → NGP, .sfc → SNES), trust the format
+        // over the nav so dropping games while the wrong console is selected can't silently mis-file them.
+        // Archives (.zip/.7z) are excluded — their real console is the inner content (and a neogeo/arcade
+        // romset zip legitimately wants the nav hint), resolved later.
+        private static bool HasUnambiguousDifferentConsole(string file, string hint)
+        {
+            string ext = Path.GetExtension(file);
+            if (ext.Equals(".zip", StringComparison.OrdinalIgnoreCase) || ext.Equals(".7z", StringComparison.OrdinalIgnoreCase))
+                return false;
+            string detected = RomService.DetectConsole(file);   // "Unknown" for ambiguous/unmapped extensions
+            return detected != "Unknown" && !string.Equals(detected, hint, StringComparison.OrdinalIgnoreCase);
+        }
+
         private static bool IsMameSamplesFile(string filePath)
         {
             string? dir = Path.GetDirectoryName(filePath);
@@ -522,12 +546,15 @@ namespace Emutastic.Services
             // signal over fragile filename-based detection. Especially valuable
             // for DOS where a bare .exe or generically-named folder otherwise
             // gets misclassified or skipped entirely.
-            if (!string.IsNullOrEmpty(_activeHintedConsole) && _activeHintedConsole != "All Games")
+            if (!string.IsNullOrEmpty(_activeHintedConsole) && _activeHintedConsole != "All Games"
+                && !HasUnambiguousDifferentConsole(romPath, _activeHintedConsole))
             {
                 string resolved = await ResolveImportPathAsync(romPath, _activeHintedConsole);
                 await ImportRomFileAsync(resolved, _activeHintedConsole, Path.GetFileName(resolved));
                 return;
             }
+            // Otherwise (extension unambiguously identifies a console) fall through to normal detection,
+            // so the format wins over the nav selection.
 
             // Handle zip / 7z files
             if (ext.Equals(".zip", StringComparison.OrdinalIgnoreCase) ||
