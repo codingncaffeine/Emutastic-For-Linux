@@ -305,25 +305,25 @@ namespace Emutastic.Services
                         ImportLog($"[M3U] {Path.GetFileName(m3u)} suppressed {skipped} referenced disc file(s) from import");
                 }
 
-                // Widen the skip set to include .bin siblings of every bundled .cue.
-                // Without this, a multi-disc set imported as cue/bin pairs leaves
-                // the .bin files exposed (the cue gets bundled, the bin's separate
-                // "skip-paired-with-cue" check is too late if the user is on a
-                // console-nav hint and short-circuits past it).
-                var binSiblings = new List<string>();
-                foreach (string p in _batchSkipSet)
+                // Suppress the track files (.bin/.img/.iso/...) referenced by EVERY .cue in the batch —
+                // not just bundled ones. A CD disc (Saturn/PS1/SegaCD/...) is ONE .cue plus many .bin
+                // track files; the .cue is the library entry and the tracks are NOT games. Scanning only
+                // _batchSkipSet missed standalone single-disc cues, so each track imported as its own
+                // "game" (a folder of Saturn games → thousands of bogus entries).
+                var trackFiles = new List<string>();
+                foreach (string p in candidates)
                 {
                     if (!Path.GetExtension(p).Equals(".cue", StringComparison.OrdinalIgnoreCase))
                         continue;
-                    binSiblings.AddRange(M3uBundler.GetCueReferencedAbsolutePaths(p));
+                    trackFiles.AddRange(M3uBundler.GetCueReferencedAbsolutePaths(p));   // returns the tracks, NOT the .cue itself
                 }
                 int binsAdded = 0;
-                foreach (string b in binSiblings)
+                foreach (string b in trackFiles)
                 {
                     if (_batchSkipSet.Add(b)) binsAdded++;
                 }
                 if (binsAdded > 0)
-                    ImportLog($"[M3U] also suppressing {binsAdded} .bin sidecar(s) referenced by bundled .cue files");
+                    ImportLog($"[M3U] suppressing {binsAdded} track file(s) referenced by .cue sheets from import");
 
                 // Stale-cleanup: drop any pre-existing library row whose RomPath
                 // points at a now-bundled disc file, so the user ends up with one
