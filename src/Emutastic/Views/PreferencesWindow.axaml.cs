@@ -842,6 +842,15 @@ public partial class PreferencesWindow : Window
     {
         if (string.IsNullOrEmpty(_selectedCoreOptionsName)) return;
         _coreOptions.SaveValues(_selectedCoreOptionsName, _pendingCoreOptionValues);
+        // Brief confirmation — upstream saves silently, which reads as "the button did nothing"
+        // (values only take effect on the next game launch, so there's no other visible change).
+        var saveBtn = this.FindControl<Button>("CoreOptionsSaveBtn")!;
+        var original = saveBtn.Content;
+        saveBtn.Content = "Saved ✓";
+        saveBtn.IsEnabled = false;
+        Avalonia.Threading.DispatcherTimer.RunOnce(
+            () => { saveBtn.Content = original; saveBtn.IsEnabled = true; },
+            TimeSpan.FromMilliseconds(1200));
     }
 
     // ════════════════════════════════════════════════════════════════════════
