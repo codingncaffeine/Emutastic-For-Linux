@@ -18,6 +18,7 @@ regen() {
 
 gcc -shared -fPIC -O2 \
     wl_present.c \
+    wl_hwgl.c \
     xdg-shell-protocol.c \
     xdg-decoration-unstable-v1-protocol.c \
     cursor-shape-v1-protocol.c \

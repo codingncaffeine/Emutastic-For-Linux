@@ -1,0 +1,45 @@
+using System;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+
+namespace Emutastic.Platform
+{
+    /// <summary>
+    /// Offscreen GL hardware-render context for 3D libretro cores (GameCube/PSP/Dreamcast/N64-GL),
+    /// backed by libwlpresent's wl_hwgl.c. A single global context on the emu thread; the core renders
+    /// into its FBO and we read it back to a BGRA frame for the normal present path. Phase 1 = GL only.
+    /// </summary>
+    public static class HwGlContext
+    {
+        const string LIB = "wlpresent";
+
+        static HwGlContext()
+        {
+            // Ensure WlToplevelPresenter's DllImport resolver for "wlpresent" is registered before any
+            // P/Invoke here (it may run before the present thread that normally touches that type).
+            RuntimeHelpers.RunClassConstructor(typeof(WlToplevelPresenter).TypeHandle);
+        }
+
+        [DllImport(LIB)] static extern int wlp_hw_init(int ctxType, int major, int minor, int wantDepth, int wantStencil, int maxw, int maxh);
+        [DllImport(LIB)] static extern void wlp_hw_make_current();
+        [DllImport(LIB)] static extern uint wlp_hw_fbo();
+        [DllImport(LIB)] static extern IntPtr wlp_hw_proc([MarshalAs(UnmanagedType.LPStr)] string sym);
+        [DllImport(LIB)] static extern int wlp_hw_readback(IntPtr outBgra, int w, int h, int bottomLeft);
+        [DllImport(LIB)] static extern void wlp_hw_destroy();
+
+        /// <summary>Create the offscreen GL context + FBO (call on the emu thread, after retro_load_game).</summary>
+        public static bool Init(int ctxType, int major, int minor, bool depth, bool stencil, int maxW, int maxH)
+            => wlp_hw_init(ctxType, major, minor, depth ? 1 : 0, stencil ? 1 : 0, maxW, maxH) != 0;
+
+        public static void MakeCurrent() => wlp_hw_make_current();
+        public static uint Fbo() => wlp_hw_fbo();
+        public static IntPtr Proc(string sym) => wlp_hw_proc(sym);
+        public static void Destroy() => wlp_hw_destroy();
+
+        /// <summary>Read the core's FBO back into <paramref name="bgra"/> (top-down). Emu thread, context current.</summary>
+        public static unsafe bool Readback(byte[] bgra, int w, int h, bool bottomLeftOrigin)
+        {
+            fixed (byte* p = bgra) return wlp_hw_readback((IntPtr)p, w, h, bottomLeftOrigin ? 1 : 0) == 0;
+        }
+    }
+}

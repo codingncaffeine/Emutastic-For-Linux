@@ -88,6 +88,19 @@ namespace Emutastic.Emulator
                           set_image_index, get_num_images, replace_image_index, add_image_index;
         }
 
+        // ── GL hardware render for 3D cores (Phase 1). SET_HW_RENDER hands us a retro_hw_render_callback;
+        //    we render the core into libwlpresent's offscreen FBO and read it back to the normal frame. ──
+        const uint ENV_SET_HW_RENDER = 14;
+        static readonly IntPtr RETRO_HW_FRAME_BUFFER_VALID = (IntPtr)(-1);   // Video_cb data sentinel for HW frames
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void HwContextResetFn();
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate UIntPtr HwGetFramebufferFn();
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate IntPtr HwGetProcAddressFn([MarshalAs(UnmanagedType.LPStr)] string sym);
+        private bool _hwRenderActive, _hwBottomLeft, _hwDepth, _hwStencil;
+        private int _hwCtxType, _hwMajor, _hwMinor;
+        private HwContextResetFn? _hwContextReset, _hwContextDestroy;
+        private HwGetFramebufferFn? _hwGetFb;        // kept alive — pointer handed to the core
+        private HwGetProcAddressFn? _hwGetProc;      // kept alive — pointer handed to the core
+
         private Thread? _thread;
         private volatile bool _running;
         private volatile bool _paused;
@@ -385,6 +398,9 @@ namespace Emutastic.Emulator
                 // keeps the current pixel-ratio rendering for everything else (incl. rotated games).
                 var geo = _core.AvInfo.geometry;
                 DisplayAspectRatio = _handler.GetDisplayAspectRatio(geo.base_width, geo.base_height, geo.aspect_ratio);
+                // 3D cores: now that av_info (max geometry) is known, create the GL HW context + FBO and fire
+                // context_reset, on this (emu) thread so the context is current for every retro_run.
+                InitHwRenderContext();
                 _sampleRate = _core.AvInfo.timing.sample_rate > 0 ? _core.AvInfo.timing.sample_rate : 44100;
                 // DIAGNOSTIC ONLY (EMUTASTIC_NO_AUDIO=1): skip opening the sound device to test whether the
                 // audio subsystem is what's dragging the present off a clean 60. Never a shipping setting.
@@ -732,6 +748,10 @@ namespace Emutastic.Emulator
             _running = false;
             try { presentThread.Join(1500); } catch { }
             SaveSram();   // flush battery save on clean exit (emu thread, core still loaded)
+            // Tear down the HW-render context on THIS (emu) thread, where it's current. We deliberately do
+            // NOT call the core's context_destroy (mupen/PPSSPP run async cleanup that crashes if we do —
+            // per the per-core quirks); just drop our EGL context + FBO.
+            if (_hwRenderActive) { try { Platform.HwGlContext.Destroy(); } catch { } _hwRenderActive = false; }
         }
 
         // Present thread: owns the GL window + context + event pump. Shows the latest produced frame at
@@ -1090,6 +1110,8 @@ namespace Emutastic.Emulator
                         _diskControlAvailable = true;
                     }
                     return true;
+                case ENV_SET_HW_RENDER:
+                    return HandleSetHwRender(data);
                 case ENV_GET_VARIABLE:
                     return HandleGetVariable(data);
                 case ENV_GET_OVERSCAN:
@@ -1182,6 +1204,61 @@ namespace Emutastic.Emulator
             {
                 System.Diagnostics.Trace.WriteLine($"[Emu] disk-control insert failed: {ex.Message}");
             }
+        }
+
+        // RETRO_ENVIRONMENT_SET_HW_RENDER (env 14): the core wants a GPU context. Phase 1 accepts GL/GLES
+        // (context_type 1/2/3/4); Vulkan (6) is declined for now → caller falls through to "unsupported".
+        // We give the core our offscreen FBO (get_current_framebuffer) + a symbol resolver (get_proc_address);
+        // the actual context + FBO are created post-load in InitHwRenderContext, and context_reset is called
+        // THEN (per libretro spec — calling it mid-load breaks mupen/Dolphin). Layout matches LibretroCore's
+        // retro_hw_render_callback: type@0, context_reset@8, get_current_framebuffer@16, get_proc_address@24,
+        // depth@32, stencil@33, bottom_left_origin@34, version_major@36, version_minor@40, context_destroy@48.
+        private bool HandleSetHwRender(IntPtr data)
+        {
+            if (data == IntPtr.Zero) return false;
+            int ctxType = Marshal.ReadInt32(data, 0);
+            if (ctxType != 1 && ctxType != 2 && ctxType != 3 && ctxType != 4)
+            {
+                Trace.WriteLine($"[Emu] SET_HW_RENDER context_type={ctxType} not supported yet (GL only in phase 1) — declining");
+                return false;   // Vulkan(6)/others: phase 2
+            }
+            _hwCtxType = ctxType;
+            _hwDepth   = Marshal.ReadByte(data, 32) != 0;
+            _hwStencil = Marshal.ReadByte(data, 33) != 0;
+            _hwBottomLeft = Marshal.ReadByte(data, 34) != 0;
+            _hwMajor = Marshal.ReadInt32(data, 36);
+            _hwMinor = Marshal.ReadInt32(data, 40);
+            IntPtr resetPtr = Marshal.ReadIntPtr(data, 8);
+            IntPtr destroyPtr = Marshal.ReadIntPtr(data, 48);
+            _hwContextReset   = resetPtr   != IntPtr.Zero ? Marshal.GetDelegateForFunctionPointer<HwContextResetFn>(resetPtr)   : null;
+            _hwContextDestroy = destroyPtr != IntPtr.Zero ? Marshal.GetDelegateForFunctionPointer<HwContextResetFn>(destroyPtr) : null;
+            // Hand the core our callbacks (keep the delegates alive as fields so the pointers stay valid).
+            _hwGetFb   = () => (UIntPtr)Platform.HwGlContext.Fbo();
+            _hwGetProc = sym => Platform.HwGlContext.Proc(sym);
+            Marshal.WriteIntPtr(data, 16, Marshal.GetFunctionPointerForDelegate(_hwGetFb));
+            Marshal.WriteIntPtr(data, 24, Marshal.GetFunctionPointerForDelegate(_hwGetProc));
+            _hwRenderActive = true;
+            Trace.WriteLine($"[Emu] SET_HW_RENDER GL accepted: type={ctxType} v{_hwMajor}.{_hwMinor} depth={_hwDepth} stencil={_hwStencil} bottomLeft={_hwBottomLeft}");
+            return true;
+        }
+
+        // Create the offscreen GL context + FBO and fire context_reset. Runs on the emu thread AFTER
+        // retro_load_game (av_info now valid → we size the FBO to the core's max geometry).
+        private void InitHwRenderContext()
+        {
+            if (!_hwRenderActive) return;
+            var geo = _core!.AvInfo.geometry;
+            int maxW = (int)Math.Max(geo.max_width, geo.base_width);
+            int maxH = (int)Math.Max(geo.max_height, geo.base_height);
+            if (!Platform.HwGlContext.Init(_hwCtxType, _hwMajor, _hwMinor, _hwDepth, _hwStencil, maxW, maxH))
+            {
+                Trace.WriteLine("[Emu] HW-render GL context init FAILED — 3D core will not render");
+                _hwRenderActive = false;
+                return;
+            }
+            Platform.HwGlContext.MakeCurrent();   // stays current on this (emu) thread for every retro_run
+            Trace.WriteLine($"[Emu] HW-render context ready ({maxW}x{maxH}); calling context_reset");
+            try { _hwContextReset?.Invoke(); } catch (Exception ex) { Trace.WriteLine($"[Emu] context_reset threw: {ex}"); }
         }
 
         // ── In-game disc switching (L3 + Start chord) ───────────────────────────────────────────────
@@ -1316,6 +1393,29 @@ namespace Emutastic.Emulator
 
         private unsafe void Video_cb(IntPtr data, uint width, uint height, UIntPtr pitch)
         {
+            // HW-rendered core: the frame lives in our GL FBO (data == RETRO_HW_FRAME_BUFFER_VALID). Read it
+            // back to BGRA; data==0 means "duplicate, nothing new". Runs inside retro_run on the emu thread,
+            // where the HW context is current. The SW pixel-copy path below is never used by HW cores.
+            if (_hwRenderActive)
+            {
+                if (data == RETRO_HW_FRAME_BUFFER_VALID && width > 0 && height > 0)
+                {
+                    int hw = (int)width, hh = (int)height, hneed = hw * hh * 4;
+                    if (_convBuf == null || _convBuf.Length != hneed) _convBuf = new byte[hneed];
+                    if (Platform.HwGlContext.Readback(_convBuf, hw, hh, _hwBottomLeft))
+                    {
+                        lock (_frameLock)
+                        {
+                            var prevHw = _frame;
+                            _frame = _convBuf; _frameW = hw; _frameH = hh; _frameSeq++;
+                            if (prevHw != null && prevHw.Length == hneed) _convBuf = prevHw;   // ping-pong
+                        }
+                        System.Threading.Interlocked.Increment(ref _frameCountSample);
+                        FrameReady?.Invoke();
+                    }
+                }
+                return;
+            }
             if (data == IntPtr.Zero || width == 0 || height == 0) return; // duplicate frame
             int w = (int)width, h = (int)height, pitchB = (int)pitch;
             int need = w * h * 4;

@@ -25,7 +25,7 @@
        the .so is newer than its sources). Needs gcc + pkg-config + wayland/egl/gl dev packages. -->
   <Target Name="BuildWlPresentShim" BeforeTargets="Build"
           Condition="$([MSBuild]::IsOSPlatform('Linux'))"
-          Inputs="$(MSBuildProjectDirectory)/../../native/wlpresent/wl_present.c;$(MSBuildProjectDirectory)/../../native/wlpresent/wl_present.h;$(MSBuildProjectDirectory)/../../native/wlpresent/build.sh"
+          Inputs="$(MSBuildProjectDirectory)/../../native/wlpresent/wl_present.c;$(MSBuildProjectDirectory)/../../native/wlpresent/wl_hwgl.c;$(MSBuildProjectDirectory)/../../native/wlpresent/wl_present.h;$(MSBuildProjectDirectory)/../../native/wlpresent/build.sh"
           Outputs="$(MSBuildProjectDirectory)/../../native/wlpresent/libwlpresent.so">
     <Exec Command="bash &quot;$(MSBuildProjectDirectory)/../../native/wlpresent/build.sh&quot;" />
   </Target>
