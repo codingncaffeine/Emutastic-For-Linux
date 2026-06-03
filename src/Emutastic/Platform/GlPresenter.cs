@@ -65,6 +65,31 @@ namespace Emutastic.Platform
         /// adds jitter). The loop treats GL present as paced when this is set, regardless of swap-block ms.</summary>
         public bool SelfPaced { get; private set; }
 
+        private bool _bufAgeSupported;
+        /// <summary>EGL_BUFFER_AGE_EXT of the buffer being rendered this frame (Phase 0.3 diagnostic). 0 if
+        /// unsupported. Age cycling 1↔2 ≈ double-buffered; steady ≥3 ≈ triple+ — distinguishes the present
+        /// root-cause hypotheses.</summary>
+        public int LastBufferAge { get; private set; }
+
+        // Phase 1.0 cost-attribution toggles: skip ONE stage of the per-frame work INSIDE the real present
+        // path (same gate/sleep/focus as normal) to see which stage — if any — recovers a clean 60fps.
+        // Diagnostic only; whichever closes the ~55→60 gap is the real cost (none ⇒ it's phase, not work).
+        private readonly bool _noUpload = Environment.GetEnvironmentVariable("EMUTASTIC_GL_NOUPLOAD") == "1";
+        private readonly bool _noClear  = Environment.GetEnvironmentVariable("EMUTASTIC_GL_NOCLEAR")  == "1";
+        private readonly bool _noDraw   = Environment.GetEnvironmentVariable("EMUTASTIC_GL_NODRAW")   == "1";
+
+        // RetroArch-lean draw path (Phase 1): shader+VBO quad + scissor-clear instead of immediate-mode +
+        // full glClear, to cut the per-frame GPU work that misses KWin's composite latch (~55→60 windowed).
+        // Default on; EMUTASTIC_GL_SHADER=0 reverts to immediate-mode. Falls back automatically if GL2 /
+        // shader compile fails. Upload stays synchronous (rotating textures) — RetroArch uploads sync too.
+        // Default OFF: the shader+VBO path is correct but did NOT help (~53fps, same as immediate-mode) —
+        // the ~55 cap is structural (lock-step/phase), not draw-leanness. Kept behind EMUTASTIC_GL_SHADER=1
+        // for A/B, not shipped as default.
+        private readonly bool _shaderWanted = Environment.GetEnvironmentVariable("EMUTASTIC_GL_SHADER") == "1";
+        private bool _shaderReady;
+        private uint _program, _vbo;
+        private int _aPos, _aUv;   // attribute locations (fixed via glBindAttribLocation: pos=0, uv=1)
+
         /// <summary>True when the game window currently holds keyboard focus. An unfocused window gets
         /// throttled by KWin (~47fps) — so if smoothness drops, this tells us whether focus is the cause
         /// (e.g. an overlay stealing it) vs something else.</summary>
@@ -149,6 +174,9 @@ namespace Emutastic.Platform
             {
                 try { _eglDpy = edpy; _eglSurf = eglGetCurrentSurface(EGL_DRAW); } catch { }
                 if (_eglDpy == IntPtr.Zero || _eglSurf == IntPtr.Zero) { _eglDpy = IntPtr.Zero; _eglSurf = IntPtr.Zero; }
+                // Phase 0.3: only query EGL_BUFFER_AGE_EXT if the display advertises EGL_EXT_buffer_age,
+                // else eglQuerySurface returns false and the value is meaningless.
+                try { var ext = Marshal.PtrToStringAnsi(eglQueryString(_eglDpy, EGL_EXTENSIONS)) ?? ""; _bufAgeSupported = _eglSurf != IntPtr.Zero && ext.Contains("EGL_EXT_buffer_age"); } catch { }
             }
             string vdrv = "?";
             try { var p = SDL_GetCurrentVideoDriver(); if (p != IntPtr.Zero) vdrv = Marshal.PtrToStringUTF8(p) ?? "?"; } catch { }
@@ -165,6 +193,57 @@ namespace Emutastic.Platform
             }
             glEnable(GL_TEXTURE_2D);
             glClearColor(0, 0, 0, 1);
+
+            if (_shaderWanted) SetupShaderPath();
+            System.Diagnostics.Trace.WriteLine($"[Gl] shader path: wanted={_shaderWanted} ready={_shaderReady}");
+        }
+
+        // Compile a GLSL 1.20 program + a static quad VBO (NDC full-quad in the fit-rect viewport; UV with
+        // the vertical flip baked in, matching the immediate-mode texcoords). On any failure, _shaderReady
+        // stays false and Present falls back to immediate-mode.
+        private void SetupShaderPath()
+        {
+            if (!LoadGl2()) return;
+            const string vs = "#version 120\nattribute vec2 aPos;\nattribute vec2 aUv;\nvarying vec2 vUv;\nvoid main(){ vUv = aUv; gl_Position = vec4(aPos, 0.0, 1.0); }\n";
+            const string fs = "#version 120\nvarying vec2 vUv;\nuniform sampler2D uTex;\nvoid main(){ gl_FragColor = texture2D(uTex, vUv); }\n";
+            uint v = CompileShader(GL_VERTEX_SHADER, vs), f = CompileShader(GL_FRAGMENT_SHADER, fs);
+            if (v == 0 || f == 0) return;
+            _program = glCreateProgram();
+            glAttachShader(_program, v); glAttachShader(_program, f);
+            glBindAttribLocation(_program, 0, "aPos"); glBindAttribLocation(_program, 1, "aUv");
+            glLinkProgram(_program);
+            glGetProgramiv(_program, GL_LINK_STATUS, out int linked);
+            if (linked == 0) { System.Diagnostics.Trace.WriteLine("[Gl] program link FAILED — fixed-function fallback"); return; }
+            _aPos = 0; _aUv = 1;
+
+            // Quad as a TRIANGLE_STRIP: TL, BL, TR, BR. pos in NDC [-1,1] (viewport = fit-rect), uv flipped
+            // (t=0 → top) so the top-down BGRA frame is upright — same mapping as the old immediate-mode quad.
+            float[] quad = { -1f, 1f, 0f, 0f,   -1f, -1f, 0f, 1f,   1f, 1f, 1f, 0f,   1f, -1f, 1f, 1f };
+            glGenBuffers(1, out _vbo);
+            glBindBuffer(GL_ARRAY_BUFFER, _vbo);
+            fixed (float* q = quad) glBufferData(GL_ARRAY_BUFFER, (IntPtr)(quad.Length * sizeof(float)), (IntPtr)q, GL_STATIC_DRAW);
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+            glUseProgram(_program);
+            int loc = glGetUniformLocation(_program, "uTex");
+            if (loc >= 0) glUniform1i(loc, 0);   // sampler → texture unit 0
+            glUseProgram(0);
+            _shaderReady = true;
+        }
+
+        private uint CompileShader(uint type, string src)
+        {
+            uint s = glCreateShader(type);
+            glShaderSource(s, 1, new[] { src }, null);
+            glCompileShader(s);
+            glGetShaderiv(s, GL_COMPILE_STATUS, out int ok);
+            if (ok == 0)
+            {
+                var log = new byte[1024]; glGetShaderInfoLog(s, log.Length, out int n, log);
+                System.Diagnostics.Trace.WriteLine($"[Gl] shader compile FAILED: {System.Text.Encoding.ASCII.GetString(log, 0, Math.Max(0, Math.Min(n, log.Length)))}");
+                return 0;
+            }
+            return s;
         }
 
         /// <summary>Drain + dispatch the window's events (keeps the compositor serviced AND delivers input).
@@ -196,11 +275,28 @@ namespace Emutastic.Platform
             }
         }
 
+        /// <summary>DIAGNOSTIC: pump events + swap ONLY (no upload/draw/clear). Used to test whether the
+        /// ~55fps cap is the per-frame GPU/draw work (then this hits a clean 60) or the FIFO/compositor
+        /// itself (then this still sits at ~55). EMUTASTIC_GL_SWAPONLY=1.</summary>
+        public bool SwapOnly()
+        {
+            if (_window == IntPtr.Zero) return false;
+            PumpEvents();
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            bool ok = (_eglDpy != IntPtr.Zero && _eglSurf != IntPtr.Zero)
+                ? eglSwapBuffers(_eglDpy, _eglSurf)
+                : SDL_GL_SwapWindow(_window);
+            LastSwapMs = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            return ok;
+        }
+
         /// <summary>Upload one BGRA frame, draw it aspect-fit, and swap (blocks to vsync → paces the loop).</summary>
         public bool Present(byte[] bgra, int frameW, int frameH)
         {
             if (_window == IntPtr.Zero || frameW <= 0 || frameH <= 0) return false;
             PumpEvents();
+            // Phase 0.3 diagnostic: age of the buffer we're about to render into.
+            if (_bufAgeSupported && eglQuerySurface(_eglDpy, _eglSurf, EGL_BUFFER_AGE_EXT, out int age)) LastBufferAge = age;
 
             // (context is already current on this emu thread since construction; the per-frame
             // SDL_GL_MakeCurrent here was redundant and eglMakeCurrent can force a driver sync —
@@ -210,6 +306,7 @@ namespace Emutastic.Platform
             _texIndex = (_texIndex + 1) % TexCount;
             glBindTexture(GL_TEXTURE_2D, _texes[_texIndex]);
             glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+            if (!_noUpload)   // attribution toggle: skip the synchronous texture upload
             fixed (byte* p = bgra)
             {
                 if (frameW != _texW[_texIndex] || frameH != _texH[_texIndex])
@@ -225,21 +322,56 @@ namespace Emutastic.Platform
 
             SDL_GetWindowSizeInPixels(_window, out int winW, out int winH);
             if (winW <= 0 || winH <= 0) { winW = frameW; winH = frameH; }
-            glViewport(0, 0, winW, winH);
-            glClear(GL_COLOR_BUFFER_BIT);
-
-            // Aspect-preserving (Uniform/contain) viewport, centred. GL viewport origin is bottom-left.
+            // Aspect-preserving (Uniform/contain) fit-rect, centred. GL viewport origin is bottom-left.
             double scale = Math.Min((double)winW / frameW, (double)winH / frameH);
             int fw = (int)Math.Round(frameW * scale), fh = (int)Math.Round(frameH * scale);
-            glViewport((winW - fw) / 2, (winH - fh) / 2, fw, fh);
+            int x0 = (winW - fw) / 2, y0 = (winH - fh) / 2;
+            bool useShader = _shaderReady && _shaderWanted;
 
-            // Fullscreen quad; texcoord t=0 → top so the top-down frame shows upright.
-            glBegin(GL_QUADS);
-            glTexCoord2f(0, 0); glVertex2f(-1, 1);
-            glTexCoord2f(1, 0); glVertex2f(1, 1);
-            glTexCoord2f(1, 1); glVertex2f(1, -1);
-            glTexCoord2f(0, 1); glVertex2f(-1, -1);
-            glEnd();
+            // Clear: shader path scissor-clears ONLY the letterbox bars (cheap); fallback does a full clear.
+            if (!_noClear)
+            {
+                if (useShader)
+                {
+                    glEnable(GL_SCISSOR_TEST);
+                    if (x0 > 0)            { glScissor(0, 0, x0, winH);              glClear(GL_COLOR_BUFFER_BIT); }       // left
+                    if (x0 + fw < winW)    { glScissor(x0 + fw, 0, winW - x0 - fw, winH); glClear(GL_COLOR_BUFFER_BIT); }  // right
+                    if (y0 > 0)            { glScissor(x0, 0, fw, y0);               glClear(GL_COLOR_BUFFER_BIT); }       // bottom
+                    if (y0 + fh < winH)    { glScissor(x0, y0 + fh, fw, winH - y0 - fh); glClear(GL_COLOR_BUFFER_BIT); }   // top
+                    glDisable(GL_SCISSOR_TEST);
+                }
+                else { glViewport(0, 0, winW, winH); glClear(GL_COLOR_BUFFER_BIT); }
+            }
+
+            glViewport(x0, y0, fw, fh);
+
+            if (!_noDraw)
+            {
+                if (useShader)
+                {
+                    glUseProgram(_program);
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, _texes[_texIndex]);
+                    glBindBuffer(GL_ARRAY_BUFFER, _vbo);
+                    glVertexAttribPointer((uint)_aPos, 2, GL_FLOAT, 0, 4 * sizeof(float), (IntPtr)0);
+                    glVertexAttribPointer((uint)_aUv, 2, GL_FLOAT, 0, 4 * sizeof(float), (IntPtr)(2 * sizeof(float)));
+                    glEnableVertexAttribArray((uint)_aPos);
+                    glEnableVertexAttribArray((uint)_aUv);
+                    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+                    glBindBuffer(GL_ARRAY_BUFFER, 0);
+                    glUseProgram(0);
+                }
+                else
+                {
+                    // Fixed-function fallback: textured quad, texcoord t=0 → top so the frame shows upright.
+                    glBegin(GL_QUADS);
+                    glTexCoord2f(0, 0); glVertex2f(-1, 1);
+                    glTexCoord2f(1, 0); glVertex2f(1, 1);
+                    glTexCoord2f(1, 1); glVertex2f(1, -1);
+                    glTexCoord2f(0, 1); glVertex2f(-1, -1);
+                    glEnd();
+                }
+            }
 
             long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
             // Direct EGL present (Mesa FIFO, pipelined) when self-paced; else SDL's blocking swap.

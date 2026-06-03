@@ -31,6 +31,13 @@ sealed class Program
             Environment.Exit(Emutastic.GameHost.Run(args));
             return;
         }
+        // Dev-only: render the in-game OSD (status line + HUD pill) to PNGs for an aesthetic check —
+        // `Emutastic --osd-preview [outDir]`. Pure Skia (GlOsd), no GL/window. See Platform/GlOsd.cs.
+        if (args.Length >= 1 && args[0] == "--osd-preview")
+        {
+            Emutastic.Platform.OsdPreview.Run(args.Length > 1 ? args[1] : "/tmp/osd");
+            return;
+        }
         // Overlay feasibility test (EMUTASTIC_OVERLAY_TEST=1): in-process full-screen GL game + a
         // transparent Avalonia overlay floated on top. Force the modes it needs; App builds the overlay
         // window for the 2-file direct launch. GAMEHOST=0 keeps the game in-process (skips the host route).

@@ -73,10 +73,16 @@ namespace Emutastic
             // SDL3's default Xwayland/GLX fallback. The x11/GLX path does NOT get clean FIFO vsync here
             // (eglGetCurrentDisplay=null, swap can't be set to FIFO); native Wayland does (eglSwapInterval=1
             // succeeds). Only override on a Wayland session when the user hasn't forced a driver.
-            if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SDL_VIDEODRIVER"))
-                && (string.Equals(Environment.GetEnvironmentVariable("XDG_SESSION_TYPE"), "wayland", StringComparison.OrdinalIgnoreCase)
-                    || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY"))))
+            bool onWayland = string.Equals(Environment.GetEnvironmentVariable("XDG_SESSION_TYPE"), "wayland", StringComparison.OrdinalIgnoreCase)
+                || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY"));
+            if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SDL_VIDEODRIVER")) && onWayland)
                 Environment.SetEnvironmentVariable("SDL_VIDEODRIVER", "wayland");
+
+            // Default to OUR OWN xdg_toplevel (the proven windowed-60 fix) on Wayland — SDL's surface caps at
+            // ~55 windowed; a bare own top-level (RetroArch's model) hits 60. SDL stays for gamepad + audio.
+            // EMUTASTIC_GL_TOPLEVEL=0 reverts to the SDL-window present path for A/B.
+            if (onWayland && Environment.GetEnvironmentVariable("EMUTASTIC_GL_TOPLEVEL") == null)
+                Environment.SetEnvironmentVariable("EMUTASTIC_GL_TOPLEVEL", "1");
 
             var session = new EmulatorSession(core, rom, console);
 

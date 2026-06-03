@@ -15,7 +15,25 @@
   <ItemGroup>
     <Folder Include="Models\" />
     <AvaloniaResource Include="Assets\**" />
+    <!-- Also copy the HUD power glyph as a loose file so the game-host's own-toplevel OSD (no Avalonia
+         asset loader in that process) can Skia-decode it from disk for the overlay. -->
+    <None Include="Assets\buttons\powerbutton.png" Link="powerbutton.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <!-- Build the native Wayland presenter shim (libwlpresent.so) from native/wlpresent/ and drop it beside
+       the app, so the own-toplevel game window works from a clean build. Linux only; incremental (skips when
+       the .so is newer than its sources). Needs gcc + pkg-config + wayland/egl/gl dev packages. -->
+  <Target Name="BuildWlPresentShim" BeforeTargets="Build"
+          Condition="$([MSBuild]::IsOSPlatform('Linux'))"
+          Inputs="$(MSBuildProjectDirectory)/../../native/wlpresent/wl_present.c;$(MSBuildProjectDirectory)/../../native/wlpresent/wl_present.h;$(MSBuildProjectDirectory)/../../native/wlpresent/build.sh"
+          Outputs="$(MSBuildProjectDirectory)/../../native/wlpresent/libwlpresent.so">
+    <Exec Command="bash &quot;$(MSBuildProjectDirectory)/../../native/wlpresent/build.sh&quot;" />
+  </Target>
+  <Target Name="CopyWlPresentShim" AfterTargets="BuildWlPresentShim;Build"
+          Condition="$([MSBuild]::IsOSPlatform('Linux')) And Exists('$(MSBuildProjectDirectory)/../../native/wlpresent/libwlpresent.so')">
+    <Copy SourceFiles="$(MSBuildProjectDirectory)/../../native/wlpresent/libwlpresent.so"
+          DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
 
   <ItemGroup>
     <!-- VENDORED: Avalonia 12.1.999 built from PR #20926 (Linux X11 drag-and-drop). Served from the

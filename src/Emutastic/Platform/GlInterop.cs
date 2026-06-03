@@ -30,6 +30,12 @@ namespace Emutastic.Platform
         public const int EGL_DRAW = 0x3059;
         [DllImport(EGL)] public static extern IntPtr eglGetCurrentSurface(int readdraw);
         [DllImport(EGL)] [return: MarshalAs(UnmanagedType.I1)] public static extern bool eglSwapBuffers(IntPtr dpy, IntPtr surface);
+        // Buffer-age diagnostic (Phase 0.3): EGL_BUFFER_AGE_EXT tells how many frames ago the back buffer was
+        // last the front — age cycling 1↔2 ≈ double-buffered; steady ≥3 ≈ triple+. Requires EGL_EXT_buffer_age.
+        public const int EGL_EXTENSIONS = 0x3055;
+        public const int EGL_BUFFER_AGE_EXT = 0x313D;
+        [DllImport(EGL)] public static extern IntPtr eglQueryString(IntPtr dpy, int name);
+        [DllImport(EGL)] [return: MarshalAs(UnmanagedType.I1)] public static extern bool eglQuerySurface(IntPtr dpy, IntPtr surface, int attribute, out int value);
 
         // ---- SDL3 video + GL ----
         public const uint SDL_INIT_VIDEO = 0x00000020;
@@ -87,5 +93,105 @@ namespace Emutastic.Platform
         [DllImport(GL)] public static extern void glVertex2f(float x, float y);
 
         public static string? SdlError() => Marshal.PtrToStringUTF8(SDL_GetError());
+
+        // ---- GL 2.0+ (shader+VBO+PBO, RetroArch-lean draw). libGL.so.1 only exports ≤1.2 per the Linux GL
+        // ABI, so these are loaded at runtime via SDL_GL_GetProcAddress (context must be current first).
+        [DllImport(SDL)] public static extern IntPtr SDL_GL_GetProcAddress([MarshalAs(UnmanagedType.LPUTF8Str)] string proc);
+        [DllImport(GL)] public static extern void glDisable(uint cap);
+        [DllImport(GL)] public static extern void glScissor(int x, int y, int w, int h);   // 1.0 but unused before
+
+        public const uint GL_SCISSOR_TEST = 0x0C11, GL_FRAGMENT_SHADER = 0x8B30, GL_VERTEX_SHADER = 0x8B31,
+            GL_COMPILE_STATUS = 0x8B81, GL_LINK_STATUS = 0x8B82, GL_ARRAY_BUFFER = 0x8892,
+            GL_PIXEL_UNPACK_BUFFER = 0x88EC, GL_STATIC_DRAW = 0x88E4, GL_STREAM_DRAW = 0x88E0,
+            GL_FLOAT = 0x1406, GL_TRIANGLE_STRIP = 0x0005, GL_TEXTURE0 = 0x84C0, GL_WRITE_ONLY = 0x88B9;
+
+        // Delegate signatures for the GL2 entry points we use.
+        public delegate uint  D_glCreateShader(uint type);
+        public delegate void  D_glShaderSource(uint shader, int count, string[] str, int[]? len);
+        public delegate void  D_glCompileShader(uint shader);
+        public delegate void  D_glGetShaderiv(uint shader, uint pname, out int p);
+        public delegate void  D_glGetShaderInfoLog(uint shader, int max, out int len, byte[] log);
+        public delegate uint  D_glCreateProgram();
+        public delegate void  D_glAttachShader(uint prog, uint shader);
+        public delegate void  D_glBindAttribLocation(uint prog, uint index, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
+        public delegate void  D_glLinkProgram(uint prog);
+        public delegate void  D_glGetProgramiv(uint prog, uint pname, out int p);
+        public delegate void  D_glUseProgram(uint prog);
+        public delegate void  D_glGenBuffers(int n, out uint b);
+        public delegate void  D_glBindBuffer(uint target, uint b);
+        public delegate void  D_glBufferData(uint target, IntPtr size, IntPtr data, uint usage);
+        public delegate IntPtr D_glMapBuffer(uint target, uint access);
+        public delegate byte  D_glUnmapBuffer(uint target);
+        public delegate void  D_glVertexAttribPointer(uint index, int size, uint type, byte norm, int stride, IntPtr offset);
+        public delegate void  D_glEnableVertexAttribArray(uint index);
+        public delegate int   D_glGetUniformLocation(uint prog, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
+        public delegate void  D_glUniform1i(int loc, int v);
+        public delegate void  D_glActiveTexture(uint tex);
+        public delegate void  D_glDrawArrays(uint mode, int first, int count);
+
+        public static D_glCreateShader glCreateShader = null!;
+        public static D_glShaderSource glShaderSource = null!;
+        public static D_glCompileShader glCompileShader = null!;
+        public static D_glGetShaderiv glGetShaderiv = null!;
+        public static D_glGetShaderInfoLog glGetShaderInfoLog = null!;
+        public static D_glCreateProgram glCreateProgram = null!;
+        public static D_glAttachShader glAttachShader = null!;
+        public static D_glBindAttribLocation glBindAttribLocation = null!;
+        public static D_glLinkProgram glLinkProgram = null!;
+        public static D_glGetProgramiv glGetProgramiv = null!;
+        public static D_glUseProgram glUseProgram = null!;
+        public static D_glGenBuffers glGenBuffers = null!;
+        public static D_glBindBuffer glBindBuffer = null!;
+        public static D_glBufferData glBufferData = null!;
+        public static D_glMapBuffer glMapBuffer = null!;
+        public static D_glUnmapBuffer glUnmapBuffer = null!;
+        public static D_glVertexAttribPointer glVertexAttribPointer = null!;
+        public static D_glEnableVertexAttribArray glEnableVertexAttribArray = null!;
+        public static D_glGetUniformLocation glGetUniformLocation = null!;
+        public static D_glUniform1i glUniform1i = null!;
+        public static D_glActiveTexture glActiveTexture = null!;
+        public static D_glDrawArrays glDrawArrays = null!;
+
+        private static bool _gl2Loaded;
+        /// <summary>Load the GL2 entry points via SDL_GL_GetProcAddress (context must be current). Returns
+        /// false if any are missing — caller falls back to the fixed-function immediate-mode path.</summary>
+        public static bool LoadGl2()
+        {
+            if (_gl2Loaded) return true;
+            try
+            {
+                T Get<T>(string n) where T : Delegate
+                {
+                    IntPtr p = SDL_GL_GetProcAddress(n);
+                    if (p == IntPtr.Zero) throw new EntryPointNotFoundException(n);
+                    return Marshal.GetDelegateForFunctionPointer<T>(p);
+                }
+                glCreateShader = Get<D_glCreateShader>("glCreateShader");
+                glShaderSource = Get<D_glShaderSource>("glShaderSource");
+                glCompileShader = Get<D_glCompileShader>("glCompileShader");
+                glGetShaderiv = Get<D_glGetShaderiv>("glGetShaderiv");
+                glGetShaderInfoLog = Get<D_glGetShaderInfoLog>("glGetShaderInfoLog");
+                glCreateProgram = Get<D_glCreateProgram>("glCreateProgram");
+                glAttachShader = Get<D_glAttachShader>("glAttachShader");
+                glBindAttribLocation = Get<D_glBindAttribLocation>("glBindAttribLocation");
+                glLinkProgram = Get<D_glLinkProgram>("glLinkProgram");
+                glGetProgramiv = Get<D_glGetProgramiv>("glGetProgramiv");
+                glUseProgram = Get<D_glUseProgram>("glUseProgram");
+                glGenBuffers = Get<D_glGenBuffers>("glGenBuffers");
+                glBindBuffer = Get<D_glBindBuffer>("glBindBuffer");
+                glBufferData = Get<D_glBufferData>("glBufferData");
+                glMapBuffer = Get<D_glMapBuffer>("glMapBuffer");
+                glUnmapBuffer = Get<D_glUnmapBuffer>("glUnmapBuffer");
+                glVertexAttribPointer = Get<D_glVertexAttribPointer>("glVertexAttribPointer");
+                glEnableVertexAttribArray = Get<D_glEnableVertexAttribArray>("glEnableVertexAttribArray");
+                glGetUniformLocation = Get<D_glGetUniformLocation>("glGetUniformLocation");
+                glUniform1i = Get<D_glUniform1i>("glUniform1i");
+                glActiveTexture = Get<D_glActiveTexture>("glActiveTexture");
+                glDrawArrays = Get<D_glDrawArrays>("glDrawArrays");
+                _gl2Loaded = true;
+                return true;
+            }
+            catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"[Gl] GL2 load failed: {ex.Message}"); return false; }
+        }
     }
 }

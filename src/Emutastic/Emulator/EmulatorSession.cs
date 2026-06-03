@@ -156,6 +156,11 @@ namespace Emutastic.Emulator
         // good WriteableBitmap path so a normal launch is never affected until the GL path is proven.
         private readonly string _present = (Environment.GetEnvironmentVariable("EMUTASTIC_PRESENT") ?? "writeable").Trim().ToLowerInvariant();
         private GlPresenter? _gl;
+        // PROVEN windowed-60 fix: present through our OWN Wayland xdg_toplevel (RetroArch's model) via the
+        // libwlpresent shim, instead of SDL's window (which caps at ~55 windowed). EMUTASTIC_GL_TOPLEVEL=1
+        // routes the decoupled present thread through WlToplevelPresenter; SDL stays for gamepad + audio.
+        private readonly bool _toplevelMode = Environment.GetEnvironmentVariable("EMUTASTIC_GL_TOPLEVEL") == "1";
+        private WlToplevelPresenter? _wlTop;
         private bool _glFullscreen;
         private long _glPresents;   // bring-up diagnostic: count of GL presents (heartbeat / first-present log)
         private double _glSwapMsEma; // smoothed vsync-swap block time → no-vsync-fallback gate (hazard #2)
@@ -659,7 +664,7 @@ namespace Emutastic.Emulator
             var presentThread = new Thread(() => PresentThreadProc(ready)) { IsBackground = true, Name = "GlPresent" };
             presentThread.Start();
             ready.Wait();
-            if (_gl == null) { Trace.WriteLine("[Emu] decoupled: GL present failed to start; stopping"); _running = false; }
+            if (_gl == null && _wlTop == null) { Trace.WriteLine("[Emu] decoupled: GL present failed to start; stopping"); _running = false; }
 
             var frameTimer = Stopwatch.StartNew();
             long drcLogTick = 0;
@@ -675,26 +680,33 @@ namespace Emutastic.Emulator
                 System.Threading.Interlocked.Add(ref _coreRunTicks, frameTimer.ElapsedTicks - runT0);
                 System.Threading.Interlocked.Increment(ref _coreRunCalls);
 
-                // AUDIO IS THE CLOCK (RetroArch audio_sync): block until the device drains the ~1 frame of
-                // audio we just produced back to the cushion. The device consumes at sample_rate → this
-                // paces the loop to real-time, steadily, independent of the present thread's vsync.
+                // PACE TO THE TARGET RATE (Phase 0.2): targetFrameMs comes from _fps, which is the console
+                // handler's HardwareTargetFps or the core's reported fps. Pace the emu to that fixed content
+                // rate — RetroArch's model (slave the loop to a rate, DRC resamples audio to match) — rather
+                // than free-running on audio drain, which drifted to ~61fps and beat against the ~60Hz
+                // display. Production-timing jitter here is harmless: the present thread is vsync-paced
+                // SEPARATELY and shows the latest frame, so a loose emu tick can't judder the display.
+                int guard = 0;
+                while (_running && frameTimer.Elapsed.TotalMilliseconds < targetFrameMs && guard++ < 8000)
+                {
+                    double remaining = targetFrameMs - frameTimer.Elapsed.TotalMilliseconds;
+                    if (remaining > 1.5) Thread.Sleep(1); else Thread.SpinWait(40);
+                }
+                // Audio cushion cap (secondary): if the core ran ahead and the buffer overfilled well past
+                // the cushion, drain before the next frame so audio can't run away. DRC handles the ±0.5%
+                // trim. Use the SMOOTHED occupancy (not raw QueuedMsReal) so a single device gulp can't fire
+                // a spurious drain-stall — matches SdlAudio's "coarse guards use the smoothed value" rule.
                 if (_audio != null && _audio.IsOpen)
                 {
-                    int guard = 0;
-                    while (_running && _audio.QueuedMsReal > cushionMs && guard++ < 8000)
-                    {
-                        if (_audio.QueuedMsReal - cushionMs > 4) Thread.Sleep(1); else Thread.SpinWait(60);
-                    }
-                }
-                else
-                {
-                    while (_running && frameTimer.Elapsed.TotalMilliseconds < targetFrameMs) Thread.SpinWait(40);
+                    guard = 0;
+                    while (_running && _audio.QueuedMsSmoothed > cushionMs + 40 && guard++ < 4000) Thread.Sleep(1);
                 }
                 double frameMs = frameTimer.Elapsed.TotalMilliseconds; frameTimer.Restart();
                 _frameMsEma = _frameMsEma <= 0 ? frameMs : _frameMsEma + 0.05 * (frameMs - _frameMsEma);
 
                 var glRef = _gl;
                 if (glRef != null && glRef.CloseRequested) { _running = false; break; }
+                if (_wlTop != null && _wlTop.CloseRequested) { _running = false; break; }
 
                 if (_audio != null && (++drcLogTick % 600) == 0)
                 {
@@ -714,6 +726,7 @@ namespace Emutastic.Emulator
         // vsync; never runs the core. GlStats logged here = the TRUE display cadence.
         private void PresentThreadProc(System.Threading.ManualResetEventSlim ready)
         {
+            if (_toplevelMode) { PresentToplevelProc(ready); return; }
             double ar = DisplayAspectRatio > 0 ? DisplayAspectRatio : 4.0 / 3.0;
             int winH = 720, winW = Math.Max(1, (int)Math.Round(winH * ar));
             _glFullscreen = Environment.GetEnvironmentVariable("EMUTASTIC_GL_FULLSCREEN") == "1";
@@ -730,24 +743,57 @@ namespace Emutastic.Emulator
             PresenterResolved?.Invoke(true);
             ready.Set();
 
+            long lastSeq = -1;
+            bool swapOnly = Environment.GetEnvironmentVariable("EMUTASTIC_GL_SWAPONLY") == "1";
+            // Attribution found the ~55fps was the _frameSeq gate + Sleep(1) chase (phase), NOT draw work.
+            // NOGATE presents the latest frame EVERY iteration and lets the blocking FIFO swap pace to vblank
+            // (re-presenting a duplicate on a slow frame is correct on Wayland) → should hit a clean 60.
+            bool noGate = Environment.GetEnvironmentVariable("EMUTASTIC_GL_NOGATE") == "1";
             var pt = Stopwatch.StartNew();
             while (_running && !_gl.CloseRequested)
             {
-                // Copy the latest frame UNDER the lock into a present-owned buffer (the emu thread
-                // ping-pongs its two buffers, so the front buffer must not be read off-lock).
-                byte[]? toPresent = null; int pw = 0, ph = 0;
-                lock (_frameLock)
+                if (swapOnly)
                 {
-                    if (_frame != null)
-                    {
-                        pw = _frameW; ph = _frameH; int need = pw * ph * 4;
-                        if (_presentBuf == null || _presentBuf.Length != need) _presentBuf = new byte[need];
-                        System.Buffer.BlockCopy(_frame, 0, _presentBuf, 0, need);
-                        toPresent = _presentBuf;
-                    }
+                    _gl.SwapOnly();   // DIAGNOSTIC: swap with no upload/draw — isolates draw-work vs FIFO
                 }
-                if (toPresent != null) _gl.Present(toPresent, pw, ph);   // pumps events + vsync swap
-                else { _gl.PumpEvents(); Thread.Sleep(2); }
+                else if (noGate)
+                {
+                    // Present the latest frame every iteration; FIFO swap is the pace. No seq-gate, no sleep.
+                    byte[]? buf = null; int pw = 0, ph = 0;
+                    lock (_frameLock)
+                    {
+                        if (_frame != null)
+                        {
+                            pw = _frameW; ph = _frameH; int need = pw * ph * 4;
+                            if (_presentBuf == null || _presentBuf.Length != need) _presentBuf = new byte[need];
+                            System.Buffer.BlockCopy(_frame, 0, _presentBuf, 0, need);
+                            buf = _presentBuf;
+                        }
+                    }
+                    if (buf != null) _gl.Present(buf, pw, ph);
+                    else { _gl.PumpEvents(); Thread.Sleep(1); }   // only before the first frame exists
+                }
+                else
+                {
+                    // Present ONLY when the emu produced a NEW frame (Phase 0.1, gate on _frameSeq).
+                    // Re-presenting the same buffer every iteration spammed duplicates and turned the cadence
+                    // into a 61/60 beat (and polluted GlStats). Copy under the lock (the emu ping-pongs its
+                    // two buffers, so the front buffer must not be read off-lock).
+                    byte[]? toPresent = null; int pw = 0, ph = 0;
+                    lock (_frameLock)
+                    {
+                        if (_frame != null && _frameSeq != lastSeq)
+                        {
+                            lastSeq = _frameSeq;
+                            pw = _frameW; ph = _frameH; int need = pw * ph * 4;
+                            if (_presentBuf == null || _presentBuf.Length != need) _presentBuf = new byte[need];
+                            System.Buffer.BlockCopy(_frame, 0, _presentBuf, 0, need);
+                            toPresent = _presentBuf;
+                        }
+                    }
+                    if (toPresent == null) { _gl.PumpEvents(); Thread.Sleep(1); continue; }   // no new frame — service events only, don't re-present
+                    _gl.Present(toPresent, pw, ph);   // pumps events + vsync swap
+                }
 
                 double frameMs = pt.Elapsed.TotalMilliseconds; pt.Restart();
                 _glSwapMsEma = _glSwapMsEma <= 0 ? _gl.LastSwapMs : _glSwapMsEma + 0.05 * (_gl.LastSwapMs - _glSwapMsEma);
@@ -761,7 +807,7 @@ namespace Emutastic.Emulator
                     double mean = _glStatSum / _glStatCount;
                     double variance = Math.Max(0, _glStatSumSq / _glStatCount - mean * mean);
                     int gc2now = GC.CollectionCount(2); int gen2gc = gc2now - _glStatGc2Base; _glStatGc2Base = gc2now;
-                    Trace.WriteLine($"[GlStats] DECOUPLED {_glStatCount}f mean={mean:F2}ms ({1000.0 / mean:F1}fps) stddev={Math.Sqrt(variance):F2}ms min={_glStatMin:F2} max={_glStatMax:F2} workMax={_glStatWorkMax:F1}ms gen2gc={gen2gc} focus={_gl.IsFocused} swapEma={_glSwapMsEma:F2}ms");
+                    Trace.WriteLine($"[GlStats] DECOUPLED {_glStatCount}f mean={mean:F2}ms ({1000.0 / mean:F1}fps) stddev={Math.Sqrt(variance):F2}ms min={_glStatMin:F2} max={_glStatMax:F2} workMax={_glStatWorkMax:F1}ms gen2gc={gen2gc} bufAge={_gl.LastBufferAge} focus={_gl.IsFocused} swapEma={_glSwapMsEma:F2}ms");
                     _glStatSum = _glStatSumSq = _glStatMax = _glStatWorkMax = 0; _glStatMin = double.MaxValue; _glStatCount = 0;
                 }
             }
@@ -772,6 +818,163 @@ namespace Emutastic.Emulator
             {
                 gl.KeyEvent -= OnGlKey; gl.MouseMoved -= OnGlMouseMoved; gl.MouseLeft -= OnGlMouseLeft;
                 try { gl.Dispose(); } catch { }
+            }
+        }
+
+        // Present thread, OWN-xdg_toplevel variant (EMUTASTIC_GL_TOPLEVEL=1). Same decoupled contract as
+        // PresentThreadProc — show the latest produced frame at vsync, never run the core — but through the
+        // libwlpresent shim's own Wayland window (the proven windowed-60 path) instead of SDL's surface.
+        // Keyboard arrives via wl_seat (translated to SDL scancodes in the presenter) → reuses OnGlKey.
+        private void PresentToplevelProc(System.Threading.ManualResetEventSlim ready)
+        {
+            double ar = DisplayAspectRatio > 0 ? DisplayAspectRatio : 4.0 / 3.0;
+            int winH = 720, winW = Math.Max(1, (int)Math.Round(winH * ar));
+            _wlTop = WlToplevelPresenter.TryCreate(winW, winH, out string? err);
+            if (_wlTop == null)
+            {
+                Trace.WriteLine($"[Emu] decoupled OWN-TOPLEVEL present unavailable ({err})");
+                PresenterResolved?.Invoke(false);
+                ready.Set();
+                return;
+            }
+            _wlTop.KeyEvent += OnGlKey; _wlTop.MouseMoved += OnGlMouseMoved; _wlTop.MouseLeft += OnGlMouseLeft;
+            Trace.WriteLine("[Emu] GL present ACTIVE (DECOUPLED: own xdg_toplevel + audio-clock emu thread)");
+            PresenterResolved?.Invoke(true);
+            ready.Set();
+
+            // ── OSD: permanent bottom status line (fps/target/run-avg) + the Windows-style hover HUD pill
+            //    (Power · Pause · Reset · Save · Record · | · Cog). Power/Pause/Reset are wired; Save/Record/
+            //    Cog are placeholders (drawn + clickable, no action yet — wired in a later phase). 2.5s
+            //    auto-hide, 150ms fade-in / 300ms fade-out, mirroring EmulatorWindow.xaml. ──
+            const double HudTimeoutMs = 2500;
+            var osd = new GlOsd();
+            var clock = Stopwatch.StartNew();
+            double hudHideAtMs = -1e9;          // HUD hidden until the pointer moves (or while paused)
+            bool hudVisible = false; int hover = -1; float hudAlpha = 0f; int titleHover = -1;
+            double lastStatusMs = -1e9; string statusText = "Starting…"; int zeroFpsSeconds = 0;
+
+            // Themed title bar: follow the user's WindowButtonStyle (macOS / Windows11 / Linux). The game-host
+            // loads the same JSON config the app does, so the choice is honored. Reserve chrome so the game
+            // is framed by the title bar (top) + status bar (bottom) rather than covered by them.
+            string winStyle = App.Configuration?.GetThemeConfiguration()?.WindowButtonStyle ?? "macOS";
+            string title = $"Emutastic — {CoreName}";
+            _wlTop.SetInsets((int)GlOsd.TitleBarHeight, (int)GlOsd.StatusBarHeight);
+
+            Action<int, bool> onBtn = (button, down) =>
+            {
+                if (button != 0 || !down) return;
+                // 1) Title-bar controls always win (so close/min/max stay clickable even at a corner).
+                switch (titleHover)
+                {
+                    case GlOsd.TbMin:   _wlTop!.Minimize(); return;
+                    case GlOsd.TbMax:   _wlTop!.ToggleMaximize(); return;
+                    case GlOsd.TbClose: RequestQuit(); return;
+                }
+                // 2) Edge / corner → interactive resize (grab from anywhere on the border).
+                if (!_wlTop!.IsMaximized)
+                {
+                    _wlTop.GetSize(out int rw, out int rh);
+                    int edge = GlOsd.ResizeHitTest(rw, rh, _wlTop.MouseX, _wlTop.MouseY);
+                    if (edge != 0) { _wlTop.StartResize(edge); return; }
+                }
+                // 3) Title-bar interior → drag to move.
+                if (titleHover == GlOsd.TbDrag) { _wlTop!.StartMove(); return; }
+                // 4) HUD pill.
+                if (!hudVisible || hover < 0) return;
+                switch (hover)
+                {
+                    case GlOsd.BtnPower: RequestQuit(); break;
+                    case GlOsd.BtnPause: SetPaused(!IsPaused); break;
+                    case GlOsd.BtnReset: RequestReset(); break;
+                    // Save / Record / Cog: placeholders — no action wired yet (later phase).
+                    default: break;
+                }
+                hudHideAtMs = clock.Elapsed.TotalMilliseconds + HudTimeoutMs;   // any click keeps the HUD up
+            };
+            Action showHud = () => hudHideAtMs = clock.Elapsed.TotalMilliseconds + HudTimeoutMs;
+            _wlTop.PointerButton += onBtn;
+            _wlTop.MouseMoved += showHud;   // any pointer motion (re)shows the HUD + restarts the countdown
+
+            double prevNowMs = clock.Elapsed.TotalMilliseconds;
+            var pt = Stopwatch.StartNew();
+            while (_running && !_wlTop.CloseRequested)
+            {
+                _wlTop.PumpEvents();   // drain input first so a click/hover affects THIS frame's HUD
+
+                double nowMs = clock.Elapsed.TotalMilliseconds;
+                double dt = nowMs - prevNowMs; prevNowMs = nowMs;
+                if (nowMs - lastStatusMs >= 1000)
+                {
+                    lastStatusMs = nowMs;
+                    if (IsPaused) { statusText = $"Paused  (target {TargetFps:F0} fps)"; zeroFpsSeconds = 0; }
+                    else
+                    {
+                        SampleStats(out int fr, out double avgRunMs);
+                        if (fr == 0) zeroFpsSeconds++; else zeroFpsSeconds = 0;
+                        // Exact Windows format (two-space separators); stall hint when no frame for ≥2s.
+                        statusText = $"{fr} fps  (target {TargetFps:F0})  core.Run avg {avgRunMs:F1}ms";
+                        if (zeroFpsSeconds >= 2) statusText += $"    ⏳ Working… ({zeroFpsSeconds}s with no frame)";
+                    }
+                }
+                _wlTop.GetSize(out int ww, out int wh);
+                if (ww <= 0) { ww = winW; wh = winH; }
+                hudVisible = IsPaused || nowMs < hudHideAtMs;
+                float tgt = hudVisible ? 1f : 0f;                       // 150ms fade-in / 300ms fade-out
+                if (hudAlpha < tgt) hudAlpha = (float)Math.Min(tgt, hudAlpha + dt / 150.0);
+                else if (hudAlpha > tgt) hudAlpha = (float)Math.Max(tgt, hudAlpha - dt / 300.0);
+                hover = (hudVisible && _wlTop.MouseInside) ? GlOsd.HitTest(ww, wh, _wlTop.MouseX, _wlTop.MouseY) : -1;
+                titleHover = _wlTop.MouseInside ? GlOsd.TitleHitTest(ww, winStyle, _wlTop.MouseX, _wlTop.MouseY) : -1;
+                // Cursor feedback: resize arrows over the edges/corners (but not over the title controls).
+                if (_wlTop.MouseInside)
+                {
+                    bool onCtl = titleHover == GlOsd.TbMin || titleHover == GlOsd.TbMax || titleHover == GlOsd.TbClose;
+                    int rEdge = (!_wlTop.IsMaximized && !onCtl) ? GlOsd.ResizeHitTest(ww, wh, _wlTop.MouseX, _wlTop.MouseY) : 0;
+                    _wlTop.SetCursorShape(GlOsd.CursorShapeForEdge(rEdge));
+                }
+                if (osd.Build(ww, wh, statusText, title, winStyle, _wlTop.IsMaximized, titleHover, hudAlpha, hover, IsPaused))
+                    _wlTop.SetOverlay(osd.Pixels, osd.Width, osd.Height);
+
+                // Present the latest frame every iteration; the shim's FIFO swap is the pace (re-presenting a
+                // duplicate on a slow frame is correct on Wayland). Copy under the lock — the emu ping-pongs.
+                byte[]? buf = null; int pw = 0, ph = 0;
+                lock (_frameLock)
+                {
+                    if (_frame != null)
+                    {
+                        pw = _frameW; ph = _frameH; int need = pw * ph * 4;
+                        if (_presentBuf == null || _presentBuf.Length != need) _presentBuf = new byte[need];
+                        System.Buffer.BlockCopy(_frame, 0, _presentBuf, 0, need);
+                        buf = _presentBuf;
+                    }
+                }
+                if (buf == null) { Thread.Sleep(1); continue; }   // no frame yet — input already pumped above
+                _wlTop.Present(buf, pw, ph);
+
+                double frameMs = pt.Elapsed.TotalMilliseconds; pt.Restart();
+                _glSwapMsEma = _glSwapMsEma <= 0 ? _wlTop.LastSwapMs : _glSwapMsEma + 0.05 * (_wlTop.LastSwapMs - _glSwapMsEma);
+                if (_glStatGc2Base < 0) _glStatGc2Base = GC.CollectionCount(2);
+                double workMs = frameMs - _wlTop.LastSwapMs; if (workMs > _glStatWorkMax) _glStatWorkMax = workMs;
+                _glStatSum += frameMs; _glStatSumSq += frameMs * frameMs; _glStatCount++;
+                if (frameMs < _glStatMin) _glStatMin = frameMs;
+                if (frameMs > _glStatMax) _glStatMax = frameMs;
+                if (_glStatCount >= 300)
+                {
+                    double mean = _glStatSum / _glStatCount;
+                    double variance = Math.Max(0, _glStatSumSq / _glStatCount - mean * mean);
+                    int gc2now = GC.CollectionCount(2); int gen2gc = gc2now - _glStatGc2Base; _glStatGc2Base = gc2now;
+                    Trace.WriteLine($"[GlStats] TOPLEVEL {_glStatCount}f mean={mean:F2}ms ({1000.0 / mean:F1}fps) stddev={Math.Sqrt(variance):F2}ms min={_glStatMin:F2} max={_glStatMax:F2} workMax={_glStatWorkMax:F1}ms gen2gc={gen2gc} swapEma={_glSwapMsEma:F2}ms");
+                    _glStatSum = _glStatSumSq = _glStatMax = _glStatWorkMax = 0; _glStatMin = double.MaxValue; _glStatCount = 0;
+                }
+            }
+
+            _running = false;   // window closed → stop the emu thread
+            _wlTop.PointerButton -= onBtn; _wlTop.MouseMoved -= showHud;
+            try { osd.Dispose(); } catch { }
+            var w = _wlTop; _wlTop = null;
+            if (w != null)
+            {
+                w.KeyEvent -= OnGlKey; w.MouseMoved -= OnGlMouseMoved; w.MouseLeft -= OnGlMouseLeft;
+                try { w.Dispose(); } catch { }
             }
         }
 

@@ -1,0 +1,56 @@
+// Flat C ABI for an own Wayland xdg_toplevel + EGL + GL presenter (RetroArch's model).
+// C# (or the test harness) P/Invokes these; all Wayland/xdg/EGL/GL lives in C.
+#ifndef WL_PRESENT_H
+#define WL_PRESENT_H
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// Create an own top-level Wayland window (w x h), EGL GL2.1 context, vsync (interval 1).
+// Returns an opaque handle, or NULL on failure (not Wayland, missing globals, EGL fail).
+void* wlp_create(int w, int h, const char* title);
+
+// Upload a BGRA8888 frame (frameW x frameH) and present it aspect-fit + vsync swap.
+// Returns 0 on success, <0 on error/closed.
+int wlp_present(void* h, const void* bgra, int frameW, int frameH);
+
+// Pump pending Wayland events (configure/ping/close/resize). Returns 1 if close requested, else 0.
+int wlp_poll(void* h);
+
+// Input event types (dequeued via wlp_poll_event).
+#define WLP_EV_NONE        0
+#define WLP_EV_KEY         1   // a = evdev keycode, b = 1 down / 0 up
+#define WLP_EV_MOUSE_MOVE  2   // a = x, b = y (window pixels)
+#define WLP_EV_MOUSE_BTN   3   // a = button (0=left,1=right,2=mid), b = 1 down / 0 up
+#define WLP_EV_MOUSE_LEAVE 4
+#define WLP_EV_CLOSE       5
+
+// Dequeue one input event into *type/*a/*b. Returns 1 if an event was returned, 0 if the queue is empty.
+int wlp_poll_event(void* h, int* type, int* a, int* b);
+
+// Set (or clear) the OSD overlay drawn on top of the game: a window-sized straight-alpha RGBA8 buffer
+// (row 0 = top). Pass NULL / w<=0 to hide. MUST be called on the same thread that calls wlp_present
+// (the GL context lives there). Composited each present until changed.
+void wlp_set_overlay(void* h, const void* rgba, int w, int hh);
+
+// Reserve chrome space (title-bar height on top, status-bar height on bottom, window pixels). The game
+// is aspect-fit BETWEEN them instead of being covered by the OSD bars. Call once after create / on resize.
+void wlp_set_insets(void* h, int top, int bottom);
+
+// Window management (driven by the themed title-bar buttons).
+void wlp_minimize(void* h);
+void wlp_toggle_maximize(void* h);
+int  wlp_is_maximized(void* h);
+void wlp_move(void* h);              // start an interactive move (title-bar drag)
+void wlp_resize(void* h, int edge);  // start an interactive resize (edge bits: T=1,B=2,L=4,R=8; corners OR'd)
+void wlp_set_cursor_shape(void* h, int shape);  // wp_cursor_shape_device_v1 shape enum (resize arrows etc.)
+
+// Current window size (pixels).
+void wlp_size(void* h, int* w, int* hh);
+
+void wlp_destroy(void* h);
+
+#ifdef __cplusplus
+}
+#endif
+#endif
