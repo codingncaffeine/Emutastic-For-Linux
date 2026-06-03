@@ -54,7 +54,9 @@ int  wlp_hw_init(int ctx_type, int major, int minor, int want_depth, int want_st
 void wlp_hw_make_current(void);              // make the HW context current on the calling (emu) thread
 unsigned int wlp_hw_fbo(void);               // FBO id the core renders into (for get_current_framebuffer)
 void* wlp_hw_proc(const char* sym);          // resolve a GL symbol (for get_proc_address)
-int  wlp_hw_readback(void* out, int w, int h, int bottom_left);  // FBO → BGRA top-down into out
+// FBO → BGRA top-down into out (async via PBOs: returns the PREVIOUS frame; *out_w/*out_h = its dims).
+// out must hold up to the FBO's max size. Returns 1 if out was filled, 0 if not (first frame).
+int  wlp_hw_readback(void* out, int cur_w, int cur_h, int bottom_left, int* out_w, int* out_h);
 void wlp_hw_destroy(void);
 
 // Current window size (pixels).

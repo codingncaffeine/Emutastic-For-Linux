@@ -1260,6 +1260,9 @@ namespace Emutastic.Emulator
                 return;
             }
             Platform.HwGlContext.MakeCurrent();   // stays current on this (emu) thread for every retro_run
+            // Frame buffers sized to the FBO MAX (the async readback may return any frame size up to it).
+            int maxBytes = Math.Max(1, maxW * maxH * 4);
+            _hwBufA = new byte[maxBytes]; _hwBufB = new byte[maxBytes];
             Trace.WriteLine($"[Emu] HW-render context ready ({maxW}x{maxH}); calling context_reset");
             try { _hwContextReset?.Invoke(); } catch (Exception ex) { Trace.WriteLine($"[Emu] context_reset threw: {ex}"); }
         }
@@ -1401,23 +1404,18 @@ namespace Emutastic.Emulator
             // where the HW context is current. The SW pixel-copy path below is never used by HW cores.
             if (_hwRenderActive)
             {
-                if (data == RETRO_HW_FRAME_BUFFER_VALID && width > 0 && height > 0)
+                if (data == RETRO_HW_FRAME_BUFFER_VALID && width > 0 && height > 0 && _hwBufA != null && _hwBufB != null)
                 {
-                    int hw = (int)width, hh = (int)height, hneed = hw * hh * 4;
-                    // TRUE double-buffer: always read into the buffer the present thread is NOT holding
-                    // (_frame). Writing the front buffer (the old single-buffer "ping-pong" did) let the
-                    // present copy a half-written frame — including pixels still carrying the FBO's
-                    // non-opaque alpha before the alpha-force pass — i.e. the random transparent flash.
-                    if (_hwBufA == null || _hwBufA.Length != hneed) _hwBufA = new byte[hneed];
-                    if (_hwBufB == null || _hwBufB.Length != hneed) _hwBufB = new byte[hneed];
+                    // TRUE double-buffer: always read into the buffer the present thread is NOT holding,
+                    // so it can't copy a half-written frame (the transparent-flash cause). Async PBO readback
+                    // returns the PREVIOUS frame + its dims (ow/oh) — present those, not the current cb dims.
                     byte[] back = ReferenceEquals(_frame, _hwBufA) ? _hwBufB : _hwBufA;
                     long t0 = Stopwatch.GetTimestamp();
-                    bool ok = Platform.HwGlContext.Readback(back, hw, hh, _hwBottomLeft);
-                    _hwReadbackMs = _hwReadbackMs <= 0 ? 0 : _hwReadbackMs;
+                    bool ok = Platform.HwGlContext.Readback(back, (int)width, (int)height, _hwBottomLeft, out int ow, out int oh);
                     _hwReadbackMs += 0.05 * ((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency - _hwReadbackMs);
-                    if (ok)
+                    if (ok && ow > 0 && oh > 0)
                     {
-                        lock (_frameLock) { _frame = back; _frameW = hw; _frameH = hh; _frameSeq++; }
+                        lock (_frameLock) { _frame = back; _frameW = ow; _frameH = oh; _frameSeq++; }
                         System.Threading.Interlocked.Increment(ref _frameCountSample);
                         FrameReady?.Invoke();
                     }

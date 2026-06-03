@@ -24,7 +24,7 @@ namespace Emutastic.Platform
         [DllImport(LIB)] static extern void wlp_hw_make_current();
         [DllImport(LIB)] static extern uint wlp_hw_fbo();
         [DllImport(LIB)] static extern IntPtr wlp_hw_proc([MarshalAs(UnmanagedType.LPStr)] string sym);
-        [DllImport(LIB)] static extern int wlp_hw_readback(IntPtr outBgra, int w, int h, int bottomLeft);
+        [DllImport(LIB)] static extern int wlp_hw_readback(IntPtr outBgra, int curW, int curH, int bottomLeft, out int outW, out int outH);
         [DllImport(LIB)] static extern void wlp_hw_destroy();
 
         /// <summary>Create the offscreen GL context + FBO (call on the emu thread, after retro_load_game).</summary>
@@ -36,10 +36,12 @@ namespace Emutastic.Platform
         public static IntPtr Proc(string sym) => wlp_hw_proc(sym);
         public static void Destroy() => wlp_hw_destroy();
 
-        /// <summary>Read the core's FBO back into <paramref name="bgra"/> (top-down). Emu thread, context current.</summary>
-        public static unsafe bool Readback(byte[] bgra, int w, int h, bool bottomLeftOrigin)
+        /// <summary>Issue the current FBO read and return the PREVIOUS frame's pixels into <paramref name="bgra"/>
+        /// (async PBO; 1-frame latency, no GPU stall). <paramref name="bgra"/> must be FBO-max-sized.
+        /// Returns true and sets outW/outH when a frame was produced. Emu thread, context current.</summary>
+        public static unsafe bool Readback(byte[] bgra, int curW, int curH, bool bottomLeftOrigin, out int outW, out int outH)
         {
-            fixed (byte* p = bgra) return wlp_hw_readback((IntPtr)p, w, h, bottomLeftOrigin ? 1 : 0) == 0;
+            fixed (byte* p = bgra) return wlp_hw_readback((IntPtr)p, curW, curH, bottomLeftOrigin ? 1 : 0, out outW, out outH) != 0;
         }
     }
 }
