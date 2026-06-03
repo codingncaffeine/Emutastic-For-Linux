@@ -67,9 +67,19 @@ namespace Emutastic.Emulator
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate bool SetEjectStateFn(bool ejected);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate bool SetImageIndexFn(uint index);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate bool GetEjectStateFn();
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint GetImageIndexFn();
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint GetNumImagesFn();
         private SetEjectStateFn? _setEjectState;
         private SetImageIndexFn? _setImageIndex;
         private GetEjectStateFn? _getEjectState;
+        private GetImageIndexFn? _getImageIndex;
+        private GetNumImagesFn? _getNumImages;
+        private bool _diskControlAvailable;     // core registered a disk-control interface (multi-disc / FDS)
+        private int _fdsSideChangeFrames;        // FDS: inject JOYPAD_L for N polled frames = "disk side change"
+        private int _diskInsertPendingFrames;    // deferred set_eject_state(false) countdown after a swap
+        private bool _diskSwapPrevHeld;          // rising-edge latch for the swap chord
+        private volatile string _diskMsg = "";   // transient "Disk N/M" OSD message (read by the present loop)
+        private long _diskMsgUntil;              // Stopwatch ticks; message shown while now < this
 
         [StructLayout(LayoutKind.Sequential)]
         private struct retro_disk_control_callback   // first 7 fields are shared with the EXT version
@@ -321,7 +331,7 @@ namespace Emutastic.Emulator
             _audioCb = Audio_cb;
             _audioBatchCb = AudioBatch_cb;
             _inputPollCb = InputPoll_cb;
-            _inputStateCb = _input.GetInputState;
+            _inputStateCb = InputState_cb;
             _logCb = RetroLog_cb;
         }
 
@@ -463,6 +473,7 @@ namespace Emutastic.Emulator
                 if (_paused) { Thread.Sleep(16); frameTimer.Restart(); continue; }
 
                 if (!_noInputPoll) _input.Poll();
+                ServiceDiskSwap();   // disc-swap chord (L3+Start) + FDS/deferred-insert ticks
 
                 // Dynamic rate control: fine-tune the resampler ratio each frame to hold the audio queue
                 // centered (RetroArch's model). This is the PRIMARY audio-sync mechanism now; the coarse
@@ -673,6 +684,7 @@ namespace Emutastic.Emulator
                 if (_resetRequested) { _resetRequested = false; try { _core!.Reset(); } catch (Exception ex) { Trace.WriteLine($"[Emu] reset threw: {ex}"); } }
                 if (_paused) { Thread.Sleep(16); frameTimer.Restart(); continue; }
                 if (!_noInputPoll) _input.Poll();
+                ServiceDiskSwap();   // disc-swap chord (L3+Start) + FDS/deferred-insert ticks
                 _audio?.ApplyDrc();
 
                 long runT0 = frameTimer.ElapsedTicks;
@@ -931,7 +943,9 @@ namespace Emutastic.Emulator
                     int rEdge = (!_wlTop.IsMaximized && !onCtl) ? GlOsd.ResizeHitTest(ww, wh, _wlTop.MouseX, _wlTop.MouseY) : 0;
                     _wlTop.SetCursorShape(GlOsd.CursorShapeForEdge(rEdge));
                 }
-                if (osd.Build(ww, wh, statusText, title, winStyle, _wlTop.IsMaximized, titleHover, hudAlpha, hover, IsPaused))
+                // A transient disc-swap message ("Disk N / M") preempts the fps line while it's active.
+                string shownStatus = ActiveDiskMessage ?? statusText;
+                if (osd.Build(ww, wh, shownStatus, title, winStyle, _wlTop.IsMaximized, titleHover, hudAlpha, hover, IsPaused))
                     _wlTop.SetOverlay(osd.Pixels, osd.Width, osd.Height);
 
                 // Present the latest frame every iteration; the shim's FIFO swap is the pace (re-presenting a
@@ -1067,6 +1081,9 @@ namespace Emutastic.Emulator
                         if (dc.set_eject_state != IntPtr.Zero) _setEjectState = Marshal.GetDelegateForFunctionPointer<SetEjectStateFn>(dc.set_eject_state);
                         if (dc.set_image_index != IntPtr.Zero) _setImageIndex = Marshal.GetDelegateForFunctionPointer<SetImageIndexFn>(dc.set_image_index);
                         if (dc.get_eject_state != IntPtr.Zero) _getEjectState = Marshal.GetDelegateForFunctionPointer<GetEjectStateFn>(dc.get_eject_state);
+                        if (dc.get_image_index != IntPtr.Zero) _getImageIndex = Marshal.GetDelegateForFunctionPointer<GetImageIndexFn>(dc.get_image_index);
+                        if (dc.get_num_images != IntPtr.Zero) _getNumImages = Marshal.GetDelegateForFunctionPointer<GetNumImagesFn>(dc.get_num_images);
+                        _diskControlAvailable = true;
                     }
                     return true;
                 case ENV_GET_VARIABLE:
@@ -1162,6 +1179,88 @@ namespace Emutastic.Emulator
                 System.Diagnostics.Trace.WriteLine($"[Emu] disk-control insert failed: {ex.Message}");
             }
         }
+
+        // ── In-game disc switching (L3 + Start chord) ───────────────────────────────────────────────
+        // Wraps SdlInput.GetInputState so we can inject a JOYPAD_L press on port 0 for FDS "disk side
+        // change" (FDS cores don't expose the disk-control interface — they read an L press instead).
+        private short InputState_cb(uint port, uint device, uint index, uint id)
+        {
+            if (port == 0 && device == SdlInput.RETRO_DEVICE_JOYPAD
+                && id == LibretroInput.JOYPAD_L && _fdsSideChangeFrames > 0)
+                return 1;
+            return _input.GetInputState(port, device, index, id);
+        }
+
+        // Called once per emu frame (after input poll). Detects the disc-swap chord (rising edge) and
+        // ticks the FDS-injection + deferred-reinsert countdowns.
+        private void ServiceDiskSwap()
+        {
+            if (_fdsSideChangeFrames > 0) _fdsSideChangeFrames--;
+            if (_diskInsertPendingFrames > 0 && --_diskInsertPendingFrames == 0)
+            {
+                try { _setEjectState?.Invoke(false); } catch (Exception ex) { Trace.WriteLine($"[Emu] disk deferred insert failed: {ex.Message}"); }
+            }
+
+            // Chord = L3 + Start on controller 0, read raw so it works regardless of the per-console
+            // mapping (NES/FDS etc. don't map L3). Rising edge so a held chord fires once.
+            bool held = _input.IsRawButtonDown(SdlInput.SdlButtonLeftStick)
+                     && _input.IsRawButtonDown(SdlInput.SdlButtonStart);
+            if (held && !_diskSwapPrevHeld) SwapToNextDisk();
+            _diskSwapPrevHeld = held;
+        }
+
+        // Cycle to the next disc image (eject → set index → deferred re-insert), mirroring RetroArch's
+        // timing. FDS uses the JOYPAD_L injection path instead of the disk-control interface.
+        private void SwapToNextDisk()
+        {
+            // FDS-family: cores expose no disk-control interface; inject JOYPAD_L for ~6 frames.
+            if (!_diskControlAvailable && string.Equals(_console, "FDS", StringComparison.OrdinalIgnoreCase))
+            {
+                _fdsSideChangeFrames = 6;
+                ShowDiskMessage("Disk: side change");
+                return;
+            }
+            if (!_diskControlAvailable)
+            {
+                ShowDiskMessage("Disc switch: not supported by this core");
+                return;
+            }
+            if (_getNumImages == null || _setImageIndex == null || _setEjectState == null)
+            {
+                ShowDiskMessage("Disc switch: incomplete disc interface");
+                return;
+            }
+            try
+            {
+                uint count = _getNumImages.Invoke();
+                if (count <= 1)
+                {
+                    ShowDiskMessage("Disc switch: only one disc — put all discs in one folder and re-import");
+                    return;
+                }
+                uint cur = _getImageIndex?.Invoke() ?? 0;
+                uint next = (cur + 1) % count;
+                // RetroArch's pattern: eject + set index immediately, defer re-insert ~100 frames (Beetle
+                // PSX's CD engine expects the disc to spin down between swaps; others tolerate it).
+                bool ejected = _getEjectState?.Invoke() ?? false;
+                if (!ejected) _setEjectState.Invoke(true);
+                _setImageIndex.Invoke(next);
+                _diskInsertPendingFrames = 100;
+                ShowDiskMessage($"Disk {next + 1} / {count}");
+                Trace.WriteLine($"[Emu] disc swap {cur} -> {next} of {count}");
+            }
+            catch (Exception ex) { Trace.WriteLine($"[Emu] disc swap failed: {ex.Message}"); }
+        }
+
+        // Surface a transient disc-swap message in the OSD status line for ~3s (read by the present loop).
+        private void ShowDiskMessage(string msg)
+        {
+            _diskMsg = msg;
+            _diskMsgUntil = Stopwatch.GetTimestamp() + 3 * Stopwatch.Frequency;
+        }
+
+        /// <summary>The active disc-swap OSD message, or null if none is currently showing.</summary>
+        public string? ActiveDiskMessage => (_diskMsg.Length > 0 && Stopwatch.GetTimestamp() < _diskMsgUntil) ? _diskMsg : null;
 
         // Restore the battery save into the core's SRAM region, if a .srm exists and the core has SRAM.
         private void LoadSram()

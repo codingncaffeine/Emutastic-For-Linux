@@ -211,6 +211,17 @@ namespace Emutastic.Platform
             if (retroId >= 0 && retroId < JOYPAD_COUNT) _kbd[retroId] = pressed;
         }
 
+        // Raw physical-button read on a pad, bypassing the per-console libretro mapping. Used for frontend
+        // chords (Disk Swap = L3 + Start) that must register even on consoles that don't map L3/Start.
+        public const int SdlButtonStart = SDL_GAMEPAD_BUTTON_START;
+        public const int SdlButtonLeftStick = SDL_GAMEPAD_BUTTON_LEFT_STICK;
+        public bool IsRawButtonDown(int sdlButton, int port = 0)
+        {
+            if (port < 0 || port >= _pads.Count) return false;
+            var h = _pads[port].handle;
+            return h != IntPtr.Zero && SDL_GetGamepadButton(h, sdlButton);
+        }
+
         /// <summary>libretro retro_input_state_t backend.</summary>
         public short GetInputState(uint port, uint device, uint index, uint id)
         {
