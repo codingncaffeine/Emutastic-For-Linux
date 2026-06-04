@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
@@ -7,26 +8,19 @@ using Avalonia.Threading;
 namespace Emutastic.Views.PauseEffects
 {
     /// <summary>
-    /// Drives a pause effect: a ~60Hz <see cref="DispatcherTimer"/> computes the frame delta, ticks
-    /// pixel effects into their bitmap, and invalidates the host (vector effects draw in the host's
-    /// Render). Also runs a manual opacity fade in/out so the effect doesn't pop on/off. Avalonia
-    /// replacement for the WPF CompositionTarget.Rendering + DoubleAnimation driver.
+    /// Avalonia adapter over <see cref="PauseFx"/> (the UI-agnostic Skia driver): a ~60Hz
+    /// DispatcherTimer ticks the effect, then copies the composed Skia frame into a
+    /// WriteableBitmap the host control blits. The game-host GL window uses PauseFx directly —
+    /// same pixels on every surface. Public API unchanged from the original runner (the
+    /// Preferences preview and the legacy EmulatorWindow construct effects from the registry).
     /// </summary>
     public sealed class PauseEffectRunner : IDisposable
     {
-        private const int PixelW = 320, PixelH = 240;     // coarse internal res; host upscales
-        private const double FadeSeconds = 0.28;
-
         private readonly PauseEffectHost _host;
+        private readonly PauseFx _fx = new();
         private readonly DispatcherTimer _timer;
-        private IPauseEffect? _vector;
-        private IPixelPauseEffect? _pixel;
-        private WriteableBitmap? _pixelBmp;
-        private double _intensity = 1.0;
-        private Size _lastInitSize;
+        private WriteableBitmap? _bmp;
         private long _lastTicks;
-        private double _fadeTarget;      // 1 = fading/holding in, 0 = fading out
-        private bool _stopping;
 
         public PauseEffectRunner(PauseEffectHost host)
         {
@@ -35,118 +29,79 @@ namespace Emutastic.Views.PauseEffects
             _timer.Tick += OnTick;
         }
 
-        public void Start(IPauseEffect vector, double intensity)
-        {
-            Stop(immediate: true);
-            _pixel = null;
-            _vector = vector;
-            _intensity = intensity;
-            _host.PixelBitmap = null;
-            _host.Vector = vector;
-            _lastInitSize = CanvasSize();
-            vector.Init(_lastInitSize, intensity);
-            BeginFadeIn();
-        }
+        public void Start(IPauseEffect vector, double intensity) => StartCore(vector, intensity);
+        public void Start(IPixelPauseEffect pixel, double intensity) => StartCore(pixel, intensity);
 
-        public void Start(IPixelPauseEffect pixel, double intensity)
+        private void StartCore(object fx, double intensity)
         {
-            Stop(immediate: true);
-            _vector = null;
-            _pixel = pixel;
-            _intensity = intensity;
-            _pixelBmp = new WriteableBitmap(new PixelSize(PixelW, PixelH), new Vector(96, 96),
-                PixelFormat.Bgra8888, AlphaFormat.Unpremul);
-            _host.Vector = null;
-            _host.PixelBitmap = _pixelBmp;
-            pixel.Init(PixelW, PixelH, intensity);
-            BeginFadeIn();
-        }
-
-        /// <summary>Change intensity in place (re-seeds the active effect) without a fade/realloc —
-        /// avoids the preview flicker when dragging the intensity slider.</summary>
-        public void SetIntensity(double intensity)
-        {
-            _intensity = intensity;
-            if (_vector != null) _vector.Init(CanvasSize(), intensity);
-            else if (_pixel != null) _pixel.Init(PixelW, PixelH, intensity);   // bitmap unchanged
-        }
-
-        public bool HasActiveEffect => _vector != null || _pixel != null;
-
-        private void BeginFadeIn()
-        {
-            _stopping = false;
-            _fadeTarget = 1.0;
-            _host.Opacity = 0;
+            var size = CanvasSize();
+            _fx.StartInstance(fx, intensity, (int)size.Width, (int)size.Height);
             _host.IsVisible = true;
+            _host.Opacity = 1;          // fade is baked into the frame now
             _lastTicks = 0;
             if (!_timer.IsEnabled) _timer.Start();
         }
 
+        /// <summary>Change intensity in place (re-seeds the active effect) — no fade/realloc,
+        /// avoids the preview flicker when dragging the intensity slider.</summary>
+        public void SetIntensity(double intensity) => _fx.SetIntensity(intensity);
+
+        public bool HasActiveEffect => _fx.HasActiveEffect;
+
         /// <summary>Fade out and tear down (or immediately, e.g. before starting a new effect).</summary>
         public void Stop(bool immediate = false)
         {
+            _fx.Stop(immediate);
             if (immediate)
             {
                 _timer.Stop();
-                DisposeEffects();
-                _host.Vector = null; _host.PixelBitmap = null;
-                _host.Opacity = 0; _host.IsVisible = false;
-                _stopping = false;
-                return;
+                _host.Frame = null;
+                _host.IsVisible = false;
             }
-            if (_vector == null && _pixel == null) return;
-            _stopping = true;
-            _fadeTarget = 0.0;
-            if (!_timer.IsEnabled) _timer.Start();
+            else if (_fx.HasActiveEffect && !_timer.IsEnabled) _timer.Start();
         }
 
         private void OnTick(object? sender, EventArgs e)
         {
             long now = Environment.TickCount64;
             double dt = _lastTicks == 0 ? 1.0 / 60.0 : (now - _lastTicks) / 1000.0;
-            if (dt > 0.1) dt = 0.1;                 // clamp so a stall doesn't fast-forward physics
             _lastTicks = now;
 
-            // Opacity fade.
-            double step = dt / FadeSeconds;
-            if (_host.Opacity < _fadeTarget) _host.Opacity = Math.Min(_fadeTarget, _host.Opacity + step);
-            else if (_host.Opacity > _fadeTarget) _host.Opacity = Math.Max(_fadeTarget, _host.Opacity - step);
+            var size = CanvasSize();
+            _fx.Resize((int)size.Width, (int)size.Height);
 
-            if (_stopping && _host.Opacity <= 0.001)
+            if (!_fx.TickInto(dt))
             {
-                _timer.Stop();
-                DisposeEffects();
-                _host.Vector = null; _host.PixelBitmap = null;
-                _host.IsVisible = false;
-                _stopping = false;
+                if (!_fx.Active)        // fade-out finished
+                {
+                    _timer.Stop();
+                    _host.Frame = null;
+                    _host.IsVisible = false;
+                    _host.InvalidateVisual();
+                }
                 return;
             }
 
-            try
+            // Copy the Skia frame into the Avalonia bitmap (sizes match — both follow CanvasSize).
+            var src = _fx.Frame!;
+            if (_bmp == null || _bmp.PixelSize.Width != src.Width || _bmp.PixelSize.Height != src.Height)
+                _bmp = new WriteableBitmap(new PixelSize(src.Width, src.Height), new Vector(96, 96),
+                    PixelFormat.Rgba8888, AlphaFormat.Unpremul);
+            using (var fb = _bmp.Lock())
             {
-                if (_vector != null)
+                int rowBytes = src.Width * 4;
+                if (fb.RowBytes == rowBytes)
                 {
-                    var size = CanvasSize();
-                    if (Math.Abs(size.Width - _lastInitSize.Width) > 2 || Math.Abs(size.Height - _lastInitSize.Height) > 2)
-                    {
-                        _lastInitSize = size;
-                        _vector.Init(size, _intensity);
-                    }
-                    _host.Delta = dt;
-                    _host.InvalidateVisual();          // vector draws in Render
+                    unsafe { Buffer.MemoryCopy((void*)src.GetPixels(), (void*)fb.Address, (long)rowBytes * src.Height, (long)rowBytes * src.Height); }
                 }
-                else if (_pixel != null && _pixelBmp != null)
+                else
                 {
-                    _pixel.Tick(dt, _pixelBmp);        // write the bitmap
-                    _host.InvalidateVisual();          // host blits it
+                    for (int y = 0; y < src.Height; y++)
+                        unsafe { Buffer.MemoryCopy((void*)(src.GetPixels() + y * rowBytes), (void*)(fb.Address + y * fb.RowBytes), rowBytes, rowBytes); }
                 }
             }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Trace.WriteLine($"PauseEffect tick failed: {ex.Message}");
-                Stop(immediate: true);
-            }
+            _host.Frame = _bmp;
+            _host.InvalidateVisual();
         }
 
         private Size CanvasSize()
@@ -156,18 +111,10 @@ namespace Emutastic.Views.PauseEffects
             return new Size(w, h);
         }
 
-        private void DisposeEffects()
-        {
-            try { _vector?.Dispose(); } catch { }
-            try { _pixel?.Dispose(); } catch { }
-            _vector = null; _pixel = null; _pixelBmp = null;
-        }
-
         public void Dispose()
         {
             _timer.Stop();
-            _timer.Tick -= OnTick;
-            DisposeEffects();
+            _fx.Dispose();
         }
     }
 }

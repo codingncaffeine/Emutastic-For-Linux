@@ -1,6 +1,5 @@
 using System;
-using Avalonia;
-using Avalonia.Media;
+using SkiaSharp;
 
 namespace Emutastic.Views.PauseEffects
 {
@@ -19,11 +18,11 @@ namespace Emutastic.Views.PauseEffects
         }
 
         private Flake[] _flakes = Array.Empty<Flake>();
-        private Size _canvas;
+        private SKSize _canvas;
         private readonly Random _rng = new();
-        private readonly IBrush _flakeBrush = new SolidColorBrush(Color.FromArgb(0xE0, 0xF0, 0xF6, 0xFF));
+        private readonly SKPaint _flakePaint = new() { Color = new SKColor(0xF0, 0xF6, 0xFF, 0xE0), IsAntialias = false, Style = SKPaintStyle.Fill };
 
-        public void Init(Size canvasSize, double intensity)
+        public void Init(SKSize canvasSize, double intensity)
         {
             _canvas = canvasSize;
             int baseCount = (int)(220 * (_canvas.Width * _canvas.Height) / (1920.0 * 1080.0));
@@ -51,7 +50,7 @@ namespace Emutastic.Views.PauseEffects
             };
         }
 
-        public void Tick(double deltaSeconds, DrawingContext dc)
+        public void Tick(double deltaSeconds, SKCanvas canvas)
         {
             for (int i = 0; i < _flakes.Length; i++)
             {
@@ -65,19 +64,15 @@ namespace Emutastic.Views.PauseEffects
                 if (drawX < -f.Radius) drawX += _canvas.Width + f.Radius * 2;
                 else if (drawX > _canvas.Width + f.Radius) drawX -= _canvas.Width + f.Radius * 2;
 
-                var rect = new Rect(Math.Floor(drawX), Math.Floor(f.Y), f.Radius, f.Radius);
-                if (f.Opacity < 1.0)
-                {
-                    using (dc.PushOpacity(f.Opacity))
-                        dc.DrawRectangle(_flakeBrush, null, rect);
-                }
-                else
-                {
-                    dc.DrawRectangle(_flakeBrush, null, rect);
-                }
+                var rect = new SKRect((float)Math.Floor(drawX), (float)Math.Floor(f.Y),
+                                      (float)(Math.Floor(drawX) + f.Radius), (float)(Math.Floor(f.Y) + f.Radius));
+                // Per-flake opacity = the brush alpha scaled by the flake's depth opacity
+                // (replaces Avalonia's PushOpacity scope).
+                _flakePaint.Color = _flakePaint.Color.WithAlpha((byte)(0xE0 * Math.Clamp(f.Opacity, 0, 1)));
+                canvas.DrawRect(rect, _flakePaint);
             }
         }
 
-        public void Dispose() { _flakes = Array.Empty<Flake>(); }
+        public void Dispose() { _flakes = Array.Empty<Flake>(); _flakePaint.Dispose(); }
     }
 }

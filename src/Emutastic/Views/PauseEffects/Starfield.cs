@@ -1,6 +1,5 @@
 using System;
-using Avalonia;
-using Avalonia.Media;
+using SkiaSharp;
 
 namespace Emutastic.Views.PauseEffects
 {
@@ -13,11 +12,11 @@ namespace Emutastic.Views.PauseEffects
 
         private struct Star { public double X, Y, Z, Vz; }
         private Star[] _stars = Array.Empty<Star>();
-        private Size _canvas;
+        private SKSize _canvas;
         private readonly Random _rng = new();
-        private readonly IBrush _white = new SolidColorBrush(Colors.White);
+        private readonly SKPaint _white = new() { Color = new SKColor(0xFF, 0xFF, 0xFF, 0xFF), Style = SKPaintStyle.Fill, IsAntialias = true };
 
-        public void Init(Size canvasSize, double intensity)
+        public void Init(SKSize canvasSize, double intensity)
         {
             _canvas = canvasSize;
             int count = Math.Max(120, (int)(450 * intensity));
@@ -33,7 +32,7 @@ namespace Emutastic.Views.PauseEffects
             Vz = 0.4 + _rng.NextDouble() * 0.6,
         };
 
-        public void Tick(double dt, DrawingContext dc)
+        public void Tick(double dt, SKCanvas canvas)
         {
             double cx = _canvas.Width / 2.0, cy = _canvas.Height / 2.0;
             for (int i = 0; i < _stars.Length; i++)
@@ -47,11 +46,12 @@ namespace Emutastic.Views.PauseEffects
                 if (sx < 0 || sx > _canvas.Width || sy < 0 || sy > _canvas.Height) { s = NewStar(1.0); continue; }
                 double size = (1.0 - s.Z) * 2.4 + 0.4;
                 double opacity = (1.0 - s.Z) * 0.85 + 0.15;
-                using (dc.PushOpacity(opacity))
-                    dc.DrawEllipse(_white, null, new Point(sx, sy), size, size);
+                // Per-star opacity = the white alpha scaled by opacity (replaces PushOpacity).
+                _white.Color = _white.Color.WithAlpha((byte)(0xFF * Math.Clamp(opacity, 0, 1)));
+                canvas.DrawOval((float)sx, (float)sy, (float)size, (float)size, _white);
             }
         }
 
-        public void Dispose() { _stars = Array.Empty<Star>(); }
+        public void Dispose() { _stars = Array.Empty<Star>(); _white.Dispose(); }
     }
 }

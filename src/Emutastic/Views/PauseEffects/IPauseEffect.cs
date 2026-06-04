@@ -1,18 +1,18 @@
 using System;
-using Avalonia;
-using Avalonia.Media;
-using Avalonia.Media.Imaging;
+using SkiaSharp;
 
 namespace Emutastic.Views.PauseEffects
 {
     /// <summary>
     /// Animated overlay drawn on top of the paused game. Two flavors:
-    ///   - <see cref="IPauseEffect"/>: vector — draws with a <see cref="DrawingContext"/>
-    ///     (ticked inside the host's Render).
-    ///   - <see cref="IPixelPauseEffect"/>: per-pixel via a <see cref="WriteableBitmap"/>
-    ///     (plasma / aurora style), ticked by the runner and blitted by the host.
-    /// Avalonia port of the upstream WPF subsystem (DrawingVisual/CompositionTarget →
-    /// Control.Render / DispatcherTimer).
+    ///   - <see cref="IPauseEffect"/>: vector — draws on an <see cref="SKCanvas"/>.
+    ///   - <see cref="IPixelPauseEffect"/>: per-pixel into a coarse BGRA buffer
+    ///     (plasma / aurora style) that the host upscales.
+    /// Effects render with SkiaSharp so the SAME implementation serves all three surfaces:
+    /// the Preferences theme-tab preview and the legacy in-process EmulatorWindow (which
+    /// blit the Skia pixels into an Avalonia WriteableBitmap), and the game-host GL window
+    /// (which composites them into its native OSD overlay — that process has no Avalonia).
+    /// Ported from the upstream WPF subsystem (DrawingVisual/CompositionTarget).
     /// </summary>
     public interface IPauseEffect : IDisposable
     {
@@ -21,21 +21,21 @@ namespace Emutastic.Views.PauseEffects
 
         /// <summary>Initialize for a canvas size + intensity multiplier (0.5–2.0). Called on
         /// start and whenever the canvas size changes.</summary>
-        void Init(Size canvasSize, double intensity);
+        void Init(SKSize canvasSize, double intensity);
 
-        /// <summary>Per-frame draw. Called from the host's Render with the elapsed seconds.</summary>
-        void Tick(double deltaSeconds, DrawingContext dc);
+        /// <summary>Per-frame draw with the elapsed seconds. The canvas is cleared by the driver.</summary>
+        void Tick(double deltaSeconds, SKCanvas canvas);
     }
 
     /// <summary>
-    /// Pixel-bitmap variant. Implementers write into the supplied <see cref="WriteableBitmap"/>
-    /// each frame (via Lock()). The host shows the bitmap stretched to fill.
+    /// Pixel-bitmap variant. Implementers write BGRA8888 into the supplied buffer each frame;
+    /// the host shows it stretched to fill. Buffer layout: width*height*4, top-down.
     /// </summary>
     public interface IPixelPauseEffect : IDisposable
     {
         string Id { get; }
         string DisplayName { get; }
         void Init(int width, int height, double intensity);
-        void Tick(double deltaSeconds, WriteableBitmap target);
+        void Tick(double deltaSeconds, IntPtr bgraBuffer, int width, int height);
     }
 }

@@ -963,6 +963,11 @@ namespace Emutastic.Emulator
             List<(string Name, string RelTime, string Path)>? statePicker = null;
             int pickerHover = -1;
 
+            // Pause effect (the Theme tab's animation, upstream parity): starts on pause, fades out
+            // on resume. PauseFx renders the same Skia frames the Preferences preview shows.
+            Views.PauseEffects.PauseFx? pauseFx = null;
+            bool wasPaused = false;
+
             // Cog menu (upstream's OverlayMenu): rows carry an action key; null key = placeholder
             // (drawn greyed). "\x01VISUALS"/"\x01BACK" switch levels; other keys are core options
             // cycled live via CycleCoreOption. Item order/labels mirror upstream's XAML.
@@ -1006,6 +1011,29 @@ namespace Emutastic.Emulator
 
             Action<int, bool> onBtn = (button, down) =>
             {
+                // While paused, right-click rotates the pause-screen effect to the next one in the
+                // catalog (round-robin, skipping "None") and persists the pick — upstream's
+                // GameScreen_RightDown. Doesn't fire during gameplay so it can't interfere with
+                // mouse-driven cores (CDi / MAME).
+                if (button == 1 && down && IsPaused)
+                {
+                    var rotation = Views.PauseEffects.PauseEffectRegistry.All
+                        .Where(e => !string.Equals(e.Id, Views.PauseEffects.PauseEffectRegistry.NoneId, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                    if (rotation.Count == 0) return;
+                    var theme = App.Configuration?.GetThemeConfiguration();
+                    string currentId = theme?.PauseEffect ?? Views.PauseEffects.PauseEffectRegistry.NoneId;
+                    int idx = rotation.FindIndex(e => string.Equals(e.Id, currentId, StringComparison.OrdinalIgnoreCase));
+                    string nextId = rotation[idx < 0 ? 0 : (idx + 1) % rotation.Count].Id;
+                    if (theme != null) theme.PauseEffect = nextId;          // host-local, for the next pause edge
+                    EmitHostCommand?.Invoke($"set-pause-effect {nextId}");  // main app persists to config
+                    double inten = Math.Clamp(theme?.PauseEffectIntensity ?? 1.0, 0.5, 2.0);
+                    _wlTop!.GetSize(out int fw, out int fh);
+                    pauseFx ??= new Views.PauseEffects.PauseFx();
+                    pauseFx.Start(nextId, inten, fw, fh);                   // restart immediately, like upstream
+                    ShowDiskMessage($"Pause effect: {rotation[idx < 0 ? 0 : (idx + 1) % rotation.Count].DisplayName}", 2);
+                    return;
+                }
                 if (button != 0 || !down) return;
                 // 0a) Open cog menu: enabled-row clicks act, panel clicks swallow, elsewhere closes
                 //     (upstream collapses OverlayMenu the same way).
@@ -1142,6 +1170,31 @@ namespace Emutastic.Emulator
                     int rEdge = (!_wlTop.IsMaximized && !onCtl) ? GlOsd.ResizeHitTest(ww, wh, _wlTop.MouseX, _wlTop.MouseY) : 0;
                     _wlTop.SetCursorShape(GlOsd.CursorShapeForEdge(rEdge));
                 }
+                // Pause-effect lifecycle: start on the pause edge (per the Theme tab's setting),
+                // fade out on resume, tick into its frame while anything is visible.
+                if (IsPaused != wasPaused)
+                {
+                    wasPaused = IsPaused;
+                    if (IsPaused)
+                    {
+                        var theme = App.Configuration?.GetThemeConfiguration();
+                        string fxId = theme?.PauseEffect ?? "none";
+                        double inten = Math.Clamp(theme?.PauseEffectIntensity ?? 1.0, 0.5, 2.0);
+                        if (fxId != Views.PauseEffects.PauseEffectRegistry.NoneId)
+                        {
+                            pauseFx ??= new Views.PauseEffects.PauseFx();
+                            pauseFx.Start(fxId, inten, ww, wh);
+                        }
+                    }
+                    else pauseFx?.Stop();   // fade-out tail keeps ticking below until done
+                }
+                SkiaSharp.SKBitmap? fxFrame = null;
+                if (pauseFx is { Active: true })
+                {
+                    pauseFx.Resize(ww, wh);
+                    if (pauseFx.TickInto(dt / 1000.0)) fxFrame = pauseFx.Frame;
+                }
+
                 // A transient disc-swap message ("Disk N / M") preempts the fps line while it's active.
                 string shownStatus = ActiveDiskMessage ?? statusText;
                 pickerHover = statePicker != null && _wlTop.MouseInside
@@ -1153,7 +1206,7 @@ namespace Emutastic.Emulator
                 var cogItems = cogMenu?.Select(m => (m.Label, m.Enabled, m.Value)).ToList();
                 if (osd.Build(ww, wh, shownStatus, title, winStyle, _wlTop.IsMaximized, titleHover, hudAlpha, hover, IsPaused,
                               pickerItems, pickerHover, statusHover,
-                              cogItems, cogHover, cogMenu != null ? CoreName : ""))
+                              cogItems, cogHover, cogMenu != null ? CoreName : "", fxFrame))
                     _wlTop.SetOverlay(osd.Pixels, osd.Width, osd.Height);
 
                 // Present the latest frame every iteration; the shim's FIFO swap is the pace (re-presenting a
@@ -1191,6 +1244,7 @@ namespace Emutastic.Emulator
 
             _running = false;   // window closed → stop the emu thread
             _wlTop.PointerButton -= onBtn; _wlTop.MouseMoved -= showHud;
+            try { pauseFx?.Dispose(); } catch { }
             try { osd.Dispose(); } catch { }
             var w = _wlTop; _wlTop = null;
             if (w != null)

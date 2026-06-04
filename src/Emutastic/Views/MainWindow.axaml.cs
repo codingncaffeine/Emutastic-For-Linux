@@ -501,6 +501,15 @@ public partial class MainWindow : Window
         Services.GameHostLauncher.OnHostCommand = (verb, arg) =>
         {
             if (verb == "open-controls") PreferencesWindow.OpenOrFocus(this, arg);
+            // Paused right-click cycled the pause effect in the host — persist the pick here
+            // (the host's config copy is read-only by convention; one writer avoids clashes).
+            else if (verb == "set-pause-effect" && App.Configuration != null)
+            {
+                var theme = App.Configuration.GetThemeConfiguration();
+                theme.PauseEffect = arg;
+                App.Configuration.SetThemeConfiguration(theme);
+                App.Configuration.ScheduleSave();
+            }
         };
         _vm = new MainViewModel(_db);
         _artworkFetch = new ArtworkFetchService(_db, new ArtworkService(), _vm);

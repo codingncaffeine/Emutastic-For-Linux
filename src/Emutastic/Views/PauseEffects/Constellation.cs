@@ -1,6 +1,5 @@
 using System;
-using Avalonia;
-using Avalonia.Media;
+using SkiaSharp;
 
 namespace Emutastic.Views.PauseEffects
 {
@@ -13,12 +12,12 @@ namespace Emutastic.Views.PauseEffects
 
         private struct Node { public double X, Y, Vx, Vy; }
         private Node[] _nodes = Array.Empty<Node>();
-        private Size _canvas;
+        private SKSize _canvas;
         private readonly Random _rng = new();
-        private readonly IBrush _nodeBrush = new SolidColorBrush(Color.FromArgb(0xE6, 0xCC, 0xE0, 0xFF));
-        private readonly Color _lineColor = Color.FromArgb(0xFF, 0x9C, 0xCB, 0xFF);
+        private readonly SKPaint _nodeBrush = new() { Color = new SKColor(0xCC, 0xE0, 0xFF, 0xE6), Style = SKPaintStyle.Fill, IsAntialias = true };
+        private static readonly SKColor _lineColor = new(0x9C, 0xCB, 0xFF, 0xFF);
         private const int AlphaBuckets = 16;
-        private readonly IPen[] _pensByAlpha = new IPen[AlphaBuckets];
+        private readonly SKPaint[] _pensByAlpha = new SKPaint[AlphaBuckets];
         private const double ConnectDistance = 130.0;
 
         public Constellation()
@@ -26,12 +25,12 @@ namespace Emutastic.Views.PauseEffects
             for (int i = 0; i < AlphaBuckets; i++)
             {
                 byte a = (byte)((i + 1) * 0xC0 / AlphaBuckets);
-                var c = Color.FromArgb(a, _lineColor.R, _lineColor.G, _lineColor.B);
-                _pensByAlpha[i] = new Pen(new SolidColorBrush(c), 0.8);
+                var c = new SKColor(_lineColor.Red, _lineColor.Green, _lineColor.Blue, a);
+                _pensByAlpha[i] = new SKPaint { Color = c, Style = SKPaintStyle.Stroke, StrokeWidth = 0.8f, IsAntialias = true };
             }
         }
 
-        public void Init(Size canvasSize, double intensity)
+        public void Init(SKSize canvasSize, double intensity)
         {
             _canvas = canvasSize;
             int count = (int)(70 * intensity * Math.Sqrt(_canvas.Width * _canvas.Height) / Math.Sqrt(1920 * 1080));
@@ -48,7 +47,7 @@ namespace Emutastic.Views.PauseEffects
             Vy = (-1 + _rng.NextDouble() * 2) * 35,
         };
 
-        public void Tick(double dt, DrawingContext dc)
+        public void Tick(double dt, SKCanvas canvas)
         {
             for (int i = 0; i < _nodes.Length; i++)
             {
@@ -71,13 +70,18 @@ namespace Emutastic.Views.PauseEffects
                     if (dsq > connectSq) continue;
                     double a = 1.0 - Math.Sqrt(dsq) / ConnectDistance;
                     int bucket = Math.Clamp((int)(a * AlphaBuckets), 0, AlphaBuckets - 1);
-                    dc.DrawLine(_pensByAlpha[bucket], new Point(_nodes[i].X, _nodes[i].Y), new Point(_nodes[j].X, _nodes[j].Y));
+                    canvas.DrawLine((float)_nodes[i].X, (float)_nodes[i].Y, (float)_nodes[j].X, (float)_nodes[j].Y, _pensByAlpha[bucket]);
                 }
 
             for (int i = 0; i < _nodes.Length; i++)
-                dc.DrawEllipse(_nodeBrush, null, new Point(_nodes[i].X, _nodes[i].Y), 1.6, 1.6);
+                canvas.DrawOval((float)_nodes[i].X, (float)_nodes[i].Y, 1.6f, 1.6f, _nodeBrush);
         }
 
-        public void Dispose() { _nodes = Array.Empty<Node>(); }
+        public void Dispose()
+        {
+            _nodes = Array.Empty<Node>();
+            _nodeBrush.Dispose();
+            foreach (var p in _pensByAlpha) p?.Dispose();
+        }
     }
 }

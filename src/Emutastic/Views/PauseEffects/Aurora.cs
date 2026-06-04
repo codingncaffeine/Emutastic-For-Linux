@@ -1,5 +1,5 @@
 using System;
-using Avalonia.Media.Imaging;
+using System.Runtime.InteropServices;
 
 namespace Emutastic.Views.PauseEffects
 {
@@ -23,8 +23,11 @@ namespace Emutastic.Views.PauseEffects
             _t = 0;
         }
 
-        public void Tick(double dt, WriteableBitmap target)
+        public void Tick(double dt, IntPtr bgraBuffer, int width, int height)
         {
+            // Host buffer must match the resolution we were initialized at.
+            if (width != _w || height != _h) return;
+
             _t += dt * 0.4 * _intensity;
             for (int y = 0; y < _h; y++)
             {
@@ -53,7 +56,8 @@ namespace Emutastic.Views.PauseEffects
                     _buffer[o + 3] = (byte)(falloff * 0xD0);
                 }
             }
-            Plasma.Blit(target, _buffer, _w, _h);
+            // Buffer is tightly packed BGRA8888, top-down, stride == width*4 — copy straight in.
+            Marshal.Copy(_buffer, 0, bgraBuffer, _buffer.Length);
         }
 
         private static void HsvToBgr(double h, double s, double v, out byte b, out byte g, out byte r)

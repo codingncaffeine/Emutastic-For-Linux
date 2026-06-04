@@ -163,6 +163,7 @@ namespace Emutastic.Platform
         private SKCanvas? _canvas;
         private int _w, _h;
         private string _sig = "";
+        private long _fxSeq;   // pause-effect animation tick — defeats the sig cache while active
         private SKImage? _powerImg;
         private bool _powerTried;
 
@@ -211,13 +212,17 @@ namespace Emutastic.Platform
                           IReadOnlyList<(string Name, string RelTime)>? picker = null, int pickerHover = -1,
                           int statusHover = -1,
                           IReadOnlyList<(string Label, bool Enabled, string? Value)>? cogMenu = null,
-                          int cogHover = -1, string cogFooter = "")
+                          int cogHover = -1, string cogFooter = "",
+                          SKBitmap? fxFrame = null)
         {
             if (w <= 0 || h <= 0) return false;
             int aq = (int)Math.Round(Math.Clamp(hudAlpha, 0f, 1f) * 16);   // quantize alpha → limit fade re-renders
             string pickSig = picker == null ? "" : $"{string.Join("\x1f", picker.Select(p => p.Name + p.RelTime))}|{pickerHover}";
             string cogSig = cogMenu == null ? "" : $"{string.Join("\x1f", cogMenu.Select(m => m.Label + m.Value + (m.Enabled ? "1" : "0")))}|{cogHover}";
-            string sig = $"{w}x{h}|{status}|{title}|{winStyle}|{(maximized ? 1 : 0)}|{titleHover}|{aq}|{hoverBtn}|{(paused ? 1 : 0)}|{pickSig}|{statusHover}|{cogSig}";
+            // A pause-effect frame is a fresh animation every tick — bypass the signature cache
+            // while one is active (cheap: the effect only runs while the game is paused).
+            string fxSig = fxFrame != null ? (_fxSeq++).ToString() : "";
+            string sig = $"{w}x{h}|{status}|{title}|{winStyle}|{(maximized ? 1 : 0)}|{titleHover}|{aq}|{hoverBtn}|{(paused ? 1 : 0)}|{pickSig}|{statusHover}|{cogSig}|{fxSig}";
             if (sig == _sig && _bmp != null) return false;
             _sig = sig;
 
@@ -231,6 +236,10 @@ namespace Emutastic.Platform
 
             var c = _canvas!;
             c.Clear(SKColors.Transparent);
+            // Pause effect first: it covers the game area but sits UNDER the chrome
+            // (title bar / status bar / HUD stay readable, like upstream's overlay stack).
+            if (fxFrame != null)
+                c.DrawBitmap(fxFrame, new SKRect(0, 0, w, h));
             DrawTitleBar(c, w, title, winStyle, maximized, titleHover);
             DrawStatus(c, w, h, status, statusHover);
             if (aq > 0) DrawHud(c, w, h, hoverBtn, paused, aq / 16f);

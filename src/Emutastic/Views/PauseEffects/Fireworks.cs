@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
-using Avalonia;
-using Avalonia.Media;
+using SkiaSharp;
 
 namespace Emutastic.Views.PauseEffects
 {
@@ -15,33 +14,38 @@ namespace Emutastic.Views.PauseEffects
         private struct Particle { public double X, Y, Vx, Vy; public int PaletteIndex; public double Life, InitialLife; }
 
         private readonly List<Particle> _particles = new();
-        private Size _canvas;
+        private SKSize _canvas;
         private readonly Random _rng = new();
         private double _spawnTimer;
         private double _spawnInterval = 1.2;
         private double _intensity = 1.0;
 
-        private static readonly Color[] _palette =
+        private static readonly SKColor[] _palette =
         {
-            Color.FromRgb(0xFF, 0x4B, 0x4B), Color.FromRgb(0x4B, 0xC8, 0xFF), Color.FromRgb(0xFF, 0xD8, 0x4B),
-            Color.FromRgb(0x68, 0xFF, 0x9C), Color.FromRgb(0xC2, 0x6B, 0xFF), Color.FromRgb(0xFF, 0xA0, 0x4B),
+            new SKColor(0xFF, 0x4B, 0x4B), new SKColor(0x4B, 0xC8, 0xFF), new SKColor(0xFF, 0xD8, 0x4B),
+            new SKColor(0x68, 0xFF, 0x9C), new SKColor(0xC2, 0x6B, 0xFF), new SKColor(0xFF, 0xA0, 0x4B),
         };
         private const int AlphaBuckets = 16;
-        private static readonly IBrush[,] _brushes = BuildBrushTable();
+        private static readonly SKPaint[,] _brushes = BuildBrushTable();
 
-        private static IBrush[,] BuildBrushTable()
+        private static SKPaint[,] BuildBrushTable()
         {
-            var arr = new IBrush[_palette.Length, AlphaBuckets];
+            var arr = new SKPaint[_palette.Length, AlphaBuckets];
             for (int i = 0; i < _palette.Length; i++)
                 for (int a = 0; a < AlphaBuckets; a++)
                 {
                     byte alpha = (byte)((a + 1) * 0xFF / AlphaBuckets);
-                    arr[i, a] = new SolidColorBrush(Color.FromArgb(alpha, _palette[i].R, _palette[i].G, _palette[i].B));
+                    arr[i, a] = new SKPaint
+                    {
+                        Color = new SKColor(_palette[i].Red, _palette[i].Green, _palette[i].Blue, alpha),
+                        Style = SKPaintStyle.Fill,
+                        IsAntialias = true,
+                    };
                 }
             return arr;
         }
 
-        public void Init(Size canvasSize, double intensity)
+        public void Init(SKSize canvasSize, double intensity)
         {
             _canvas = canvasSize;
             _particles.Clear();
@@ -71,7 +75,7 @@ namespace Emutastic.Views.PauseEffects
             }
         }
 
-        public void Tick(double dt, DrawingContext dc)
+        public void Tick(double dt, SKCanvas canvas)
         {
             _spawnTimer -= dt;
             if (_spawnTimer <= 0)
@@ -94,7 +98,7 @@ namespace Emutastic.Views.PauseEffects
 
                 double alpha = Math.Max(0, p.Life / p.InitialLife);
                 int bucket = Math.Clamp((int)(alpha * AlphaBuckets), 0, AlphaBuckets - 1);
-                dc.DrawEllipse(_brushes[p.PaletteIndex, bucket], null, new Point(p.X, p.Y), 1.6, 1.6);
+                canvas.DrawOval((float)p.X, (float)p.Y, 1.6f, 1.6f, _brushes[p.PaletteIndex, bucket]);
             }
         }
 

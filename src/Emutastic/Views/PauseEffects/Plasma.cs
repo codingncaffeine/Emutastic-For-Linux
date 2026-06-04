@@ -1,6 +1,5 @@
 using System;
 using System.Runtime.InteropServices;
-using Avalonia.Media.Imaging;
 
 namespace Emutastic.Views.PauseEffects
 {
@@ -24,8 +23,11 @@ namespace Emutastic.Views.PauseEffects
             _t = 0;
         }
 
-        public void Tick(double dt, WriteableBitmap target)
+        public void Tick(double dt, IntPtr bgraBuffer, int width, int height)
         {
+            // Host buffer must match the resolution we were initialized at.
+            if (width != _w || height != _h) return;
+
             _t += dt * 0.6 * _intensity;
 
             for (int y = 0; y < _h; y++)
@@ -49,23 +51,8 @@ namespace Emutastic.Views.PauseEffects
                 }
             }
 
-            Blit(target, _buffer, _w, _h);
-        }
-
-        // Copy a tightly-packed Bgra8888 buffer into the bitmap, honoring its row stride.
-        internal static void Blit(WriteableBitmap target, byte[] buffer, int w, int h)
-        {
-            using var fb = target.Lock();
-            int srcStride = w * 4;
-            if (fb.RowBytes == srcStride)
-            {
-                Marshal.Copy(buffer, 0, fb.Address, buffer.Length);
-            }
-            else
-            {
-                for (int y = 0; y < h; y++)
-                    Marshal.Copy(buffer, y * srcStride, fb.Address + y * fb.RowBytes, srcStride);
-            }
+            // Buffer is tightly packed BGRA8888, top-down, stride == width*4 — copy straight in.
+            Marshal.Copy(_buffer, 0, bgraBuffer, _buffer.Length);
         }
 
         private static void HsvToBgra(double h, double s, double v, out byte b, out byte g, out byte r)
