@@ -1755,7 +1755,9 @@ public partial class PreferencesWindow : Window
     private bool _isKeyboardMode = true;
     private int _waitingRowIndex = -1;
     private bool _suppressControlsAutoSave;
-    private string _selectedDevice = "Keyboard";
+    // null until the user picks (or the first populate runs) — so a connected controller,
+    // not Keyboard, wins the default when the Controls tab first opens.
+    private string? _selectedDevice;
     private readonly List<CtrlRow> _ctrlRows = new();
     private readonly Dictionary<string, Services.InputMapping> _ctrlMappings = new(StringComparer.OrdinalIgnoreCase);
 
@@ -1837,7 +1839,9 @@ public partial class PreferencesWindow : Window
         if (_ctrl != null) devices.AddRange(_ctrl.GetDeviceNames());
         _suppressControlsAutoSave = true;
         devCombo.ItemsSource = devices;
-        devCombo.SelectedItem = devices.Contains(_selectedDevice) ? _selectedDevice
+        // Keep the user's in-session pick if it still exists; otherwise default to the
+        // first connected controller (devices[1] — Keyboard is always devices[0]).
+        devCombo.SelectedItem = _selectedDevice != null && devices.Contains(_selectedDevice) ? _selectedDevice
             : devices.Count > 1 ? devices[1] : "Keyboard";
         _suppressControlsAutoSave = false;
         _selectedDevice = devCombo.SelectedItem as string ?? "Keyboard";

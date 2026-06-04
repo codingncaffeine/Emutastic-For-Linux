@@ -716,17 +716,20 @@ namespace Emutastic.Configuration
                     new("Down",   "Down",   140, 150, ButtonType.DPad,   70, 70, GDPad),
                     new("Left",   "Left",   100, 110, ButtonType.DPad,   70, 70, GDPad),
                     new("Right",  "Right",  180, 110, ButtonType.DPad,   70, 70, GDPad),
-                    new("C",      "A",      420, 130, ButtonType.Button, 35, 35, GFace),
-                    new("B",      "B",      380, 170, ButtonType.Button, 35, 35, GFace),
                     new("A",      "Y",      340, 130, ButtonType.Button, 35, 35, GFace),
-                    new("X",      "X",      380,  90, ButtonType.Button, 35, 35, GFace),
+                    new("B",      "B",      380, 170, ButtonType.Button, 35, 35, GFace),
+                    new("C",      "A",      420, 130, ButtonType.Button, 35, 35, GFace),
                     new("L",      "L",       60,  30, ButtonType.Button, 70, 25, GShoulder),
                     new("R",      "R",      430,  30, ButtonType.Button, 70, 25, GShoulder),
+                    // X (Stop) sits with P (Play/Pause) in the pad's centre cluster — it's a
+                    // system button like Select, not a fourth face button (upstream drew it in
+                    // the face cluster, which read as a phantom action button).
+                    new("X",      "X",      230, 190, ButtonType.Button, 45, 20, GSystem),
                     new("P",      "Start",  285, 190, ButtonType.Button, 45, 20, GSystem),
-                    new("Left Analog Up",    "LeftAnalogUp",    140,  50, ButtonType.AnalogDirection, 30, 30, GLAnalog),
-                    new("Left Analog Down",  "LeftAnalogDown",  140,  90, ButtonType.AnalogDirection, 30, 30, GLAnalog),
-                    new("Left Analog Left",  "LeftAnalogLeft",  120,  70, ButtonType.AnalogDirection, 30, 30, GLAnalog),
-                    new("Left Analog Right", "LeftAnalogRight", 160,  70, ButtonType.AnalogDirection, 30, 30, GLAnalog),
+                    // No analog entries: the 3DO control pad is digital-only, and
+                    // LibretroInput's 3DO table deliberately maps analog names to
+                    // uint.MaxValue — upstream lists them anyway, which surfaced four
+                    // mappable-but-dead controls in the panel.
                 }
             },
         };
