@@ -128,6 +128,8 @@ namespace Emutastic.Emulator
         private long _frameSeq;
         private int _frameCountSample;            // frames produced since the last SampleStats (real fps)
         private long _coreRunTicks, _coreRunCalls; // accumulated retro_run time + call count for avg ms
+        private double _coreRunMsEma;              // smoothed per-frame retro_run cost (decoupled loop diag)
+        private double _paceWaitMsEma, _cushionWaitMsEma; // where the rest of the frame goes (diag)
 
         public string CoreName => _core?.CoreName ?? "?";
         public SdlInput Input => _input;
@@ -736,8 +738,11 @@ namespace Emutastic.Emulator
 
                 long runT0 = frameTimer.ElapsedTicks;
                 try { _core!.Run(); } catch (Exception ex) { Trace.WriteLine($"[Emu] retro_run threw: {ex}"); break; }
-                System.Threading.Interlocked.Add(ref _coreRunTicks, frameTimer.ElapsedTicks - runT0);
+                long runTicks = frameTimer.ElapsedTicks - runT0;
+                System.Threading.Interlocked.Add(ref _coreRunTicks, runTicks);
                 System.Threading.Interlocked.Increment(ref _coreRunCalls);
+                double coreRunMs = runTicks * 1000.0 / Stopwatch.Frequency;
+                _coreRunMsEma = _coreRunMsEma <= 0 ? coreRunMs : _coreRunMsEma + 0.05 * (coreRunMs - _coreRunMsEma);
 
                 // PACE TO THE TARGET RATE (Phase 0.2): targetFrameMs comes from _fps, which is the console
                 // handler's HardwareTargetFps or the core's reported fps. Pace the emu to that fixed content
@@ -745,12 +750,15 @@ namespace Emutastic.Emulator
                 // than free-running on audio drain, which drifted to ~61fps and beat against the ~60Hz
                 // display. Production-timing jitter here is harmless: the present thread is vsync-paced
                 // SEPARATELY and shows the latest frame, so a loose emu tick can't judder the display.
+                double tPaceStart = frameTimer.Elapsed.TotalMilliseconds;
                 int guard = 0;
                 while (_running && frameTimer.Elapsed.TotalMilliseconds < targetFrameMs && guard++ < 8000)
                 {
                     double remaining = targetFrameMs - frameTimer.Elapsed.TotalMilliseconds;
                     if (remaining > 1.5) Thread.Sleep(1); else Thread.SpinWait(40);
                 }
+                double tCushionStart = frameTimer.Elapsed.TotalMilliseconds;
+                int cushionIters = 0;
                 // Audio cushion cap (secondary): if the core ran ahead and the buffer overfilled well past
                 // the cushion, drain before the next frame so audio can't run away. DRC handles the ±0.5%
                 // trim. Use the SMOOTHED occupancy (not raw QueuedMsReal) so a single device gulp can't fire
@@ -759,7 +767,13 @@ namespace Emutastic.Emulator
                 {
                     guard = 0;
                     while (_running && _audio.QueuedMsSmoothed > cushionMs + 40 && guard++ < 4000) Thread.Sleep(1);
+                    cushionIters = guard;
                 }
+                double tEnd = frameTimer.Elapsed.TotalMilliseconds;
+                double paceWaitMs = tCushionStart - tPaceStart;   // time spent in the rate-pace loop
+                double cushionWaitMs = tEnd - tCushionStart;      // time spent in the audio cushion-drain loop
+                _paceWaitMsEma    = _paceWaitMsEma    <= 0 ? paceWaitMs    : _paceWaitMsEma    + 0.05 * (paceWaitMs    - _paceWaitMsEma);
+                _cushionWaitMsEma = _cushionWaitMsEma <= 0 ? cushionWaitMs : _cushionWaitMsEma + 0.05 * (cushionWaitMs - _cushionWaitMsEma);
                 double frameMs = frameTimer.Elapsed.TotalMilliseconds; frameTimer.Restart();
                 _frameMsEma = _frameMsEma <= 0 ? frameMs : _frameMsEma + 0.05 * (frameMs - _frameMsEma);
 
@@ -779,7 +793,7 @@ namespace Emutastic.Emulator
                         var (issueMs, mapMs, mapcallMs, copyMs) = Platform.HwGlContext.ReadbackTimes();
                         hwRb = $" hwReadback={_hwReadbackMs:F2}ms(issue={issueMs:F2} map={mapMs:F2}=sync{mapcallMs:F2}+copy{copyMs:F2})";
                     }
-                    Trace.WriteLine($"[Emu] DECOUPLED emu={_frameMsEma:F2}ms(~{fps:F1}fps) DRC q={qms:F0}ms ratio={ratio:F5} underruns={underruns}{hwRb}");
+                    Trace.WriteLine($"[Emu] DECOUPLED emu={_frameMsEma:F2}ms(~{fps:F1}fps) target={targetFrameMs:F1}ms coreRun={_coreRunMsEma:F2}ms paceWait={_paceWaitMsEma:F1}ms cushionWait={_cushionWaitMsEma:F1}ms DRC q={qms:F0}ms ratio={ratio:F5} underruns={underruns}{hwRb}");
                 }
                 if (!_paused && (++_srmAutoSaveTick % 600) == 0) SaveSram();
             }
