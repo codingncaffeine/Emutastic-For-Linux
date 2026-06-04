@@ -1336,7 +1336,7 @@ namespace Emutastic.Emulator
         // ── In-game disc switching (L3 + Start chord) ───────────────────────────────────────────────
         // Wraps SdlInput.GetInputState so we can inject a JOYPAD_L press on port 0 for FDS "disk side
         // change" (FDS cores don't expose the disk-control interface — they read an L press instead).
-        private short InputState_cb(uint port, uint device, uint index, uint id)
+        private int InputState_cb(uint port, uint device, uint index, uint id)
         {
             if (port == 0 && device == SdlInput.RETRO_DEVICE_JOYPAD
                 && id == LibretroInput.JOYPAD_L && _fdsSideChangeFrames > 0)

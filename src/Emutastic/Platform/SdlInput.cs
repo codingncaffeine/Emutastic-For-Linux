@@ -84,6 +84,15 @@ namespace Emutastic.Platform
         private readonly int[]?[] _ctrlMap = new int[4][];
         private readonly Dictionary<string, int> _kbdRetro = new(StringComparer.OrdinalIgnoreCase);
 
+        // Per-port analog-direction map (LibretroInput.ANALOG_* ids 16..23 → raw control id),
+        // from the Controls panel. Slot = id - 16: [LU, LD, LL, LR, RU, RD, RL, RR]; -1 unbound.
+        // When present, RETRO_DEVICE_ANALOG values are COMPOSED from the two per-direction
+        // bindings (plus-half minus minus-half), the way RetroArch / DuckStation / Dolphin
+        // treat sticks — direction comes from the binding captured in the Controls panel,
+        // never from trusting the raw axis sign at play time. A null entry falls back to
+        // reading the physical SDL axes directly (pre-binding default behavior).
+        private readonly int[]?[] _analogMap = new int[4][];
+
         // SDL_GamepadAxis indices + thresholds (mirror ControllerManager's raw id space).
         const int AXIS_LEFTX = 0, AXIS_LEFTY = 1, AXIS_RIGHTX = 2, AXIS_RIGHTY = 3, AXIS_LTRIG = 4, AXIS_RTRIG = 5;
         const short STICK_THRESHOLD = 18000, TRIG_THRESHOLD = 12000;
@@ -110,6 +119,7 @@ namespace Emutastic.Platform
         public void LoadConfiguration(string console, IConfigurationService? cfg)
         {
             Array.Clear(_ctrlMap, 0, _ctrlMap.Length);
+            Array.Clear(_analogMap, 0, _analogMap.Length);
             _kbdRetro.Clear();
             if (cfg == null || string.IsNullOrEmpty(console)) return;
 
@@ -127,8 +137,21 @@ namespace Emutastic.Platform
                     foreach (var m in config.ControllerMappings)
                     {
                         uint libretroId = LibretroInput.GetButtonId(m.ButtonName, console);
-                        if (libretroId < JOYPAD_COUNT && int.TryParse(m.InputIdentifier, out var rawId))
+                        if (!int.TryParse(m.InputIdentifier, out var rawId)) continue;
+                        if (libretroId < JOYPAD_COUNT)
                             map[libretroId] = rawId;
+                        else if (libretroId >= LibretroInput.ANALOG_LEFT_UP
+                              && libretroId <= LibretroInput.ANALOG_RIGHT_RIGHT)
+                        {
+                            var amap = _analogMap[port];
+                            if (amap == null)
+                            {
+                                amap = new int[8];
+                                for (int i = 0; i < 8; i++) amap[i] = -1;
+                                _analogMap[port] = amap;
+                            }
+                            amap[libretroId - LibretroInput.ANALOG_LEFT_UP] = rawId;
+                        }
                     }
                     _ctrlMap[port] = map;
                 }
@@ -284,13 +307,53 @@ namespace Emutastic.Platform
                     13u => SDL_GetGamepadAxis(h, AXIS_RTRIG),   // JOYPAD_R2
                     _   => (short)0
                 };
+            // Compose from the Controls panel's per-direction bindings when present
+            // (slot order: LU, LD, LL, LR, RU, RD, RL, RR; id 0 = X → left/right pair,
+            // id 1 = Y → up/down pair; libretro wants +X = right, +Y = down).
+            var amap = port < 4 ? _analogMap[(int)port] : null;
+            if (amap != null && index <= 1)
+            {
+                int slot   = (int)index * 4;
+                int minus  = amap[slot + (id == 0 ? 2 : 0)];   // left / up
+                int plus   = amap[slot + (id == 0 ? 3 : 1)];   // right / down
+                if (minus >= 0 || plus >= 0)
+                {
+                    int v = HalfMagnitude(h, plus) - HalfMagnitude(h, minus);
+                    return (short)Math.Clamp(v, short.MinValue, short.MaxValue);
+                }
+            }
+
             int axis = (index, id) switch
             {
                 (0u, 0u) => AXIS_LEFTX,  (0u, 1u) => AXIS_LEFTY,
                 (1u, 0u) => AXIS_RIGHTX, (1u, 1u) => AXIS_RIGHTY,
                 _        => -1
             };
-            return axis < 0 ? (short)0 : SDL_GetGamepadAxis(h, axis);
+            if (axis < 0) return 0;
+            return SDL_GetGamepadAxis(h, axis);
+        }
+
+        // Deflection magnitude (0..32767) of one bound direction: the matching half of a
+        // stick axis (raw ids 110..117), trigger pressure (100/101), or a digital button
+        // (0..20) at full scale. Unbound (-1) reads as 0.
+        private static short HalfMagnitude(IntPtr h, int rawId)
+        {
+            switch (rawId)
+            {
+                case < 0:  return 0;
+                case < 21: return SDL_GetGamepadButton(h, rawId) ? (short)32767 : (short)0;
+                case 100:  { short v = SDL_GetGamepadAxis(h, AXIS_LTRIG); return v > 0 ? v : (short)0; }
+                case 101:  { short v = SDL_GetGamepadAxis(h, AXIS_RTRIG); return v > 0 ? v : (short)0; }
+                case >= 110 and <= 117:
+                {
+                    int axis  = (rawId - 110) / 2;        // LEFTX, LEFTY, RIGHTX, RIGHTY
+                    bool neg  = ((rawId - 110) & 1) == 0; // even ids = negative half
+                    int v     = SDL_GetGamepadAxis(h, axis);
+                    if (neg) return v < 0 ? (short)Math.Min(-v, 32767) : (short)0;
+                    return v > 0 ? (short)v : (short)0;
+                }
+                default:   return 0;
+            }
         }
 
         public void Dispose()

@@ -21,8 +21,15 @@ namespace Emutastic.Services
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate void retro_input_poll_t();
 
+    // libretro declares this returning int16_t, but we deliberately return int (32-bit):
+    // clang-compiled cores (Beetle PSX HW) assume the callee sign-extended the int16_t
+    // return into the full EAX and test the 32-bit register directly. The .NET reverse
+    // P/Invoke thunk only guarantees the low 16 bits, so a `short` return zero-extends
+    // negatives — analog up (-N) arrived as +65536-N = hard DOWN. Returning a managed
+    // int sign-extends into EAX, which satisfies both compiler conventions (gcc-style
+    // callers movswl the low 16 bits, which are unchanged).
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    public delegate short retro_input_state_t(uint port, uint device, uint index, uint id);
+    public delegate int retro_input_state_t(uint port, uint device, uint index, uint id);
 
     // Log interface delegate.
     // x64 Windows ABI: level→RCX, fmt→RDX, then varargs in R8, R9, and stack.
