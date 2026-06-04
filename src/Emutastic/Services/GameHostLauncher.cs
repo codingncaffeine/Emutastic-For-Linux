@@ -22,9 +22,23 @@ namespace Emutastic.Services
     {
         private static int _active;   // live child game processes
 
+        /// <summary>Set once by MainWindow: ingests save states the host wrote (DiscoverSaveStates)
+        /// after any game session with a known Game ends — regardless of which window launched it.</summary>
+        public static Action<Models.Game>? OnGameSessionEnded;
+
         /// <summary>Launch a game. <paramref name="onExit"/> is invoked on the UI thread when the game
         /// ends (result is null on a crash / missing results file).</summary>
         public static void Launch(string corePath, string romPath, string console, Action<GameHostResult?>? onExit = null)
+            => Launch(corePath, romPath, console, game: null, loadStatePath: null, onExit);
+
+        /// <summary>
+        /// Launch with save-state support: <paramref name="game"/> supplies the state directory /
+        /// title / hash context the host needs (it has no DB), and <paramref name="loadStatePath"/>
+        /// boots straight into a state (upstream's pendingLoadStatePath). Null game = no state support
+        /// for this session (e.g. direct CLI launches).
+        /// </summary>
+        public static void Launch(string corePath, string romPath, string console,
+            Models.Game? game, string? loadStatePath, Action<GameHostResult?>? onExit = null)
         {
             // GL present is now the DEFAULT path: the separate --game-host process runs the decoupled
             // pacing (audio-clock emu thread + vsync present thread), which on this hardware gives correct
@@ -43,10 +57,11 @@ namespace Emutastic.Services
                 win.Show();
                 return;
             }
-            SpawnHost(corePath, romPath, console, onExit);
+            SpawnHost(corePath, romPath, console, game, loadStatePath, onExit);
         }
 
-        private static void SpawnHost(string corePath, string romPath, string console, Action<GameHostResult?>? onExit)
+        private static void SpawnHost(string corePath, string romPath, string console,
+            Models.Game? game, string? loadStatePath, Action<GameHostResult?>? onExit)
         {
             string results = Path.Combine(Path.GetTempPath(), $"emutastic-host-{Guid.NewGuid():N}.json");
             var psi = new ProcessStartInfo
@@ -69,6 +84,23 @@ namespace Emutastic.Services
             if (!string.IsNullOrEmpty(console)) { psi.ArgumentList.Add("--console"); psi.ArgumentList.Add(console); }
             psi.ArgumentList.Add("--results"); psi.ArgumentList.Add(results);
             psi.ArgumentList.Add("--parent-stdin");   // we hold the child's stdin; closing it = graceful quit
+
+            // Save-state context: the host writes .state/.png/.json into this dir (same convention
+            // ImportService.DiscoverSaveStates scans); we ingest DB rows when the host exits.
+            if (game != null)
+            {
+                string saveDir = AppPaths.GetFolder("Save States",
+                    FileNameHelper.SanitizeFileName(game.Console ?? console),
+                    FileNameHelper.SanitizeFileName(game.Title ?? Path.GetFileNameWithoutExtension(romPath)));
+                psi.ArgumentList.Add("--save-dir");   psi.ArgumentList.Add(saveDir);
+                psi.ArgumentList.Add("--game-title"); psi.ArgumentList.Add(game.Title ?? "");
+                psi.ArgumentList.Add("--rom-hash");   psi.ArgumentList.Add(game.RomHash ?? "");
+                if (!string.IsNullOrEmpty(loadStatePath))
+                {
+                    psi.ArgumentList.Add("--load-state");
+                    psi.ArgumentList.Add(loadStatePath);
+                }
+            }
 
             // Native Wayland for the game window (RetroArch's backend — the smooth path). The parent Avalonia
             // app runs on X11/Xwayland, so without forcing this the child also picks x11/Xwayland → no EGL
@@ -119,6 +151,14 @@ namespace Emutastic.Services
                 // Phase 1.5 hook: persist play-stats here (parent owns the DB + Game.Id). Today the app
                 // records none (UpdatePlayCount/UpdatePlayTime have no callers), so we only log for now.
                 Trace.WriteLine($"[Launcher] game host exited: code={result?.ExitCode}, playSeconds={result?.PlaySeconds}");
+
+                // Ingest any save states the host wrote this session (host has no DB). Off-UI thread;
+                // DiscoverSaveStates fires SaveStatesChanged so open views refresh themselves.
+                if (game != null && OnGameSessionEnded != null)
+                {
+                    try { OnGameSessionEnded(game); }
+                    catch (Exception ex) { Trace.WriteLine($"[Launcher] save-state ingest failed: {ex.Message}"); }
+                }
 
                 if (onExit != null) Dispatcher.UIThread.Post(() => onExit(result));
             });

@@ -493,6 +493,9 @@ public partial class MainWindow : Window
         _db = new DatabaseService();
         _coreManager = new CoreManager(App.Configuration);
         _importer = new ImportService(_db, _coreManager, App.Configuration);
+        // Any game session ending (whichever window launched it) ingests states the host wrote;
+        // DiscoverSaveStates matches .json sidecars by RomHash and fires SaveStatesChanged.
+        Services.GameHostLauncher.OnGameSessionEnded = g => _importer?.DiscoverSaveStates(g);
         _vm = new MainViewModel(_db);
         _artworkFetch = new ArtworkFetchService(_db, new ArtworkService(), _vm);
         WireImportEvents();
@@ -741,7 +744,9 @@ public partial class MainWindow : Window
             _openDetailWindow.Close();
     }
 
-    private void LaunchGame(Game game)
+    private void LaunchGame(Game game) => LaunchGame(game, loadStatePath: null);
+
+    private void LaunchGame(Game game, string? loadStatePath)
     {
         string? corePath = _coreManager?.GetCorePathForGame(game);
         if (string.IsNullOrEmpty(corePath))
@@ -759,13 +764,15 @@ public partial class MainWindow : Window
         {
             // Routes to the legacy in-process EmulatorWindow, or (EMUTASTIC_PRESENT=gl) a separate
             // --game-host process. See docs/gl-present-phase1-host-process-design.md.
-            Services.GameHostLauncher.Launch(corePath, romPath, game.Console ?? "");
+            // Save-state ingestion on exit is centralized in GameHostLauncher.OnGameSessionEnded.
+            Services.GameHostLauncher.Launch(corePath, romPath, game.Console ?? "", game, loadStatePath);
         }
         catch (Exception ex)
         {
             _vm?.SetStatus($"Failed to launch: {ex.Message}", autoClear: true);
         }
     }
+
 
     // ── Import ─────────────────────────────────────────────────────────────
     // Hint the importer with the current console only when a specific console is selected (IsMixedView
@@ -1082,8 +1089,20 @@ public partial class MainWindow : Window
 
         items.Add(MenuAction("▶  Play Game", () => LaunchGame(game)));
 
-        // Play Save State — deferred until save-state loading lands (U9).
-        items.Add(new MenuItem { Header = "⏱  Play Save State", IsEnabled = false });
+        // ── Play Save State submenu (first 10, newest first — matches upstream) ──
+        var saveStateItem = new MenuItem { Header = "⏱  Play Save State" };
+        var saveStates = _db?.GetSaveStatesByGame(game.Id) ?? new List<SaveState>();
+        if (saveStates.Count == 0)
+            saveStateItem.Items.Add(new MenuItem { Header = "No save states", IsEnabled = false });
+        else
+            foreach (var s in saveStates.Take(10))
+            {
+                var state = s;
+                var si = new MenuItem { Header = state.Name };
+                si.Click += (_, _) => RunGuarded(() => { LaunchWithSaveState(state); return System.Threading.Tasks.Task.CompletedTask; });
+                saveStateItem.Items.Add(si);
+            }
+        items.Add(saveStateItem);
 
         bool fav = game.IsFavorite;
         items.Add(MenuAction(fav ? "♥  Remove from Favorites" : "♡  Add to Favorites", () =>
@@ -1484,8 +1503,9 @@ public partial class MainWindow : Window
         return menu;
     }
 
-    // Loading directly into a save state needs the in-game save/load runtime (M9);
-    // for now this launches the game so the action is live, with a note.
+    /// <summary>Boot a game directly into a save state (Save States tab / context-menu entry).
+    /// Passes --load-state to the game host, which queues it exactly like upstream's
+    /// pendingLoadStatePath (60-frame warmup + retry on the emu thread).</summary>
     private void LaunchWithSaveState(SaveState s)
     {
         var game = _db?.GetGameById(s.GameId);
@@ -1494,8 +1514,7 @@ public partial class MainWindow : Window
             _vm?.SetStatus("Game not found in library.", autoClear: true);
             return;
         }
-        LaunchGame(game);
-        _vm?.SetStatus("Loading directly into a save state arrives with the in-game save/load UI.", autoClear: true);
+        LaunchGame(game, AppPaths.FromStoragePath(s.StatePath));
     }
 
     // ── Screenshots ───────────────────────────────────────────────────────────

@@ -1150,7 +1150,9 @@ namespace Emutastic.Services
         /// Scans Save States/{Console}/ for subfolders containing .json metadata
         /// whose RomHash matches this game, and re-registers them in the database.
         /// </summary>
-        private void DiscoverSaveStates(Game game)
+        // Public: also called when a game-host exits, to ingest states the host just wrote
+        // (the host has no DB — it only writes the .state/.png/.json trio into Save States/).
+        public void DiscoverSaveStates(Game game)
         {
             if (string.IsNullOrEmpty(game.RomHash) || string.IsNullOrEmpty(game.Console)) return;
             try
@@ -1215,8 +1217,17 @@ namespace Emutastic.Services
                                 ScreenshotPath = File.Exists(pngPath) ? pngPath : "",
                                 CreatedAt = created,
                             };
-                            _db.InsertSaveState(ss);
-                            count++;
+                            // Upstream's overwrite-by-name semantics: a state with this name already in
+                            // the DB gets its paths refreshed, not a duplicate row. Essential now that
+                            // this runs after EVERY game session (post-exit ingest), not just at import.
+                            var existing = _db.GetSaveStateByGameAndName(game.Id, name);
+                            if (existing != null)
+                                _db.UpdateSaveStateName(existing.Id, name, statePath, ss.ScreenshotPath);
+                            else
+                            {
+                                _db.InsertSaveState(ss);
+                                count++;
+                            }
                         }
                         catch { /* non-fatal — skip malformed json */ }
                     }

@@ -368,7 +368,9 @@ public partial class GameDetailWindow : Window
         {
             // Legacy in-process EmulatorWindow, or (EMUTASTIC_PRESENT=gl) a separate --game-host process.
             // Refresh the pills when the game ends so the still-open card reflects latest play stats.
+            // _game gives the host its save-state context (--save-dir/--game-title/--rom-hash).
             Services.GameHostLauncher.Launch(corePath, romPath, _game.Console ?? "",
+                _game, loadStatePath: null,
                 _ => { if (IsVisible) RefreshStats(); });
         }
         catch (Exception ex)

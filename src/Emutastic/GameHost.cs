@@ -39,6 +39,7 @@ namespace Emutastic
             string? core = args.Length > 1 ? args[1] : null;
             string? rom  = args.Length > 2 ? args[2] : null;
             string console = "", resultsPath = "";
+            string saveDir = "", gameTitle = "", romHash = "", loadStatePath = "";
             bool fullscreen = false, parentStdin = false;
             int prewarmSeconds = 0;   // >0 = shader pre-warm pass: run the attract/boot loop, then auto-quit
             for (int i = 3; i < args.Length; i++)
@@ -49,6 +50,11 @@ namespace Emutastic
                     case "--fullscreen":   fullscreen = true; break;
                     case "--results":      if (i + 1 < args.Length) resultsPath = args[++i]; break;
                     case "--parent-stdin": parentStdin = true; break;   // supervisor holds our stdin; EOF = graceful quit
+                    // Save-state context (this process has no DB; the main app ingests rows on exit).
+                    case "--save-dir":     if (i + 1 < args.Length) saveDir = args[++i]; break;
+                    case "--game-title":   if (i + 1 < args.Length) gameTitle = args[++i]; break;
+                    case "--rom-hash":     if (i + 1 < args.Length) romHash = args[++i]; break;
+                    case "--load-state":   if (i + 1 < args.Length) loadStatePath = args[++i]; break;
                     case "--prewarm":
                         // Optional explicit budget; bare "--prewarm" uses the longer default.
                         if (i + 1 < args.Length && int.TryParse(args[i + 1], out int pw)) { i++; prewarmSeconds = Math.Clamp(pw, 1, 600); }
@@ -95,7 +101,15 @@ namespace Emutastic
             if (onWayland && Environment.GetEnvironmentVariable("EMUTASTIC_GL_TOPLEVEL") == null)
                 Environment.SetEnvironmentVariable("EMUTASTIC_GL_TOPLEVEL", "1");
 
-            var session = new EmulatorSession(core, rom, console);
+            var session = new EmulatorSession(core, rom, console)
+            {
+                SaveStateDir  = saveDir,
+                SaveGameTitle = gameTitle,
+                SaveRomHash   = romHash,
+            };
+            // Launch-into-state (mirrors upstream's pendingLoadStatePath ctor param): queued now,
+            // executed on the emu thread after warmup once the loop starts.
+            if (!string.IsNullOrEmpty(loadStatePath)) session.QueuePendingLoad(loadStatePath);
 
             // Quit signals → ask the loop to stop cleanly (flushes SRAM), distinct from a hard kill:
             //  • SIGTERM/SIGINT (incl. the PR_SET_PDEATHSIG signal when the parent dies),

@@ -274,7 +274,7 @@ namespace Emutastic.Emulator
             { 29, 0 }, { 27, 8 }, { 4, 1 }, { 22, 9 },     // Z=B, X=A, A=Y, S=X
             { 40, 3 }, { 229, 2 }, { 20, 10 }, { 26, 11 }, // Enter=START, RShift=SELECT, Q=L, W=R
         };
-        const int SC_ESCAPE = 41, SC_F11 = 68, SC_P = 19;
+        const int SC_ESCAPE = 41, SC_F11 = 68, SC_P = 19, SC_F5 = 62, SC_F7 = 64;
 
         // Emu-thread handler for the GL window's keyboard. Game buttons feed SdlInput's player-1 fallback;
         // a few non-game scancodes drive the session (quit / fullscreen / pause).
@@ -287,6 +287,8 @@ namespace Emutastic.Emulator
                 case SC_ESCAPE: _running = false; break;
                 case SC_F11:    _glFullscreen = !_glFullscreen; _gl?.SetFullscreen(_glFullscreen); break;
                 case SC_P:      _paused = !_paused; break;
+                case SC_F5:     RequestSaveState("Quick Save"); break;   // upstream's F5 quick save
+                case SC_F7:     RequestQuickLoad(); break;               // upstream's F7 quick load
             }
         }
 
@@ -527,6 +529,8 @@ namespace Emutastic.Emulator
 
                 if (!_noInputPoll) _input.Poll();
                 ServiceDiskSwap();   // disc-swap chord (L3+Start) + FDS/deferred-insert ticks
+                if (_saveStatePending) ExecuteSaveOnEmuThread();   // between retro_run calls, like upstream
+                if (_loadStatePending) ExecuteLoadOnEmuThread();
 
                 // Dynamic rate control: fine-tune the resampler ratio each frame to hold the audio queue
                 // centered (RetroArch's model). This is the PRIMARY audio-sync mechanism now; the coarse
@@ -738,6 +742,8 @@ namespace Emutastic.Emulator
                 if (_paused) { Thread.Sleep(16); frameTimer.Restart(); continue; }
                 if (!_noInputPoll) _input.Poll();
                 ServiceDiskSwap();   // disc-swap chord (L3+Start) + FDS/deferred-insert ticks
+                if (_saveStatePending) ExecuteSaveOnEmuThread();   // between retro_run calls, like upstream
+                if (_loadStatePending) ExecuteLoadOnEmuThread();
                 _audio?.ApplyDrc();
 
                 long runT0 = frameTimer.ElapsedTicks;
@@ -953,9 +959,29 @@ namespace Emutastic.Emulator
             _wlTop.SetInsets((int)GlOsd.TitleBarHeight, (int)GlOsd.StatusBarHeight);
             _wlTop.SetAspect(DisplayAspectRatio);   // render at the display aspect (0 → frame pixel ratio)
 
+            // Save-state load picker (upstream's inline LoadPickerPanel): null = closed.
+            List<(string Name, string RelTime, string Path)>? statePicker = null;
+            int pickerHover = -1;
+
             Action<int, bool> onBtn = (button, down) =>
             {
                 if (button != 0 || !down) return;
+                // 0) Open load picker has top priority below the title bar: row click loads, panel
+                //    clicks swallow, anywhere else closes it (matches upstream's toggle behavior).
+                if (statePicker != null && titleHover < 0)
+                {
+                    _wlTop!.GetSize(out int prw, out int prh);
+                    int row = GlOsd.PickerHitTest(prw, prh, statePicker.Count, _wlTop.MouseX, _wlTop.MouseY);
+                    if (row >= 0)
+                    {
+                        var pick = statePicker[row];
+                        statePicker = null;
+                        RequestLoadState(pick.Path, pick.Name);
+                        return;
+                    }
+                    if (row == -2) return;   // inside panel chrome — swallow
+                    statePicker = null;      // clicked elsewhere — close, then fall through to normal handling
+                }
                 // 1) Title-bar controls always win (so close/min/max stay clickable even at a corner).
                 switch (titleHover)
                 {
@@ -972,14 +998,30 @@ namespace Emutastic.Emulator
                 }
                 // 3) Title-bar interior → drag to move.
                 if (titleHover == GlOsd.TbDrag) { _wlTop!.StartMove(); return; }
-                // 4) HUD pill.
+                // 4) Status-bar Save State / Load State buttons (always visible, like upstream's).
+                _wlTop.GetSize(out int sbw, out int sbh);
+                switch (GlOsd.StatusHitTest(sbw, sbh, _wlTop.MouseX, _wlTop.MouseY))
+                {
+                    case GlOsd.StatusBtnSave:
+                        statePicker = null;   // upstream collapses the picker before saving
+                        RequestSaveState(DateTime.Now.ToString("yyyy-MM-dd HH.mm.ss"));
+                        return;
+                    case GlOsd.StatusBtnLoad:
+                        statePicker = statePicker == null ? RecentSaveStates() : null;
+                        return;
+                }
+                // 5) HUD pill.
                 if (!hudVisible || hover < 0) return;
                 switch (hover)
                 {
                     case GlOsd.BtnPower: RequestQuit(); break;
                     case GlOsd.BtnPause: SetPaused(!IsPaused); break;
                     case GlOsd.BtnReset: RequestReset(); break;
-                    // Save / Record / Cog: placeholders — no action wired yet (later phase).
+                    // Pill Save mirrors the status-bar Save State button (timestamped, like upstream).
+                    case GlOsd.BtnSave:
+                        RequestSaveState(DateTime.Now.ToString("yyyy-MM-dd HH.mm.ss"));
+                        break;
+                    // Record / Cog: placeholders — no action wired yet (later phase).
                     default: break;
                 }
                 hudHideAtMs = clock.Elapsed.TotalMilliseconds + HudTimeoutMs;   // any click keeps the HUD up
@@ -1011,7 +1053,7 @@ namespace Emutastic.Emulator
                 }
                 _wlTop.GetSize(out int ww, out int wh);
                 if (ww <= 0) { ww = winW; wh = winH; }
-                hudVisible = IsPaused || nowMs < hudHideAtMs;
+                hudVisible = IsPaused || nowMs < hudHideAtMs;   // picker lives in the status bar, not the pill
                 float tgt = hudVisible ? 1f : 0f;                       // 150ms fade-in / 300ms fade-out
                 if (hudAlpha < tgt) hudAlpha = (float)Math.Min(tgt, hudAlpha + dt / 150.0);
                 else if (hudAlpha > tgt) hudAlpha = (float)Math.Max(tgt, hudAlpha - dt / 300.0);
@@ -1026,7 +1068,12 @@ namespace Emutastic.Emulator
                 }
                 // A transient disc-swap message ("Disk N / M") preempts the fps line while it's active.
                 string shownStatus = ActiveDiskMessage ?? statusText;
-                if (osd.Build(ww, wh, shownStatus, title, winStyle, _wlTop.IsMaximized, titleHover, hudAlpha, hover, IsPaused))
+                pickerHover = statePicker != null && _wlTop.MouseInside
+                    ? GlOsd.PickerHitTest(ww, wh, statePicker.Count, _wlTop.MouseX, _wlTop.MouseY) : -1;
+                int statusHover = _wlTop.MouseInside ? GlOsd.StatusHitTest(ww, wh, _wlTop.MouseX, _wlTop.MouseY) : -1;
+                var pickerItems = statePicker?.Select(p => (p.Name, p.RelTime)).ToList();
+                if (osd.Build(ww, wh, shownStatus, title, winStyle, _wlTop.IsMaximized, titleHover, hudAlpha, hover, IsPaused,
+                              pickerItems, pickerHover, statusHover))
                     _wlTop.SetOverlay(osd.Pixels, osd.Width, osd.Height);
 
                 // Present the latest frame every iteration; the shim's FIFO swap is the pace (re-presenting a
@@ -1171,6 +1218,26 @@ namespace Emutastic.Emulator
                     return HandleSetHwRender(data);
                 case ENV_GET_VARIABLE:
                     return HandleGetVariable(data);
+                case 44: // RETRO_ENVIRONMENT_SET_SERIALIZATION_QUIRKS (uint64* in/out)
+                {
+                    // Track SINGLE_SESSION (bit 4 — Kronos/Saturn: states invalid across launches; the
+                    // load path refuses with a message instead of shipping a frozen game). OR-in
+                    // FRONT_VARIABLE_SIZE (bit 3) so cores know we tolerate variable-size states —
+                    // exactly upstream's handling.
+                    if (data == IntPtr.Zero) return false;
+                    ulong quirks = (ulong)Marshal.ReadInt64(data);
+                    _coreSingleSessionStates = (quirks & (1UL << 4)) != 0;
+                    Marshal.WriteInt64(data, (long)(quirks | (1UL << 3)));
+                    if (_coreSingleSessionStates)
+                        Trace.WriteLine("[State] core declares SINGLE_SESSION serialization quirk");
+                    return true;
+                }
+                case 72:  // RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT (72|EXPERIMENTAL, masked) — int*
+                case 213: // upstream also answered 213 (FBNeo-private id with the same meaning)
+                    // RETRO_SAVESTATE_CONTEXT_NORMAL (0) = standard save states; FBNeo gates
+                    // save-state/hiscore support on this.
+                    if (data != IntPtr.Zero) Marshal.WriteInt32(data, 0);
+                    return true;
                 case ENV_GET_OVERSCAN:
                 default:
                     return false; // unsupported / use core defaults — cores cope (incl. SET_HW_RENDER → SW)
@@ -1420,15 +1487,323 @@ namespace Emutastic.Emulator
             catch (Exception ex) { Trace.WriteLine($"[Emu] disc swap failed: {ex.Message}"); }
         }
 
-        // Surface a transient disc-swap message in the OSD status line for ~3s (read by the present loop).
-        private void ShowDiskMessage(string msg)
+        // Surface a transient message in the OSD status line (read by the present loop). Shared by
+        // disc-swap feedback and save-state feedback — same single-line OSD slot upstream uses.
+        private void ShowDiskMessage(string msg, int seconds = 3)
         {
             _diskMsg = msg;
-            _diskMsgUntil = Stopwatch.GetTimestamp() + 3 * Stopwatch.Frequency;
+            _diskMsgUntil = Stopwatch.GetTimestamp() + seconds * Stopwatch.Frequency;
         }
 
         /// <summary>The active disc-swap OSD message, or null if none is currently showing.</summary>
         public string? ActiveDiskMessage => (_diskMsg.Length > 0 && Stopwatch.GetTimestamp() < _diskMsgUntil) ? _diskMsg : null;
+
+        // ── Save states (ported from upstream EmulatorWindow.xaml.cs) ───────────────────────────────
+        // Save/load run ON THE EMU THREAD between retro_run calls via volatile pending flags; the
+        // host window (hotkeys F5/F7, HUD Save/Load buttons) and GameHost startup (--load-state)
+        // only set the flags. The host process has no DB — saves write .state/.png/.json into
+        // SaveStateDir and the main app ingests rows on host exit (ImportService.DiscoverSaveStates).
+
+        // Context handed in by GameHost (no DB in this process).
+        public string SaveStateDir { get; set; } = "";
+        public string SaveGameTitle { get; set; } = "";
+        public string SaveRomHash { get; set; } = "";
+
+        private volatile bool _saveStatePending;
+        private volatile bool _loadStatePending;
+        private string _pendingSaveName = "";
+        private byte[]? _pendingLoadData;
+        private string _pendingLoadName = "";
+        private string _pendingLoadSavedCoreName = "";
+        private int _loadStateAttempts;
+        private const int MaxLoadStateAttempts = 600;   // ~10s @60fps — PSX serialize_size settles during BIOS boot
+        private int _loadStateWarmup;
+        private const int LoadStateWarmupFrames = 60;   // HW renderers (Beetle PSX HW) need the pipeline warm first
+        private bool _coreSingleSessionStates;          // env 44 RETRO_SERIALIZATION_QUIRK_SINGLE_SESSION
+
+        private bool IsSaveStateUnreliable()
+        {
+            string p = (_core?.CorePath ?? "").ToLowerInvariant();
+            return p.Contains("mame2003_plus");
+        }
+
+        /// <summary>Request a named save (any thread). Emu thread picks it up before the next retro_run.</summary>
+        public void RequestSaveState(string name)
+        {
+            if (IsSaveStateUnreliable())
+            {
+                ShowDiskMessage("Save states are disabled for MAME 2003-Plus (unreliable per-game)", 5);
+                return;
+            }
+            if (string.IsNullOrEmpty(SaveStateDir))
+            {
+                ShowDiskMessage("Save states unavailable (no save directory for this session)", 5);
+                return;
+            }
+            _pendingSaveName = name;
+            _saveStatePending = true;
+        }
+
+        /// <summary>Request a load from a .state file path (any thread).</summary>
+        public void RequestLoadState(string statePath, string name)
+        {
+            if (IsSaveStateUnreliable())
+            {
+                ShowDiskMessage("Save states are disabled for MAME 2003-Plus (unreliable per-game)", 5);
+                return;
+            }
+            try
+            {
+                _pendingLoadData = File.ReadAllBytes(statePath);
+                _pendingLoadName = name;
+                _pendingLoadSavedCoreName = ReadSavedCoreName(statePath);
+                _loadStatePending = true;
+            }
+            catch (Exception ex)
+            {
+                ShowDiskMessage($"Could not read state file: {ex.Message}", 5);
+            }
+        }
+
+        /// <summary>F7 / quick load: resolve "Quick Save" by file convention (host has no DB).</summary>
+        public void RequestQuickLoad()
+        {
+            string p = Path.Combine(SaveStateDir, "Quick Save.state");
+            if (string.IsNullOrEmpty(SaveStateDir) || !File.Exists(p))
+            {
+                ShowDiskMessage("No Quick Save found", 3);
+                return;
+            }
+            RequestLoadState(p, "Quick Save");
+        }
+
+        /// <summary>--load-state startup path (mirrors upstream's pendingLoadStatePath ctor param).</summary>
+        public void QueuePendingLoad(string statePath)
+        {
+            if (!File.Exists(statePath))
+            {
+                ShowDiskMessage($"Save state not found: {Path.GetFileName(statePath)}", 5);
+                Trace.WriteLine($"[State] pending load missing on disk: {statePath}");
+                return;
+            }
+            RequestLoadState(statePath, Path.GetFileNameWithoutExtension(statePath));
+            Trace.WriteLine($"[State] queued pending state load: {statePath} (saved core='{_pendingLoadSavedCoreName}')");
+        }
+
+        // The .json sidecar carries the creating core's name for the cross-core load guard.
+        private static string ReadSavedCoreName(string statePath)
+        {
+            try
+            {
+                string json = Path.ChangeExtension(statePath, ".json");
+                if (!File.Exists(json)) return "";
+                using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(json));
+                if (doc.RootElement.TryGetProperty("CoreName", out var cn))
+                    return cn.GetString() ?? "";
+            }
+            catch { }
+            return "";
+        }
+
+        /// <summary>The 5 most recent states in SaveStateDir (name, relative age, path) for the HUD load picker.</summary>
+        public List<(string Name, string RelTime, string Path)> RecentSaveStates()
+        {
+            var result = new List<(string, string, string)>();
+            try
+            {
+                if (string.IsNullOrEmpty(SaveStateDir) || !Directory.Exists(SaveStateDir)) return result;
+                var entries = new List<(string name, DateTime at, string path)>();
+                foreach (string json in Directory.EnumerateFiles(SaveStateDir, "*.json"))
+                {
+                    string state = Path.ChangeExtension(json, ".state");
+                    if (!File.Exists(state)) continue;
+                    string name = Path.GetFileNameWithoutExtension(json);
+                    DateTime at = File.GetLastWriteTime(state);
+                    try
+                    {
+                        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(json));
+                        if (doc.RootElement.TryGetProperty("Name", out var n)) name = n.GetString() ?? name;
+                        if (doc.RootElement.TryGetProperty("CreatedAt", out var c)
+                            && DateTime.TryParse(c.GetString(), null, System.Globalization.DateTimeStyles.RoundtripKind, out var dt))
+                            at = dt;
+                    }
+                    catch { }
+                    entries.Add((name, at, state));
+                }
+                foreach (var e in entries.OrderByDescending(e => e.at).Take(5))
+                    result.Add((e.name, RelativeTime(e.at), e.path));
+            }
+            catch (Exception ex) { Trace.WriteLine($"[State] picker scan failed: {ex.Message}"); }
+            return result;
+        }
+
+        // Same buckets as Models/SaveState.RelativeTime — keep the HUD picker consistent with the tab.
+        private static string RelativeTime(DateTime at)
+        {
+            var span = DateTime.Now - at;
+            if (span.TotalMinutes < 1) return "just now";
+            if (span.TotalHours < 1) return $"{(int)span.TotalMinutes}m ago";
+            if (span.TotalDays < 1) return $"{(int)span.TotalHours}h ago";
+            if (span.TotalDays < 7) return $"{(int)span.TotalDays}d ago";
+            return at.ToString("MMM d, yyyy");
+        }
+
+        /// <summary>Called on the emu thread between retro_run calls.</summary>
+        private void ExecuteSaveOnEmuThread()
+        {
+            _saveStatePending = false;
+            string name = _pendingSaveName;
+
+            byte[]? data = _core?.SaveState();
+            if (data == null)
+            {
+                ShowDiskMessage("Save state not supported by this core", 5);
+                return;
+            }
+
+            // Snapshot the frame NOW (emu thread owns _convBuf swaps) before handing off. _frame is
+            // BGRA top-down — exactly what PngEncoder wants; no rotation plumbing exists in this port
+            // yet (upstream rotates by _coreRotation; revisit if a rotated-core screenshot looks wrong).
+            byte[]? shot = null; int sw = 0, sh = 0;
+            lock (_frameLock)
+            {
+                if (_frame != null && _frameW > 0 && _frameH > 0)
+                {
+                    sw = _frameW; sh = _frameH;
+                    shot = new byte[sw * sh * 4];
+                    Array.Copy(_frame, shot, shot.Length);
+                }
+            }
+            string coreName = CoreName;
+            Task.Run(() => FinalizeSave(name, data, shot, sw, sh, coreName));
+        }
+
+        // Heavy file work off the emu thread. Writes the upstream trio: .state / .png / .json
+        // (upstream's 4th .cheevos sidecar is RetroAchievements-only — not ported yet).
+        private void FinalizeSave(string name, byte[] data, byte[]? shot, int sw, int sh, string coreName)
+        {
+            try
+            {
+                Directory.CreateDirectory(SaveStateDir);
+                string safeName = FileNameHelper.SanitizeFileName(name.Length > 0 ? name : "state");
+                string statePath = Path.Combine(SaveStateDir, safeName + ".state");
+                string pngPath   = Path.Combine(SaveStateDir, safeName + ".png");
+                string jsonPath  = Path.Combine(SaveStateDir, safeName + ".json");
+
+                File.WriteAllBytes(statePath, data);
+
+                try
+                {
+                    if (shot != null && sw > 0 && sh > 0) Services.PngEncoder.WriteBgra(pngPath, shot, sw, sh);
+                    else { Trace.WriteLine($"[State] screenshot skipped — no frame yet for {safeName}"); pngPath = ""; }
+                }
+                catch (Exception ex) { Trace.WriteLine($"[State] screenshot failed: {ex.Message}"); pngPath = ""; }
+
+                var meta = new
+                {
+                    Name        = name,
+                    GameTitle   = SaveGameTitle,
+                    ConsoleName = _handler.ConsoleName,
+                    CoreName    = coreName,
+                    RomHash     = SaveRomHash,
+                    CreatedAt   = DateTime.Now.ToString("o"),
+                };
+                File.WriteAllText(jsonPath, System.Text.Json.JsonSerializer.Serialize(meta,
+                    new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+
+                ShowDiskMessage($"Saved: {name}", 3);
+                Trace.WriteLine($"[State] saved '{name}' core={coreName} bytes={data.Length} png={(pngPath.Length > 0 ? "yes" : "no")}");
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[State] FinalizeSave error: {ex.Message}");
+                ShowDiskMessage("Save state failed", 5);
+            }
+        }
+
+        /// <summary>Called on the emu thread between retro_run calls.</summary>
+        private void ExecuteLoadOnEmuThread()
+        {
+            byte[]? data = _pendingLoadData;
+            string name = _pendingLoadName;
+
+            if (data == null)
+            {
+                _loadStatePending = false; _loadStateAttempts = 0; _loadStateWarmup = 0;
+                _pendingLoadSavedCoreName = "";
+                return;
+            }
+
+            // Cores declaring RETRO_SERIALIZATION_QUIRK_SINGLE_SESSION (Kronos/Saturn) document that
+            // retro_unserialize is invalid across launches; the call returns true but the game freezes.
+            // Better a clear message + normal boot than a frozen game.
+            if (_coreSingleSessionStates)
+            {
+                Trace.WriteLine($"[State] load skipped — core declares SINGLE_SESSION quirk: {name}");
+                ShowDiskMessage("This core doesn't support resuming save states across launches.", 6);
+                _loadStatePending = false; _loadStateAttempts = 0;
+                _pendingLoadData = null; _pendingLoadSavedCoreName = "";
+                return;
+            }
+
+            // Cross-core guard: state byte formats are NOT portable between cores for the same system.
+            // retro_unserialize accepts the bytes but the game wedges. Empty saved-core = legacy state
+            // (pre-sidecar) — let those through.
+            string activeCore = CoreName;
+            if (!string.IsNullOrEmpty(_pendingLoadSavedCoreName) && !string.IsNullOrEmpty(activeCore)
+                && !string.Equals(_pendingLoadSavedCoreName, activeCore, StringComparison.OrdinalIgnoreCase))
+            {
+                Trace.WriteLine($"[State] load refused — state from '{_pendingLoadSavedCoreName}', active core '{activeCore}': {name}");
+                ShowDiskMessage($"Save state was made with {_pendingLoadSavedCoreName}; current core is {activeCore}.", 8);
+                _loadStatePending = false; _loadStateAttempts = 0; _loadStateWarmup = 0;
+                _pendingLoadData = null; _pendingLoadSavedCoreName = "";
+                return;
+            }
+
+            // Warmup: HW renderers (Beetle PSX HW especially) defer VRAM uploads through context_reset's
+            // queue drain — unserializing into a cold pipeline leaves the CPU waiting on a GPU IRQ that
+            // never fires (frozen on the saved frame).
+            if (_loadStateWarmup < LoadStateWarmupFrames) { _loadStateWarmup++; return; }
+
+            bool ok = _core?.LoadState(data) ?? false;
+
+            // Retry across frames until the core can accept this snapshot (PSX cores during BIOS boot:
+            // serialize_size doesn't stabilize for dozens of frames). Bail after ~10 seconds.
+            if (!ok && _loadStateAttempts < MaxLoadStateAttempts) { _loadStateAttempts++; return; }
+
+            int attempts = _loadStateAttempts;
+            _loadStatePending = false; _loadStateAttempts = 0; _loadStateWarmup = 0;
+            _pendingLoadData = null; _pendingLoadSavedCoreName = "";
+
+            // Re-prime controller port-device assignments: Beetle PSX HW's FrontIO rebuilds its device
+            // pointers during restore and the assignment can dangle (input dead, emulation alive).
+            if (ok && _core != null)
+            {
+                try { _handler.ConfigureControllerPorts(_core); Trace.WriteLine("[State] re-primed controller ports post-unserialize"); }
+                catch (Exception ex) { Trace.WriteLine($"[State] port re-prime failed: {ex.Message}"); }
+            }
+
+            // Re-seat the disc for disc-streaming cores: Beetle PSX HW's CDC loses its disc handle on
+            // restore (upstream issue #297). Same recipe as a manual swap: eject, set index, deferred
+            // re-insert (~100 frames) so the CD engine spins down properly.
+            if (ok && _setEjectState != null && _setImageIndex != null && _getImageIndex != null)
+            {
+                try
+                {
+                    uint cur = _getImageIndex();
+                    _setEjectState(true);
+                    _setImageIndex(cur);
+                    _diskInsertPendingFrames = 100;
+                    Trace.WriteLine($"[State] re-seated disc index {cur} post-unserialize (insert deferred 100 frames)");
+                }
+                catch (Exception ex) { Trace.WriteLine($"[State] disc re-seat failed: {ex.Message}"); }
+            }
+
+            // Upstream also re-applies cheats here; the cheat engine isn't ported to this session yet.
+
+            ShowDiskMessage(ok ? $"Loaded: {name}" : $"Failed to load: {name}", 3);
+            Trace.WriteLine($"[State] load {(ok ? "succeeded" : "gave up")} after {(ok ? attempts : MaxLoadStateAttempts)} attempts: {name}");
+        }
 
         // Restore the battery save into the core's SRAM region, if a .srm exists and the core has SRAM.
         private void LoadSram()

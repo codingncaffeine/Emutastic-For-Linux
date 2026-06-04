@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using SkiaSharp;
 
 namespace Emutastic.Platform
@@ -50,9 +52,54 @@ namespace Emutastic.Platform
             _ => CursorDefault,
         };
         public const int BtnPower = 0, BtnPause = 1, BtnReset = 2, BtnSave = 3, BtnRecord = 4, BtnCog = 5;
+        // Status-bar buttons (upstream's SaveStateBtn / LoadStateBtn — right-aligned in the status bar,
+        // NOT in the HUD pill). Distinct id range so click dispatch can't confuse them with pill slots.
+        public const int StatusBtnSave = 100, StatusBtnLoad = 101;
 
         // Layout slots, left→right. -1 = the non-clickable separator.
         private static readonly int[] Slots = { BtnPower, BtnPause, BtnReset, BtnSave, BtnRecord, -1, BtnCog };
+
+        // Status-bar button metrics (mirrors SecondaryButtonStyle: Padding 10,4 / FontSize 11 / 6px gap).
+        private const float SBtnH = StatusBarH - 8, SBtnGap = 6, SBtnRightPad = 12, SBtnTextSize = 12f, SBtnIconPad = 22f;
+        private static void StatusButtonRects(int w, int h, out SKRect save, out SKRect load)
+        {
+            using var font = new SKFont { Size = SBtnTextSize };
+            float saveW = SBtnIconPad + font.MeasureText("Save State") + 12;
+            float loadW = SBtnIconPad + font.MeasureText("Load State") + 12;
+            float top = h - StatusBarH + 4, bottom = top + SBtnH;
+            load = new SKRect(w - SBtnRightPad - loadW, top, w - SBtnRightPad, bottom);
+            save = new SKRect(load.Left - SBtnGap - saveW, top, load.Left - SBtnGap, bottom);
+        }
+
+        /// <summary>Status-bar button under (mx,my): StatusBtnSave / StatusBtnLoad / -1.</summary>
+        public static int StatusHitTest(int w, int h, int mx, int my)
+        {
+            StatusButtonRects(w, h, out var save, out var load);
+            if (save.Contains(mx, my)) return StatusBtnSave;
+            if (load.Contains(mx, my)) return StatusBtnLoad;
+            return -1;
+        }
+
+        // ── Save-state load picker (upstream's inline LoadPickerPanel: 5 most recent states) ──
+        // Rows are (Name, RelativeTime); -2 in PickerHitTest = inside the panel but not on a row.
+        public const int RowH = 26, PanelW = 280, PanelPad = 8;
+        public static int PickerHitTest(int w, int h, int rowCount, int mx, int my)
+        {
+            if (rowCount < 0) return -1;                       // picker closed
+            int rows = Math.Max(rowCount, 1);                  // empty shows one "no states" row
+            float px, py, pw, ph;
+            PickerRect(w, h, rows, out px, out py, out pw, out ph);
+            if (mx < px || mx >= px + pw || my < py || my >= py + ph) return -1;
+            int row = (int)((my - (py + PanelPad)) / RowH);
+            return rowCount > 0 && row >= 0 && row < rowCount ? row : -2;
+        }
+        private static void PickerRect(int w, int h, int rows, out float x, out float y, out float pw, out float ph)
+        {
+            pw = PanelW;
+            ph = rows * RowH + 2 * PanelPad;
+            x = w - SBtnRightPad - pw;                         // right-aligned, like upstream's panel
+            y = h - StatusBarH - 6 - ph;                       // floats just above the status bar buttons
+        }
 
         private SKBitmap? _bmp;
         private SKCanvas? _canvas;
@@ -102,11 +149,14 @@ namespace Emutastic.Platform
         /// shown). Returns true (and refreshes Pixels) only when the content changed since the last call.
         /// </summary>
         public bool Build(int w, int h, string status, string title, string winStyle, bool maximized,
-                          int titleHover, float hudAlpha, int hoverBtn, bool paused)
+                          int titleHover, float hudAlpha, int hoverBtn, bool paused,
+                          IReadOnlyList<(string Name, string RelTime)>? picker = null, int pickerHover = -1,
+                          int statusHover = -1)
         {
             if (w <= 0 || h <= 0) return false;
             int aq = (int)Math.Round(Math.Clamp(hudAlpha, 0f, 1f) * 16);   // quantize alpha → limit fade re-renders
-            string sig = $"{w}x{h}|{status}|{title}|{winStyle}|{(maximized ? 1 : 0)}|{titleHover}|{aq}|{hoverBtn}|{(paused ? 1 : 0)}";
+            string pickSig = picker == null ? "" : $"{string.Join("\x1f", picker.Select(p => p.Name + p.RelTime))}|{pickerHover}";
+            string sig = $"{w}x{h}|{status}|{title}|{winStyle}|{(maximized ? 1 : 0)}|{titleHover}|{aq}|{hoverBtn}|{(paused ? 1 : 0)}|{pickSig}|{statusHover}";
             if (sig == _sig && _bmp != null) return false;
             _sig = sig;
 
@@ -121,8 +171,9 @@ namespace Emutastic.Platform
             var c = _canvas!;
             c.Clear(SKColors.Transparent);
             DrawTitleBar(c, w, title, winStyle, maximized, titleHover);
-            DrawStatus(c, w, h, status);
+            DrawStatus(c, w, h, status, statusHover);
             if (aq > 0) DrawHud(c, w, h, hoverBtn, paused, aq / 16f);
+            if (picker != null) DrawLoadPicker(c, w, h, picker, pickerHover);
             // Subtle rounded border at the window edge (the shim erases the corners to transparent so the
             // window reads as rounded; this traces the edge, matching the main app's 1px BorderSubtle).
             if (!maximized)
@@ -135,18 +186,69 @@ namespace Emutastic.Platform
         // Full-width bottom status bar (mirrors EmulatorWindow.xaml's status Border: BgSecondary fill, a
         // 1px top border, ~11px muted left-aligned text). Borderless own-toplevel has no chrome row, so the
         // bar overlays the very bottom edge of the game.
-        private static void DrawStatus(SKCanvas c, int w, int h, string status)
+        private static void DrawStatus(SKCanvas c, int w, int h, string status, int statusHover)
         {
             float top = h - StatusBarH;
             using (var bar = new SKPaint { Color = new SKColor(0x16, 0x16, 0x19, 0xF0) })
                 c.DrawRect(new SKRect(0, top, w, h), bar);
             using (var border = new SKPaint { Color = new SKColor(0xFF, 0xFF, 0xFF, 0x1F), StrokeWidth = 1f })
                 c.DrawLine(0, top + 0.5f, w, top + 0.5f, border);
+
+            // Right-aligned Save State / Load State buttons — upstream's status-bar pair
+            // (SecondaryButtonStyle: subtle fill, 1px border, icon + 11pt label, hover lift).
+            StatusButtonRects(w, h, out var saveR, out var loadR);
+            DrawStatusBtn(c, saveR, "Save State", statusHover == StatusBtnSave, isLoad: false);
+            DrawStatusBtn(c, loadR, "Load State", statusHover == StatusBtnLoad, isLoad: true);
+
             if (string.IsNullOrEmpty(status)) return;
             using var font = new SKFont { Size = 12.5f, Edging = SKFontEdging.Antialias };
             using var text = new SKPaint { Color = new SKColor(0xA8, 0xA8, 0xB2, 0xFF), IsAntialias = true };
             float baseY = top + StatusBarH / 2f + 4.5f;   // vertically centred in the bar
+            // Clip the status text short of the buttons so a long line can't run beneath them.
+            c.Save();
+            c.ClipRect(new SKRect(0, top, saveR.Left - 10, h));
             c.DrawText(status, 12f, baseY, SKTextAlign.Left, font, text);
+            c.Restore();
+        }
+
+        private static void DrawStatusBtn(SKCanvas c, SKRect r, string label, bool hot, bool isLoad)
+        {
+            using (var bg = new SKPaint { Color = new SKColor(0xFF, 0xFF, 0xFF, (byte)(hot ? 0x2E : 0x14)), IsAntialias = true })
+                c.DrawRoundRect(r, 5f, 5f, bg);
+            using (var bd = new SKPaint { Color = new SKColor(0xFF, 0xFF, 0xFF, 0x30), IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1f })
+                c.DrawRoundRect(new SKRect(r.Left + .5f, r.Top + .5f, r.Right - .5f, r.Bottom - .5f), 5f, 5f, bd);
+            float cy = (r.Top + r.Bottom) / 2f;
+            using var g = new SKPaint { Color = new SKColor(0xE6, 0xE6, 0xEA, 0xFF), IsAntialias = true, StrokeWidth = 1.6f, StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round };
+            float ix = r.Left + 12;
+            if (isLoad) DrawLoadGlyph(c, ix, cy, 6f, g); else DrawSaveGlyph(c, ix, cy, 6f, g);
+            using var font = new SKFont { Size = SBtnTextSize, Edging = SKFontEdging.Antialias };
+            using var tp = new SKPaint { Color = new SKColor(0xE6, 0xE6, 0xEA, 0xFF), IsAntialias = true };
+            c.DrawText(label, r.Left + SBtnIconPad, cy + 4.2f, SKTextAlign.Left, font, tp);
+        }
+
+        // Mini floppy (💾) for the Save State status button.
+        private static void DrawSaveGlyph(SKCanvas c, float cx, float cy, float r, SKPaint p)
+        {
+            p.Style = SKPaintStyle.Stroke;
+            using var body = new SKPath();
+            body.MoveTo(cx - r, cy - r); body.LineTo(cx + r - 2.5f, cy - r); body.LineTo(cx + r, cy - r + 2.5f);
+            body.LineTo(cx + r, cy + r); body.LineTo(cx - r, cy + r); body.Close();
+            c.DrawPath(body, p);
+            c.DrawRect(new SKRect(cx - r + 2, cy + 0.5f, cx + r - 2, cy + r - 1.5f), p);
+        }
+
+        // Mini open-folder (📂) for the Load State status button.
+        private static void DrawLoadGlyph(SKCanvas c, float cx, float cy, float r, SKPaint p)
+        {
+            p.Style = SKPaintStyle.Stroke;
+            using var f = new SKPath();
+            f.MoveTo(cx - r, cy + r - 1); f.LineTo(cx - r, cy - r + 2); f.LineTo(cx - r + 4, cy - r + 2);
+            f.LineTo(cx - r + 6, cy - r + 4.5f); f.LineTo(cx + r - 1, cy - r + 4.5f);
+            c.DrawPath(f, p);
+            using var flap = new SKPath();
+            flap.MoveTo(cx - r, cy + r - 1); flap.LineTo(cx - r + 2.5f, cy - r + 6.5f); flap.LineTo(cx + r + 1, cy - r + 6.5f);
+            flap.LineTo(cx + r - 1.5f, cy + r - 1); flap.Close();
+            c.DrawPath(flap, p);
         }
 
         // ── Title bar (mirrors EmulatorWindow's CustomTitleBar + the WindowButtonStyle themes) ──
@@ -360,7 +462,45 @@ namespace Emutastic.Platform
             c.DrawPath(head, p);
         }
 
-        // Save: a floppy disk (Material "ContentSave") — placeholder.
+        // Load picker: a floating panel above the HUD pill — upstream's inline LoadPickerPanel
+        // (name left, relative age right, hover row highlighted; "No save states yet" when empty).
+        private void DrawLoadPicker(SKCanvas c, int w, int h, IReadOnlyList<(string Name, string RelTime)> items, int hoverRow)
+        {
+            int rows = Math.Max(items.Count, 1);
+            PickerRect(w, h, rows, out float px, out float py, out float pw, out float ph);
+            using (var bg = new SKPaint { Color = new SKColor(0x1C, 0x1C, 0x1E, 0xE6), IsAntialias = true })
+                c.DrawRoundRect(new SKRect(px, py, px + pw, py + ph), 10f, 10f, bg);
+            using (var bd = new SKPaint { Color = new SKColor(0x2A, 0x2A, 0x2E, 0xFF), IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1f })
+                c.DrawRoundRect(new SKRect(px + .5f, py + .5f, px + pw - .5f, py + ph - .5f), 10f, 10f, bd);
+
+            using var nameFont = new SKFont(SKTypeface.Default, 12f);
+            using var timeFont = new SKFont(SKTypeface.Default, 11f);
+            using var namePaint = new SKPaint { Color = SKColors.White, IsAntialias = true };
+            using var mutedPaint = new SKPaint { Color = new SKColor(0x9A, 0x9A, 0x9E, 0xFF), IsAntialias = true };
+
+            if (items.Count == 0)
+            {
+                c.DrawText("No save states yet", px + PanelPad + 4, py + PanelPad + RowH - 9, SKTextAlign.Left, nameFont, mutedPaint);
+                return;
+            }
+            for (int i = 0; i < items.Count; i++)
+            {
+                float ry = py + PanelPad + i * RowH;
+                if (i == hoverRow)
+                    using (var hl = new SKPaint { Color = new SKColor(0xFF, 0xFF, 0xFF, 0x22), IsAntialias = true })
+                        c.DrawRoundRect(new SKRect(px + 4, ry, px + pw - 4, ry + RowH), 6f, 6f, hl);
+
+                string name = items[i].Name, rel = items[i].RelTime;
+                float relW = timeFont.MeasureText(rel);
+                float maxNameW = pw - 2 * PanelPad - relW - 16;
+                while (name.Length > 1 && nameFont.MeasureText(name + "…") > maxNameW) name = name[..^1];
+                if (name != items[i].Name) name += "…";
+                c.DrawText(name, px + PanelPad + 4, ry + RowH - 8, SKTextAlign.Left, nameFont, namePaint);
+                c.DrawText(rel, px + pw - PanelPad - 4 - relW, ry + RowH - 8, SKTextAlign.Left, timeFont, mutedPaint);
+            }
+        }
+
+        // Save: a floppy disk (Material "ContentSave").
         private static void DrawSave(SKCanvas c, float cx, float cy, SKPaint p)
         {
             p.Style = SKPaintStyle.Stroke;
