@@ -28,6 +28,11 @@ namespace Emutastic
         private static extern int prctl(int option, ulong arg2, ulong arg3, ulong arg4, ulong arg5);
         private const int PR_SET_PDEATHSIG = 1, SIGTERM = 15;
 
+        // Longer default pre-warm budget (s). The warm loop exits EARLY once shader-cache growth
+        // stalls, so this is an upper bound, not a fixed wait — covers menu/intro shaders without
+        // making the common already-warm case sit idle.
+        private const int DefaultPrewarmSeconds = 90;
+
         public static int Run(string[] args)
         {
             // args[0] == "--game-host"; [1]=core, [2]=rom; flags: --console <name> --fullscreen --results <path>
@@ -44,7 +49,11 @@ namespace Emutastic
                     case "--fullscreen":   fullscreen = true; break;
                     case "--results":      if (i + 1 < args.Length) resultsPath = args[++i]; break;
                     case "--parent-stdin": parentStdin = true; break;   // supervisor holds our stdin; EOF = graceful quit
-                    case "--prewarm":      if (i + 1 < args.Length && int.TryParse(args[++i], out int pw)) prewarmSeconds = Math.Clamp(pw, 1, 600); break;
+                    case "--prewarm":
+                        // Optional explicit budget; bare "--prewarm" uses the longer default.
+                        if (i + 1 < args.Length && int.TryParse(args[i + 1], out int pw)) { i++; prewarmSeconds = Math.Clamp(pw, 1, 600); }
+                        else prewarmSeconds = DefaultPrewarmSeconds;
+                        break;
                 }
             }
 
@@ -114,11 +123,26 @@ namespace Emutastic
             // RRunInline (main-thread present loop) still owns the window.
             if (prewarmSeconds > 0)
             {
-                Trace.WriteLine($"[Host] === shader pre-warm: {prewarmSeconds}s ===");
+                Trace.WriteLine($"[Host] === shader pre-warm: up to {prewarmSeconds}s (early-exit on cache plateau) ===");
                 var warmQuit = new Thread(() =>
                 {
-                    for (int s = 0; s < prewarmSeconds && !session.QuitRequested; s++) Thread.Sleep(1000);
-                    Trace.WriteLine("[Host] pre-warm budget reached → quitting");
+                    string cacheDir = MesaShaderCacheDir();
+                    long lastSize = DirSize(cacheDir);
+                    int stallSecs = 0;       // consecutive seconds with no cache growth
+                    const int PlateauExit = 8;   // quit once growth has stalled this long (shaders done compiling)
+                    const int MinWarm = 10;      // always warm at least this long before allowing early-exit
+                    for (int s = 0; s < prewarmSeconds && !session.QuitRequested; s++)
+                    {
+                        Thread.Sleep(1000);
+                        long sz = DirSize(cacheDir);
+                        if (sz > lastSize) { stallSecs = 0; lastSize = sz; } else stallSecs++;
+                        if (s >= MinWarm && stallSecs >= PlateauExit)
+                        {
+                            Trace.WriteLine($"[Host] pre-warm: cache plateaued ({sz} bytes) after {s + 1}s → done");
+                            break;
+                        }
+                    }
+                    if (!session.QuitRequested) Trace.WriteLine($"[Host] pre-warm finished → quitting (cache {lastSize} bytes)");
                     session.RequestQuit();
                 }) { IsBackground = true, Name = "ShaderPrewarm" };
                 warmQuit.Start();
@@ -146,6 +170,29 @@ namespace Emutastic
             if (log != null) { try { Trace.Flush(); Trace.Listeners.Remove(log); log.Dispose(); } catch { } }
             WriteResults(resultsPath, 0, playSeconds);
             return 0;
+        }
+
+        // Mesa's on-disk shader cache: $MESA_SHADER_CACHE_DIR, else $XDG_CACHE_HOME/mesa_shader_cache_db,
+        // else ~/.cache/mesa_shader_cache_db. Used only to watch growth during pre-warm (best-effort).
+        private static string MesaShaderCacheDir()
+        {
+            string? d = Environment.GetEnvironmentVariable("MESA_SHADER_CACHE_DIR");
+            if (!string.IsNullOrEmpty(d)) return d;
+            string cacheHome = Environment.GetEnvironmentVariable("XDG_CACHE_HOME")
+                ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cache");
+            return Path.Combine(cacheHome, "mesa_shader_cache_db");
+        }
+
+        private static long DirSize(string dir)
+        {
+            try
+            {
+                long total = 0;
+                foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+                    try { total += new FileInfo(f).Length; } catch { }
+                return total;
+            }
+            catch { return 0; }
         }
 
         // Atomic results handoff to the parent: write <path>.tmp then rename. A crashed child writes
