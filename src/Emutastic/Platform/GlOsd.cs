@@ -123,6 +123,19 @@ namespace Emutastic.Platform
                 if (i == hoverRow && enabled)
                     using (var hl = new SKPaint { Color = new SKColor(0xFF, 0xFF, 0xFF, 0x22), IsAntialias = true })
                         c.DrawRoundRect(new SKRect(x + 4, ry, x + mw - 4, ry + MenuRowH), 6f, 6f, hl);
+
+                // Pill-toggle rows (cheats): value is the \x01ON/\x01OFF sentinel → draw the same
+                // 34×18 pill + sliding 14px knob the Windows overlay uses, label dimmed when off.
+                if (value == "\x01ON" || value == "\x01OFF")
+                {
+                    bool isOn = value == "\x01ON";
+                    var labelPaint = enabled ? (isOn ? on : new SKPaint { Color = new SKColor(0xFF, 0xFF, 0xFF, 0xCC), IsAntialias = true }) : off;
+                    c.DrawText(label, x + 14, ry + MenuRowH - 10, SKTextAlign.Left, font, labelPaint);
+                    if (!ReferenceEquals(labelPaint, on) && !ReferenceEquals(labelPaint, off)) labelPaint.Dispose();
+                    DrawPillToggle(c, x + mw - 14 - 34, ry + (MenuRowH - 18) / 2f, isOn);
+                    continue;
+                }
+
                 c.DrawText(label, x + 14, ry + MenuRowH - 10, SKTextAlign.Left, font, enabled ? on : off);
                 if (!string.IsNullOrEmpty(value))
                 {
@@ -136,6 +149,21 @@ namespace Emutastic.Platform
                 float fw = ffont.MeasureText(footer);
                 c.DrawText(footer, x + mw - 10 - fw, y - 6, SKTextAlign.Left, ffont, val);
             }
+        }
+
+        // Upstream's cheat toggle: 34×18 pill (r=9, 1px #66FFFFFF border), accent fill when on /
+        // #55FFFFFF when off, white 14×14 knob inset 2px sliding right/left. #E03535 is the Dark
+        // theme's AccentBrush — the OSD palette is fixed-native, so it tracks the default theme.
+        private static void DrawPillToggle(SKCanvas c, float x, float y, bool on)
+        {
+            var rect = new SKRect(x, y, x + 34, y + 18);
+            using (var bg = new SKPaint { Color = on ? new SKColor(0xE0, 0x35, 0x35, 0xFF) : new SKColor(0xFF, 0xFF, 0xFF, 0x55), IsAntialias = true })
+                c.DrawRoundRect(rect, 9f, 9f, bg);
+            using (var bd = new SKPaint { Color = new SKColor(0xFF, 0xFF, 0xFF, 0x66), IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1f })
+                c.DrawRoundRect(new SKRect(rect.Left + .5f, rect.Top + .5f, rect.Right - .5f, rect.Bottom - .5f), 9f, 9f, bd);
+            using var knob = new SKPaint { Color = SKColors.White, IsAntialias = true };
+            float kx = on ? rect.Right - 2 - 7 : rect.Left + 2 + 7;   // 14px knob, 2px inset
+            c.DrawCircle(kx, (rect.Top + rect.Bottom) / 2f, 7f, knob);
         }
 
         // ── Save-state load picker (upstream's inline LoadPickerPanel: 5 most recent states) ──

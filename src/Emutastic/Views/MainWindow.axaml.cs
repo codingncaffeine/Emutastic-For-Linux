@@ -510,6 +510,24 @@ public partial class MainWindow : Window
                 App.Configuration.SetThemeConfiguration(theme);
                 App.Configuration.ScheduleSave();
             }
+            // In-game cog → "Add Cheat…": the dialog lives here (the host has no Avalonia).
+            // Save appends to the per-game cheat JSON, then the host reloads it live.
+            else if (verb == "open-cheat-editor" && int.TryParse(arg, out int cheatGameId))
+            {
+                var game = _db?.GetGameById(cheatGameId);
+                if (game == null) return;
+                string corePath = _coreManager?.GetCorePathForGame(game) ?? "";
+                RunGuarded(async () =>
+                {
+                    var dlg = new CheatEditWindow(null, corePath);
+                    bool okDlg = await dlg.ShowDialog<bool>(this);
+                    if (!okDlg || dlg.DeleteRequested) return;
+                    var cheats = Services.CheatService.Load(game);
+                    cheats.Add(dlg.Result);
+                    Services.CheatService.Save(game, cheats);
+                    Services.GameHostLauncher.SendToHost(game.Id, "reload-cheats");
+                });
+            }
         };
         _vm = new MainViewModel(_db);
         _artworkFetch = new ArtworkFetchService(_db, new ArtworkService(), _vm);

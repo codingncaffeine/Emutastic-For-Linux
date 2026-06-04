@@ -440,6 +440,7 @@ namespace Emutastic.Emulator
                 // 3D cores: now that av_info (max geometry) is known, create the GL HW context + FBO and fire
                 // context_reset, on this (emu) thread so the context is current for every retro_run.
                 InitHwRenderContext();
+                ReloadCheats();   // per-game cheats apply from frame one (no-op without --game-id)
                 _sampleRate = _core.AvInfo.timing.sample_rate > 0 ? _core.AvInfo.timing.sample_rate : 44100;
                 // DIAGNOSTIC ONLY (EMUTASTIC_NO_AUDIO=1): skip opening the sound device to test whether the
                 // audio subsystem is what's dragging the present off a clean 60. Never a shipping setting.
@@ -531,6 +532,7 @@ namespace Emutastic.Emulator
                 ServiceDiskSwap();   // disc-swap chord (L3+Start) + FDS/deferred-insert ticks
                 if (_saveStatePending) ExecuteSaveOnEmuThread();   // between retro_run calls, like upstream
                 if (_loadStatePending) ExecuteLoadOnEmuThread();
+                if (_cheatsApplyPending) ExecuteCheatsApplyOnEmuThread();
 
                 // Dynamic rate control: fine-tune the resampler ratio each frame to hold the audio queue
                 // centered (RetroArch's model). This is the PRIMARY audio-sync mechanism now; the coarse
@@ -578,6 +580,8 @@ namespace Emutastic.Emulator
                         }
                     }
                 }
+
+                ApplyFrontendArToRam();   // hold AR-cheat values every frame (post-run, like upstream)
 
                 // Present + pace. When the overlay is up, its BLOCKING vsync present is the SINGLE clock
                 // (RetroArch's model): one retro_run per refresh → phase-locked, killing the 60.0-vs-panel
@@ -744,10 +748,12 @@ namespace Emutastic.Emulator
                 ServiceDiskSwap();   // disc-swap chord (L3+Start) + FDS/deferred-insert ticks
                 if (_saveStatePending) ExecuteSaveOnEmuThread();   // between retro_run calls, like upstream
                 if (_loadStatePending) ExecuteLoadOnEmuThread();
+                if (_cheatsApplyPending) ExecuteCheatsApplyOnEmuThread();
                 _audio?.ApplyDrc();
 
                 long runT0 = frameTimer.ElapsedTicks;
                 try { _core!.Run(); } catch (Exception ex) { Trace.WriteLine($"[Emu] retro_run threw: {ex}"); break; }
+                ApplyFrontendArToRam();   // hold AR-cheat values every frame (post-run, like upstream)
                 long runTicks = frameTimer.ElapsedTicks - runT0;
                 System.Threading.Interlocked.Add(ref _coreRunTicks, runTicks);
                 System.Threading.Interlocked.Increment(ref _coreRunCalls);
@@ -990,7 +996,12 @@ namespace Emutastic.Emulator
                     m.Add(("Pak", true, CoreOptionValue("mupen64plus-pak1"), "mupen64plus-pak1"));
                 m.Add(("Record",          false, null, null));    // RecordingService not ported yet
                 m.Add(("View Recordings", false, null, null));
-                m.Add(("Cheats",          false, null, null));    // cheat engine not wired in-session yet
+                // Cheats: live when the core supports them (or legacy cheats exist for this game) and
+                // we know which game this is (--game-id; absent on bare CLI launches).
+                bool cheatable = CheatGameId >= 0
+                    && (Services.CheatSupport.Lookup(_corePath).Level != Services.CheatSupportLevel.NotSupported
+                        || CheatsSnapshot().Count > 0);
+                m.Add(("Cheats", cheatable, "›", cheatable ? "\x01CHEATS" : null));
                 m.Add(("Notes",           false, null, null));
                 m.Add(("Manual",          false, null, null));
                 if (VisualOptions.Count > 0)
@@ -1006,6 +1017,21 @@ namespace Emutastic.Emulator
                     // Unannounced this session (core didn't expose it) → greyed with n/a.
                     m.Add(cur.Length > 0 ? (label, true, cur, key) : (label, false, "n/a", null));
                 }
+                return m;
+            };
+            // Cheats level (upstream's CheatsMenu): Add/Import actions + one toggle row per cheat.
+            // Row keys "\x02<index>" toggle; the unsupported hint mirrors CheatsUnsupportedHint.
+            Func<List<(string, bool, string?, string?)>> buildCogCheats = () =>
+            {
+                var m = new List<(string, bool, string?, string?)> { ("‹ Back", true, null, "\x01BACK") };
+                m.Add(("Add Cheat…", EmitHostCommand != null, null, "\x01ADDCHEAT"));
+                m.Add(("Import from Database…", Services.CheatDatabaseService.IsInstalled(), null, "\x01IMPORTCHEATS"));
+                if (Services.CheatSupport.Lookup(_corePath).Level == Services.CheatSupportLevel.NotSupported)
+                    m.Add(("This core does not support cheats.", false, null, null));
+                var cheats = CheatsSnapshot();
+                for (int i = 0; i < cheats.Count; i++)
+                    // \x01ON/\x01OFF = GlOsd's pill-toggle sentinel (the Windows-style 34×18 toggle).
+                    m.Add((cheats[i].Title, true, cheats[i].Enabled ? "\x01ON" : "\x01OFF", $"\x02{i}"));
                 return m;
             };
 
@@ -1046,11 +1072,33 @@ namespace Emutastic.Emulator
                         var (_, enabled, _, key) = cogMenu[row];
                         if (!enabled || key == null) return;       // placeholder — swallow
                         if (key == "\x01VISUALS") cogMenu = buildCogVisuals();
+                        else if (key == "\x01CHEATS") cogMenu = buildCogCheats();
                         else if (key == "\x01BACK") cogMenu = buildCogMain();
                         else if (key == "\x01CONTROLS")
                         {
                             EmitHostCommand?.Invoke($"open-controls {HandlerConsoleName}");
                             cogMenu = null;                        // close, like upstream after navigation
+                        }
+                        else if (key == "\x01ADDCHEAT")
+                        {
+                            // The editor dialog lives in the main app; it saves the JSON and sends
+                            // "reload-cheats" back down our stdin. Keep the panel open — the next
+                            // rebuild (toggle/back/reopen) shows the new entry.
+                            EmitHostCommand?.Invoke($"open-cheat-editor {CheatGameId}");
+                            cogMenu = null;
+                        }
+                        else if (key == "\x01IMPORTCHEATS")
+                        {
+                            int added = ImportCheatsFromDatabase();
+                            ShowDiskMessage(added < 0 ? "No cheats found for this game in the database"
+                                : added == 0 ? "All database cheats already imported"
+                                : $"Added {added} cheat{(added == 1 ? "" : "s")} (off by default)", 4);
+                            cogMenu = buildCogCheats();
+                        }
+                        else if (key.Length > 1 && key[0] == '\x02' && int.TryParse(key.AsSpan(1), out int cheatIdx))
+                        {
+                            ToggleCheat(cheatIdx);                 // persists + queues live re-apply
+                            cogMenu = buildCogCheats();
                         }
                         else
                         {
@@ -1632,6 +1680,133 @@ namespace Emutastic.Emulator
         /// <summary>The active disc-swap OSD message, or null if none is currently showing.</summary>
         public string? ActiveDiskMessage => (_diskMsg.Length > 0 && Stopwatch.GetTimestamp() < _diskMsgUntil) ? _diskMsg : null;
 
+        // ── Cheats (ported from upstream EmulatorWindow's cheat engine) ─────────────────────────────
+        // Per-game cheats load at boot and apply ON THE EMU THREAD between retro_run calls (same
+        // pending-flag pattern as save states). CheatService.Sort splits codes: core-format codes
+        // (Game Genie / GameShark / raw) go to retro_cheat_set; Action-Replay "addr:value" codes
+        // are written by US into system RAM every frame (many cores stub retro_cheat_set for AR).
+        // No hardcore-mode guard yet — RetroAchievements isn't ported (upstream blocks all cheats
+        // in hardcore; restore that chokepoint in ApplyAllCheats when RA lands).
+
+        /// <summary>Library row id for this game — names Cheats/{Console}/{id}.json (host has no DB).</summary>
+        public int CheatGameId { get; set; } = -1;
+
+        private List<Models.Cheat> _cheats = new();
+        private volatile bool _cheatsApplyPending;
+        private List<Models.Cheat>? _cheatsApplyPayload;
+        private readonly object _cheatsApplyLock = new();
+        private volatile Services.CheatService.ParsedAr[] _frontendArCheats = Array.Empty<Services.CheatService.ParsedAr>();
+        private IntPtr _systemRamPtr = IntPtr.Zero;
+        private uint _systemRamSize;
+
+        // CheatService/CheatDatabaseService key off Game.Id/Console/RomPath only — a stub carries
+        // the host's identity without needing the DB-backed object.
+        private Models.Game CheatGameStub() => new()
+        {
+            Id = CheatGameId,
+            Console = _handler.ConsoleName,
+            Title = SaveGameTitle,
+            RomPath = _romPath,
+        };
+
+        /// <summary>Load this game's cheats from disk and queue an apply (boot + reload-cheats).</summary>
+        public void ReloadCheats()
+        {
+            if (CheatGameId < 0) return;
+            var loaded = Services.CheatService.Load(CheatGameStub());
+            lock (_cheatsApplyLock)
+            {
+                _cheats = loaded;
+                _cheatsApplyPayload = new List<Models.Cheat>(loaded);
+                _cheatsApplyPending = true;
+            }
+            Trace.WriteLine($"[Cheats] loaded {loaded.Count} ({loaded.Count(c => c.Enabled)} enabled) for game {CheatGameId}");
+        }
+
+        /// <summary>Current list snapshot for the cog panel.</summary>
+        public List<Models.Cheat> CheatsSnapshot() { lock (_cheatsApplyLock) return new List<Models.Cheat>(_cheats); }
+
+        /// <summary>Toggle one cheat (cog panel row), persist, and queue a live re-apply.</summary>
+        public void ToggleCheat(int index)
+        {
+            lock (_cheatsApplyLock)
+            {
+                if (index < 0 || index >= _cheats.Count) return;
+                _cheats[index].Enabled = !_cheats[index].Enabled;
+                Services.CheatService.Save(CheatGameStub(), _cheats);
+                _cheatsApplyPayload = new List<Models.Cheat>(_cheats);
+                _cheatsApplyPending = true;
+            }
+        }
+
+        /// <summary>Cog "Import from Database…": merge the cheat DB's entries (dedupe by code),
+        /// persist, queue apply. Returns how many were added, or -1 when no .cht matched.</summary>
+        public int ImportCheatsFromDatabase()
+        {
+            if (CheatGameId < 0) return -1;
+            var result = Services.CheatDatabaseService.LookupForGame(CheatGameStub());
+            if (result == null || result.Cheats.Count == 0) return -1;
+            int added = 0;
+            lock (_cheatsApplyLock)
+            {
+                var seen = new HashSet<string>(_cheats.Select(c => c.Code.Trim()), StringComparer.OrdinalIgnoreCase);
+                foreach (var c in result.Cheats)
+                    if (seen.Add(c.Code.Trim())) { _cheats.Add(c); added++; }
+                if (added > 0)
+                {
+                    Services.CheatService.Save(CheatGameStub(), _cheats);
+                    _cheatsApplyPayload = new List<Models.Cheat>(_cheats);
+                    _cheatsApplyPending = true;
+                }
+            }
+            return added;
+        }
+
+        /// <summary>Emu thread, between retro_run calls: apply the queued cheat list.</summary>
+        private void ExecuteCheatsApplyOnEmuThread()
+        {
+            List<Models.Cheat>? payload;
+            lock (_cheatsApplyLock) { payload = _cheatsApplyPayload; _cheatsApplyPayload = null; _cheatsApplyPending = false; }
+            if (payload == null) return;
+            ApplyAllCheats(payload);
+        }
+
+        private void ApplyAllCheats(IList<Models.Cheat> cheats)
+        {
+            if (_core == null) return;
+            // (Upstream's hardcore-mode early-return lives here once RA is ported.)
+            var (coreHandled, frontendAr) = Services.CheatService.Sort(cheats, _handler.ConsoleName);
+            _frontendArCheats = frontendAr.ToArray();
+            if (_systemRamPtr == IntPtr.Zero && _frontendArCheats.Length > 0)
+            {
+                (_systemRamPtr, _systemRamSize) = _core.GetMemoryRegion(2); // RETRO_MEMORY_SYSTEM_RAM
+                if (_systemRamPtr == IntPtr.Zero)
+                    Trace.WriteLine("[Cheats] core exposes no system RAM — AR codes will be inert");
+            }
+            Services.CheatService.Apply(_core, coreHandled);
+            Trace.WriteLine($"[Cheats] applied: core={coreHandled.Count(c => c.Enabled)} frontendAR={_frontendArCheats.Length}");
+        }
+
+        // Every frame after retro_run: hold AR-cheat RAM values. Mask keeps the offset inside the
+        // region for non-power-of-2 bases; 2-byte writes are big-endian with wrap (upstream parity).
+        private unsafe void ApplyFrontendArToRam()
+        {
+            var ar = _frontendArCheats;
+            if (ar.Length == 0 || _systemRamPtr == IntPtr.Zero || _systemRamSize == 0) return;
+            byte* ram = (byte*)_systemRamPtr;
+            for (int i = 0; i < ar.Length; i++)
+            {
+                uint offset = ar[i].Address & (_systemRamSize - 1);
+                if (ar[i].ByteCount == 1)
+                    ram[offset] = (byte)ar[i].Value;
+                else
+                {
+                    ram[offset] = (byte)(ar[i].Value >> 8);
+                    ram[(offset + 1) & (_systemRamSize - 1)] = (byte)ar[i].Value;
+                }
+            }
+        }
+
         // ── Cog menu support (ported from upstream's OverlayMenu) ───────────────────────────────────
         /// <summary>Host→main-app command channel (set by GameHost: writes "EMUTASTIC-CMD …" to stdout,
         /// which GameHostLauncher reads on the parent side). Null when running in-process.</summary>
@@ -1963,7 +2138,18 @@ namespace Emutastic.Emulator
                 catch (Exception ex) { Trace.WriteLine($"[State] disc re-seat failed: {ex.Message}"); }
             }
 
-            // Upstream also re-applies cheats here; the cheat engine isn't ported to this session yet.
+            // Some cores wipe their cheat table on state load — re-apply so codes survive
+            // (upstream snapshots the list before iterating to avoid racing UI edits).
+            if (ok)
+            {
+                List<Models.Cheat> snapshot;
+                lock (_cheatsApplyLock) snapshot = new List<Models.Cheat>(_cheats);
+                if (snapshot.Count > 0)
+                {
+                    try { ApplyAllCheats(snapshot); }
+                    catch (Exception ex) { Trace.WriteLine($"[Cheats] re-apply (post state-load) failed: {ex.Message}"); }
+                }
+            }
 
             ShowDiskMessage(ok ? $"Loaded: {name}" : $"Failed to load: {name}", 3);
             Trace.WriteLine($"[State] load {(ok ? "succeeded" : "gave up")} after {(ok ? attempts : MaxLoadStateAttempts)} attempts: {name}");

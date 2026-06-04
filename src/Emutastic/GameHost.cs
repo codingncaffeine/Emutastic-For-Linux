@@ -40,6 +40,7 @@ namespace Emutastic
             string? rom  = args.Length > 2 ? args[2] : null;
             string console = "", resultsPath = "";
             string saveDir = "", gameTitle = "", romHash = "", loadStatePath = "";
+            int gameId = -1;
             bool fullscreen = false, parentStdin = false;
             int prewarmSeconds = 0;   // >0 = shader pre-warm pass: run the attract/boot loop, then auto-quit
             for (int i = 3; i < args.Length; i++)
@@ -55,6 +56,8 @@ namespace Emutastic
                     case "--game-title":   if (i + 1 < args.Length) gameTitle = args[++i]; break;
                     case "--rom-hash":     if (i + 1 < args.Length) romHash = args[++i]; break;
                     case "--load-state":   if (i + 1 < args.Length) loadStatePath = args[++i]; break;
+                    // Library row id — names the per-game cheat file (Cheats/{Console}/{id}.json).
+                    case "--game-id":      if (i + 1 < args.Length && int.TryParse(args[i + 1], out int gid)) { i++; gameId = gid; } break;
                     case "--prewarm":
                         // Optional explicit budget; bare "--prewarm" uses the longer default.
                         if (i + 1 < args.Length && int.TryParse(args[i + 1], out int pw)) { i++; prewarmSeconds = Math.Clamp(pw, 1, 600); }
@@ -106,6 +109,7 @@ namespace Emutastic
                 SaveStateDir  = saveDir,
                 SaveGameTitle = gameTitle,
                 SaveRomHash   = romHash,
+                CheatGameId   = gameId,
             };
             // Host→parent command channel: one prefixed line on stdout per request (the launcher
             // redirects and parses our stdout; everything else written there is ignored).
@@ -129,7 +133,24 @@ namespace Emutastic
             {
                 var stdinWatch = new Thread(() =>
                 {
-                    try { var s = Console.OpenStandardInput(); var b = new byte[1]; while (s.Read(b, 0, 1) > 0) { } }
+                    // Line protocol from the parent (the app→host half of the command channel);
+                    // EOF/null keeps its original meaning: parent closed the pipe → graceful quit.
+                    try
+                    {
+                        using var reader = new StreamReader(Console.OpenStandardInput());
+                        string? line;
+                        while ((line = reader.ReadLine()) != null)
+                        {
+                            switch (line.Trim())
+                            {
+                                case "reload-cheats":
+                                    Trace.WriteLine("[Host] parent requested cheat reload");
+                                    session.ReloadCheats();
+                                    break;
+                                // unknown lines ignored (forward compat)
+                            }
+                        }
+                    }
                     catch { /* no stdin pipe */ }
                     session.RequestQuit();   // parent closed the pipe → graceful quit
                 }) { IsBackground = true, Name = "HostStdinWatch" };
