@@ -13,10 +13,14 @@ public partial class ConsolePickerWindow : Window
 {
     private static readonly Dictionary<string, string> Labels = new()
     {
-        { "SegaCD", "Sega CD" }, { "Saturn", "Sega Saturn" }, { "Dreamcast", "Sega Dreamcast" },
+        { "SegaCD", "Sega CD" }, { "Saturn", "Sega Saturn" },
         { "PS1", "PlayStation" }, { "PSP", "PlayStation Portable" }, { "TGCD", "TurboGrafx-CD" },
-        { "GameCube", "Nintendo GameCube" }, { "3DO", "3DO" },
+        { "3DO", "3DO" },
     };
+
+    // Consoles hidden from the UI (handlers/cores remain in the backend, but these are
+    // not offered as import targets). See FINDINGS-SO-FAR.md.
+    private static readonly HashSet<string> Hidden = new() { "GameCube", "Dreamcast" };
 
     // Parameterless ctor for the XAML designer.
     public ConsolePickerWindow() : this("game", new[] { "PS1", "SegaCD" }) { }
@@ -31,6 +35,7 @@ public partial class ConsolePickerWindow : Window
         var panel = this.FindControl<StackPanel>("ButtonsPanel")!;
         foreach (string tag in candidates)
         {
+            if (Hidden.Contains(tag)) continue;
             var btn = new Button
             {
                 Content = Labels.TryGetValue(tag, out var lbl) ? lbl : tag,

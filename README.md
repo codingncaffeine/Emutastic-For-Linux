@@ -38,7 +38,7 @@ The published `.deb` bundles the .NET 10 runtime (self-contained), so no separat
 ## Supported Systems
 
 <details>
-<summary><strong>35 systems across 11 manufacturers</strong> (click to expand)</summary>
+<summary><strong>33 systems across 11 manufacturers</strong> (click to expand)</summary>
 
 | System | Tag | Core (priority order) | BIOS |
 |---|---|---|---|
@@ -46,7 +46,6 @@ The published `.deb` bundles the .NET 10 runtime (self-contained), so no separat
 | Famicom Disk System | FDS | nestopia | `disksys.rom` |
 | SNES | SNES | snes9x → bsnes | No |
 | Nintendo 64 | N64 | parallel_n64 → mupen64plus_next | No |
-| GameCube | GameCube | dolphin | No |
 | Game Boy | GB | mgba → gambatte → sameboy | No |
 | Game Boy Color | GBC | mgba → gambatte → sameboy | No |
 | Game Boy Advance | GBA | mgba | Optional |
@@ -60,7 +59,6 @@ The published `.deb` bundles the .NET 10 runtime (self-contained), so no separat
 | Master System | SMS | genesis_plus_gx → picodrive | No |
 | Game Gear | GameGear | genesis_plus_gx | No |
 | SG-1000 | SG1000 | genesis_plus_gx | No |
-| Dreamcast | Dreamcast | flycast | No |
 | PlayStation | PS1 | mednafen_psx_hw → mednafen_psx | Region BIOS |
 | PSP | PSP | ppsspp | No |
 | TurboGrafx-16 | TG16 | mednafen_pce → mednafen_pce_fast | No |
