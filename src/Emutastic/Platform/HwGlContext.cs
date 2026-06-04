@@ -20,7 +20,7 @@ namespace Emutastic.Platform
             RuntimeHelpers.RunClassConstructor(typeof(WlToplevelPresenter).TypeHandle);
         }
 
-        [DllImport(LIB)] static extern int wlp_hw_init(int ctxType, int major, int minor, int wantDepth, int wantStencil, int maxw, int maxh);
+        [DllImport(LIB)] static extern int wlp_hw_init(int ctxType, int major, int minor, int wantDepth, int wantStencil, int maxw, int maxh, int useGlx);
         [DllImport(LIB)] static extern void wlp_hw_make_current();
         [DllImport(LIB)] static extern uint wlp_hw_fbo();
         [DllImport(LIB)] static extern IntPtr wlp_hw_proc([MarshalAs(UnmanagedType.LPStr)] string sym);
@@ -30,9 +30,11 @@ namespace Emutastic.Platform
         [DllImport(LIB)] static extern void wlp_hw_readback_times(out double issueMs, out double mapMs);
         [DllImport(LIB)] static extern void wlp_hw_readback_times2(out double mapcallMs, out double copyMs);
 
-        /// <summary>Create the offscreen GL context + FBO (call on the emu thread, after retro_load_game).</summary>
-        public static bool Init(int ctxType, int major, int minor, bool depth, bool stencil, int maxW, int maxH)
-            => wlp_hw_init(ctxType, major, minor, depth ? 1 : 0, stencil ? 1 : 0, maxW, maxH) != 0;
+        /// <summary>Create the offscreen GL context + FBO (call on the emu thread, after retro_load_game).
+        /// useGlx: create the context via GLX/XWayland instead of surfaceless EGL — required by
+        /// GLEW-bootstrapped cores (PPSSPP) whose glewInit() needs a GLX display.</summary>
+        public static bool Init(int ctxType, int major, int minor, bool depth, bool stencil, int maxW, int maxH, bool useGlx = false)
+            => wlp_hw_init(ctxType, major, minor, depth ? 1 : 0, stencil ? 1 : 0, maxW, maxH, useGlx ? 1 : 0) != 0;
 
         public static void MakeCurrent() => wlp_hw_make_current();
         public static uint Fbo() => wlp_hw_fbo();

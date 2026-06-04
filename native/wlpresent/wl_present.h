@@ -50,7 +50,7 @@ void wlp_set_cursor_shape(void* h, int shape);  // wp_cursor_shape_device_v1 sha
 
 // ── GL hardware-render (3D cores) — offscreen, emu-thread context; see wl_hwgl.c ──
 // ctx_type: 1=OPENGL 2=GLES2 3=OPENGL_CORE 4=GLES3 (6=VULKAN not handled here). Returns 1 ok / 0 fail.
-int  wlp_hw_init(int ctx_type, int major, int minor, int want_depth, int want_stencil, int maxw, int maxh);
+int  wlp_hw_init(int ctx_type, int major, int minor, int want_depth, int want_stencil, int maxw, int maxh, int use_glx);
 void wlp_hw_make_current(void);              // make the HW context current on the calling (emu) thread
 unsigned int wlp_hw_fbo(void);               // FBO id the core renders into (for get_current_framebuffer)
 void* wlp_hw_proc(const char* sym);          // resolve a GL symbol (for get_proc_address)

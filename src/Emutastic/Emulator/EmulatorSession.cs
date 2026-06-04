@@ -50,6 +50,10 @@ namespace Emutastic.Emulator
         // keep delegates alive for the lifetime of the core
         private readonly retro_environment_t _envCb;
         private readonly retro_video_refresh_t _videoCb;
+        // Frame-delivery diagnostics: how often the core hands us a real HW frame vs a dupe.
+        // A core that never calls video_cb at all shows 0/0 here while audio keeps flowing
+        // (PPSSPP's retro_run skips video_cb when its render thread has nothing ready).
+        private long _vidValid, _vidDupes;
         private readonly retro_audio_sample_t _audioCb;
         private readonly retro_audio_sample_batch_t _audioBatchCb;
         private readonly retro_input_poll_t _inputPollCb;
@@ -793,7 +797,7 @@ namespace Emutastic.Emulator
                         var (issueMs, mapMs, mapcallMs, copyMs) = Platform.HwGlContext.ReadbackTimes();
                         hwRb = $" hwReadback={_hwReadbackMs:F2}ms(issue={issueMs:F2} map={mapMs:F2}=sync{mapcallMs:F2}+copy{copyMs:F2})";
                     }
-                    Trace.WriteLine($"[Emu] DECOUPLED emu={_frameMsEma:F2}ms(~{fps:F1}fps) target={targetFrameMs:F1}ms coreRun={_coreRunMsEma:F2}ms paceWait={_paceWaitMsEma:F1}ms cushionWait={_cushionWaitMsEma:F1}ms DRC q={qms:F0}ms ratio={ratio:F5} underruns={underruns}{hwRb}");
+                    Trace.WriteLine($"[Emu] DECOUPLED emu={_frameMsEma:F2}ms(~{fps:F1}fps) target={targetFrameMs:F1}ms coreRun={_coreRunMsEma:F2}ms paceWait={_paceWaitMsEma:F1}ms cushionWait={_cushionWaitMsEma:F1}ms DRC q={qms:F0}ms ratio={ratio:F5} underruns={underruns}{hwRb} vid(valid={_vidValid} dupe={_vidDupes})");
                 }
                 if (!_paused && (++_srmAutoSaveTick % 600) == 0) SaveSram();
             }
@@ -1316,7 +1320,18 @@ namespace Emutastic.Emulator
             var geo = _core!.AvInfo.geometry;
             int maxW = (int)Math.Max(geo.max_width, geo.base_width);
             int maxH = (int)Math.Max(geo.max_height, geo.base_height);
-            if (!Platform.HwGlContext.Init(_hwCtxType, _hwMajor, _hwMinor, _hwDepth, _hwStencil, maxW, maxH))
+            // GLEW-based cores (PPSSPP) can't init on our surfaceless EGL contexts at all:
+            // glewInit()'s X11 build requires a GLX display, and it also rejects core
+            // profiles. Give them a legacy GLX compat context (via XWayland) instead —
+            // versionless type-1 so the driver returns its highest compatibility GL.
+            int ctxType = _hwCtxType, ctxMajor = _hwMajor, ctxMinor = _hwMinor;
+            bool useGlx = _handler.ForceCompatibilityGlProfile;
+            if (useGlx && ctxType == 3)
+            {
+                Trace.WriteLine("[Emu] HW-render: downgrading core-profile request to GLX compatibility (handler override)");
+                ctxType = 1; ctxMajor = 0; ctxMinor = 0;
+            }
+            if (!Platform.HwGlContext.Init(ctxType, ctxMajor, ctxMinor, _hwDepth, _hwStencil, maxW, maxH, useGlx))
             {
                 Trace.WriteLine("[Emu] HW-render GL context init FAILED — 3D core will not render");
                 _hwRenderActive = false;
@@ -1536,8 +1551,10 @@ namespace Emutastic.Emulator
                 if (data != RETRO_HW_FRAME_BUFFER_VALID || width == 0 || height == 0)
                 {
                     System.Threading.Interlocked.Increment(ref _frameCountSample);
+                    System.Threading.Interlocked.Increment(ref _vidDupes);
                     return;
                 }
+                System.Threading.Interlocked.Increment(ref _vidValid);
                 if (_hwBufA != null && _hwBufB != null)
                 {
                     // TRUE double-buffer: always read into the buffer the present thread is NOT holding,

@@ -40,6 +40,13 @@ namespace Emutastic.Services.ConsoleHandlers
         public virtual void OnAfterContextReset() { }
 
         public virtual int PreferredHwContext => -1;
+        // When true, a core-profile GL request (SET_HW_RENDER type 3) is downgraded to a
+        // versionless compatibility context. Needed for cores that bootstrap GL through
+        // GLEW (PPSSPP): glewInit() can't enumerate extensions on a core profile, so it
+        // fails outright. Windows never exposes this because WGL's legacy context is
+        // always compatibility profile; Mesa's compat profile carries GL 4.6 so the core
+        // still gets every feature it would have had on core.
+        public virtual bool ForceCompatibilityGlProfile => false;
         public virtual bool AllowHwSharedContext => false;
         public virtual bool UseEmbeddedWindow => false;
 

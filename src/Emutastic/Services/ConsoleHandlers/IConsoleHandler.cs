@@ -72,6 +72,13 @@ namespace Emutastic.Services.ConsoleHandlers
         int PreferredHwContext { get; }
 
         /// <summary>
+        /// Downgrade a core-profile GL request (SET_HW_RENDER type 3) to a versionless
+        /// compatibility context. For GLEW-bootstrapped cores (PPSSPP) whose glewInit()
+        /// fails on core profiles. See ConsoleHandlerBase for details.
+        /// </summary>
+        bool ForceCompatibilityGlProfile { get; }
+
+        /// <summary>
         /// Whether to return true for RETRO_ENVIRONMENT_SET_HW_SHARED_CONTEXT.
         /// Dolphin and parallel-n64 both need this — their EmuThreads create shared GL contexts.
         /// </summary>

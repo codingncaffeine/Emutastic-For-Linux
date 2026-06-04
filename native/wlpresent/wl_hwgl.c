@@ -6,6 +6,7 @@
 #include "wl_present.h"
 #include <EGL/egl.h>
 #include <GL/gl.h>
+#include <GL/glx.h>     // GLX backend for GLEW-bootstrapped cores (PPSSPP) — via XWayland
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -99,12 +100,71 @@ static double now_ms(void) {
     return ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
 }
 
+// ── GLX backend ──────────────────────────────────────────────────────────────
+// PPSSPP bootstraps GL through GLEW, whose X11 build initializes its GLX function
+// table inside glewInit() — on our surfaceless EGL context there is no GLX display
+// and glewInit() fails outright ("[G3D] glewInit() failed."), regardless of GL
+// version/profile. Windows never sees this (WGL legacy contexts are what GLEW
+// expects); RetroArch's "gl" driver is GLX-backed for the same reason. So cores
+// that ask for it (use_glx=1) get a legacy GLX context on a 64x64 pbuffer via
+// XWayland instead — legacy GLX == compatibility profile with every extension
+// visible, exactly the environment GLEW was designed for. The FBO/readback code
+// below is identical for both backends.
+static struct {
+    Display *xdpy; GLXContext ctx; GLXPbuffer pbuf; int active;
+} GX;
+
+static int glx_create(int want_depth, int want_stencil) {
+    GX.xdpy = XOpenDisplay(NULL);
+    if (!GX.xdpy) { fprintf(stderr, "[wlp.hw] GLX: XOpenDisplay failed (no X/XWayland?)\n"); return 0; }
+    int fbattr[] = {
+        GLX_DRAWABLE_TYPE, GLX_PBUFFER_BIT,
+        GLX_RENDER_TYPE, GLX_RGBA_BIT,
+        GLX_RED_SIZE, 8, GLX_GREEN_SIZE, 8, GLX_BLUE_SIZE, 8, GLX_ALPHA_SIZE, 8,
+        GLX_DEPTH_SIZE, want_depth ? 24 : 0, GLX_STENCIL_SIZE, want_stencil ? 8 : 0,
+        None
+    };
+    int n = 0;
+    GLXFBConfig *cfgs = glXChooseFBConfig(GX.xdpy, DefaultScreen(GX.xdpy), fbattr, &n);
+    if (!cfgs || n < 1) { fprintf(stderr, "[wlp.hw] GLX: glXChooseFBConfig failed\n"); goto fail; }
+    GLXFBConfig cfg = cfgs[0];
+    XFree(cfgs);
+    // Legacy create → compatibility profile, all extensions enumerable (what GLEW wants).
+    GX.ctx = glXCreateNewContext(GX.xdpy, cfg, GLX_RGBA_TYPE, NULL, True);
+    if (!GX.ctx) { fprintf(stderr, "[wlp.hw] GLX: glXCreateNewContext failed\n"); goto fail; }
+    int pbattr[] = { GLX_PBUFFER_WIDTH, 64, GLX_PBUFFER_HEIGHT, 64, None };
+    GX.pbuf = glXCreatePbuffer(GX.xdpy, cfg, pbattr);
+    if (!GX.pbuf) { fprintf(stderr, "[wlp.hw] GLX: glXCreatePbuffer failed\n"); goto fail; }
+    if (!glXMakeContextCurrent(GX.xdpy, GX.pbuf, GX.pbuf, GX.ctx)) {
+        fprintf(stderr, "[wlp.hw] GLX: glXMakeContextCurrent failed\n"); goto fail;
+    }
+    GX.active = 1;
+    return 1;
+fail:
+    if (GX.pbuf) { glXDestroyPbuffer(GX.xdpy, GX.pbuf); GX.pbuf = 0; }
+    if (GX.ctx)  { glXDestroyContext(GX.xdpy, GX.ctx);  GX.ctx = NULL; }
+    if (GX.xdpy) { XCloseDisplay(GX.xdpy); GX.xdpy = NULL; }
+    return 0;
+}
+
+// Symbol lookup for whichever backend owns the context.
+static void* hw_gpa(const char *sym) {
+    if (GX.active) return (void*)glXGetProcAddressARB((const GLubyte*)sym);
+    return (void*)eglGetProcAddress(sym);
+}
+
 // ctx_type: 1=OPENGL(compat) 2=GLES2 3=OPENGL_CORE 4=GLES3 (6=VULKAN → not handled here). Returns 1 ok.
-int wlp_hw_init(int ctx_type, int major, int minor, int want_depth, int want_stencil, int maxw, int maxh) {
+int wlp_hw_init(int ctx_type, int major, int minor, int want_depth, int want_stencil, int maxw, int maxh, int use_glx) {
     if (ctx_type == 6) return 0;
     H.gles = (ctx_type == 2 || ctx_type == 4);
     if (maxw < 1) maxw = 640; if (maxh < 1) maxh = 480;
 
+    // GLEW-bootstrapped cores need a GLX context (see glx_create). Falls back to EGL
+    // (with a loud log line) when there's no X server to talk to.
+    if (use_glx && !H.gles && glx_create(want_depth, want_stencil)) {
+        fprintf(stderr, "[wlp.hw] using GLX backend (legacy/compat context via XWayland)\n");
+    } else {
+    if (use_glx) fprintf(stderr, "[wlp.hw] GLX requested but unavailable — falling back to EGL\n");
     get_plat_dpy_t getplat = (get_plat_dpy_t)eglGetProcAddress("eglGetPlatformDisplayEXT");
     if (getplat) H.dpy = getplat(EGL_PLATFORM_SURFACELESS_MESA, (void*)EGL_DEFAULT_DISPLAY, NULL);
     if (!H.dpy || H.dpy == EGL_NO_DISPLAY) H.dpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
@@ -129,14 +189,15 @@ int wlp_hw_init(int ctx_type, int major, int minor, int want_depth, int want_ste
     if (H.ctx == EGL_NO_CONTEXT) H.ctx = eglCreateContext(H.dpy, H.cfg, EGL_NO_CONTEXT, NULL); // let the driver pick
     if (H.ctx == EGL_NO_CONTEXT) { fprintf(stderr, "[wlp.hw] eglCreateContext failed\n"); return 0; }
     if (!eglMakeCurrent(H.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, H.ctx)) { fprintf(stderr, "[wlp.hw] eglMakeCurrent(surfaceless) failed\n"); return 0; }
+    }
 
-    H.GenFramebuffers       = (fb_gen_t)    eglGetProcAddress("glGenFramebuffers");
-    H.BindFramebuffer       = (fb_bind_t)   eglGetProcAddress("glBindFramebuffer");
-    H.FramebufferTexture2D  = (fb_tex2d_t)  eglGetProcAddress("glFramebufferTexture2D");
-    H.GenRenderbuffers      = (rb_gen_t)    eglGetProcAddress("glGenRenderbuffers");
-    H.BindRenderbuffer      = (rb_bind_t)   eglGetProcAddress("glBindRenderbuffer");
-    H.RenderbufferStorage   = (rb_storage_t)eglGetProcAddress("glRenderbufferStorage");
-    H.FramebufferRenderbuffer = (fb_rb_t)   eglGetProcAddress("glFramebufferRenderbuffer");
+    H.GenFramebuffers       = (fb_gen_t)    hw_gpa("glGenFramebuffers");
+    H.BindFramebuffer       = (fb_bind_t)   hw_gpa("glBindFramebuffer");
+    H.FramebufferTexture2D  = (fb_tex2d_t)  hw_gpa("glFramebufferTexture2D");
+    H.GenRenderbuffers      = (rb_gen_t)    hw_gpa("glGenRenderbuffers");
+    H.BindRenderbuffer      = (rb_bind_t)   hw_gpa("glBindRenderbuffer");
+    H.RenderbufferStorage   = (rb_storage_t)hw_gpa("glRenderbufferStorage");
+    H.FramebufferRenderbuffer = (fb_rb_t)   hw_gpa("glFramebufferRenderbuffer");
     if (!H.GenFramebuffers || !H.BindFramebuffer || !H.FramebufferTexture2D) { fprintf(stderr, "[wlp.hw] FBO entry points missing\n"); return 0; }
 
     H.w = maxw; H.h = maxh;
@@ -155,14 +216,14 @@ int wlp_hw_init(int ctx_type, int major, int minor, int want_depth, int want_ste
     glViewport(0, 0, maxw, maxh);
 
     // Async readback PBO ring. If any entry point is missing we fall back to synchronous glReadPixels.
-    H.GenBuffers     = (gen_bufs_t)   eglGetProcAddress("glGenBuffers");
-    H.BindBuffer     = (bind_buf_t)   eglGetProcAddress("glBindBuffer");
-    H.BufferData     = (buf_data_t)   eglGetProcAddress("glBufferData");
-    H.MapBuffer      = (map_buf_t)    eglGetProcAddress("glMapBuffer");
-    H.UnmapBuffer    = (unmap_buf_t)  eglGetProcAddress("glUnmapBuffer");
-    H.FenceSync      = (fence_sync_t) eglGetProcAddress("glFenceSync");
-    H.ClientWaitSync = (client_wait_t)eglGetProcAddress("glClientWaitSync");
-    H.DeleteSync     = (del_sync_t)   eglGetProcAddress("glDeleteSync");
+    H.GenBuffers     = (gen_bufs_t)   hw_gpa("glGenBuffers");
+    H.BindBuffer     = (bind_buf_t)   hw_gpa("glBindBuffer");
+    H.BufferData     = (buf_data_t)   hw_gpa("glBufferData");
+    H.MapBuffer      = (map_buf_t)    hw_gpa("glMapBuffer");
+    H.UnmapBuffer    = (unmap_buf_t)  hw_gpa("glUnmapBuffer");
+    H.FenceSync      = (fence_sync_t) hw_gpa("glFenceSync");
+    H.ClientWaitSync = (client_wait_t)hw_gpa("glClientWaitSync");
+    H.DeleteSync     = (del_sync_t)   hw_gpa("glDeleteSync");
     H.pbo_ok = H.GenBuffers && H.BindBuffer && H.BufferData && H.MapBuffer && H.UnmapBuffer
             && H.FenceSync && H.ClientWaitSync && H.DeleteSync;
     if (H.pbo_ok) {
@@ -188,9 +249,12 @@ const char* wlp_hw_info(void) { return H.info; }
 void wlp_hw_readback_times(double* issue, double* map) { if (issue) *issue = H.issue_ms; if (map) *map = H.map_ms; }
 void wlp_hw_readback_times2(double* mapcall, double* copy) { if (mapcall) *mapcall = H.mapcall_ms; if (copy) *copy = H.copy_ms; }
 
-void wlp_hw_make_current(void) { if (H.ctx) eglMakeCurrent(H.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, H.ctx); }
+void wlp_hw_make_current(void) {
+    if (GX.active) { glXMakeContextCurrent(GX.xdpy, GX.pbuf, GX.pbuf, GX.ctx); return; }
+    if (H.ctx) eglMakeCurrent(H.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, H.ctx);
+}
 unsigned int wlp_hw_fbo(void) { return H.fbo; }
-void* wlp_hw_proc(const char* sym) { return (void*)eglGetProcAddress(sym); }
+void* wlp_hw_proc(const char* sym) { return hw_gpa(sym); }
 
 // Copy a mapped/raw BGRA source (bottom-up GL order) into out as top-down, forcing opaque alpha. The
 // core's FBO alpha is undefined and the window surface has an alpha channel (rounded corners) → non-255
@@ -207,7 +271,7 @@ static void copy_flip_opaque(unsigned char *o, const unsigned char *src, int w, 
 // matching RetroArch/Windows. out must hold up to the FBO's max size; *out_w/*out_h get the returned
 // frame's dims (may differ from cur_* on an N64 mode switch). Returns 1 if out was filled, else 0.
 int wlp_hw_readback(void* out, int cur_w, int cur_h, int bottom_left, int* out_w, int* out_h) {
-    if (!H.ctx || !out || cur_w <= 0 || cur_h <= 0) return 0;
+    if ((!H.ctx && !GX.active) || !out || cur_w <= 0 || cur_h <= 0) return 0;   // a context exists in either backend
     if (cur_w > H.w) cur_w = H.w; if (cur_h > H.h) cur_h = H.h;
     if (H.BindFramebuffer) H.BindFramebuffer(GL_READ_FRAMEBUFFER, H.fbo);
     glPixelStorei(GL_PACK_ALIGNMENT, 4);
@@ -284,7 +348,14 @@ int wlp_hw_readback(void* out, int cur_w, int cur_h, int bottom_left, int* out_w
 }
 
 void wlp_hw_destroy(void) {
-    if (H.dpy) {
+    if (GX.active) {
+        glXMakeContextCurrent(GX.xdpy, None, None, NULL);
+        if (GX.ctx)  glXDestroyContext(GX.xdpy, GX.ctx);
+        if (GX.pbuf) glXDestroyPbuffer(GX.xdpy, GX.pbuf);
+        XCloseDisplay(GX.xdpy);
+        memset(&GX, 0, sizeof(GX));
+    }
+    else if (H.dpy) {
         eglMakeCurrent(H.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         if (H.ctx) eglDestroyContext(H.dpy, H.ctx);
         eglTerminate(H.dpy);
