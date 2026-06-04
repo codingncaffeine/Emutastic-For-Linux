@@ -270,10 +270,20 @@ namespace Emutastic.Platform
 
         // RETRO_DEVICE_ANALOG: index 0 = left stick, 1 = right; id 0 = X, 1 = Y. SDL_GetGamepadAxis
         // already returns the -32768..32767 range libretro expects.
+        // index 2 = RETRO_DEVICE_INDEX_ANALOG_BUTTON, id = L2(12)/R2(13): analog trigger pressure.
+        // Flycast queries Dreamcast L/R triggers this way (Crazy Taxi gas/brake); Dolphin queries
+        // GC L/R the same way. SDL trigger axes already report libretro's 0..32767 range.
         private short ReadAnalog(uint port, uint index, uint id)
         {
             if (port >= (uint)_pads.Count) return 0;
             IntPtr h = _pads[(int)port].handle;
+            if (index == 2)
+                return id switch
+                {
+                    12u => SDL_GetGamepadAxis(h, AXIS_LTRIG),   // JOYPAD_L2
+                    13u => SDL_GetGamepadAxis(h, AXIS_RTRIG),   // JOYPAD_R2
+                    _   => (short)0
+                };
             int axis = (index, id) switch
             {
                 (0u, 0u) => AXIS_LEFTX,  (0u, 1u) => AXIS_LEFTY,
