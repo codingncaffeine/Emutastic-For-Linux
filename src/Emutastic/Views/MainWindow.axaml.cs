@@ -496,6 +496,12 @@ public partial class MainWindow : Window
         // Any game session ending (whichever window launched it) ingests states the host wrote;
         // DiscoverSaveStates matches .json sidecars by RomHash and fires SaveStatesChanged.
         Services.GameHostLauncher.OnGameSessionEnded = g => _importer?.DiscoverSaveStates(g);
+        // In-game cog → "Edit Game Controls…": the host asks us (UI thread) to open Preferences
+        // on the Controls panel with its console preselected.
+        Services.GameHostLauncher.OnHostCommand = (verb, arg) =>
+        {
+            if (verb == "open-controls") PreferencesWindow.OpenOrFocus(this, arg);
+        };
         _vm = new MainViewModel(_db);
         _artworkFetch = new ArtworkFetchService(_db, new ArtworkService(), _vm);
         WireImportEvents();

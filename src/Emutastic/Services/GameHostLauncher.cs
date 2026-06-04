@@ -26,6 +26,11 @@ namespace Emutastic.Services
         /// after any game session with a known Game ends — regardless of which window launched it.</summary>
         public static Action<Models.Game>? OnGameSessionEnded;
 
+        /// <summary>Set once by MainWindow: handles "EMUTASTIC-CMD &lt;verb&gt; &lt;arg&gt;" requests the
+        /// host writes to stdout (e.g. cog → "Edit Game Controls…" = ("open-controls", console)).
+        /// Invoked on the UI thread.</summary>
+        public static Action<string, string>? OnHostCommand;
+
         /// <summary>Launch a game. <paramref name="onExit"/> is invoked on the UI thread when the game
         /// ends (result is null on a crash / missing results file).</summary>
         public static void Launch(string corePath, string romPath, string console, Action<GameHostResult?>? onExit = null)
@@ -67,6 +72,7 @@ namespace Emutastic.Services
             var psi = new ProcessStartInfo
             {
                 RedirectStandardInput = true,   // closing this stdin pipe = graceful-quit request to the child
+                RedirectStandardOutput = true,  // host→parent command channel ("EMUTASTIC-CMD …" lines)
                 UseShellExecute = false,
             };
 
@@ -131,6 +137,26 @@ namespace Emutastic.Services
             Interlocked.Increment(ref _active);
             EmulatorSession.ExternalGameActive = true;
             Trace.WriteLine($"[Launcher] game host pid={proc.Id} core={corePath} rom={romPath}");
+
+            // Drain the child's stdout continuously (a full pipe would block the child) and act on
+            // command lines. Anything not "EMUTASTIC-CMD <verb> [arg]" (e.g. a core's native printf)
+            // is discarded — the host's real logging goes to emulator-host.log, not stdout.
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    string? line;
+                    while ((line = await proc.StandardOutput.ReadLineAsync().ConfigureAwait(false)) != null)
+                    {
+                        if (!line.StartsWith("EMUTASTIC-CMD ", StringComparison.Ordinal)) continue;
+                        string[] parts = line.Substring("EMUTASTIC-CMD ".Length).Split(' ', 2);
+                        string verb = parts[0], arg = parts.Length > 1 ? parts[1] : "";
+                        Trace.WriteLine($"[Launcher] host command: {verb} {arg}");
+                        Dispatcher.UIThread.Post(() => OnHostCommand?.Invoke(verb, arg));
+                    }
+                }
+                catch (Exception ex) { Trace.WriteLine($"[Launcher] stdout reader ended: {ex.Message}"); }
+            });
 
             // Supervise off the UI thread (GOLDEN RULE). Never blocks the dispatcher.
             _ = Task.Run(async () =>

@@ -80,6 +80,64 @@ namespace Emutastic.Platform
             return -1;
         }
 
+        // ── Cog menu (upstream's OverlayMenu) ──────────────────────────────────────────────
+        // A vertical item list floating above the HUD pill, center-anchored. Items are
+        // (Label, Enabled, Value): disabled rows render muted and don't hover (upstream
+        // placeholders); Value (when set) renders right-aligned ("Pak: rumble" style splits).
+        public const int MenuRowH = 30, MenuW = 250, MenuPad = 6;
+        public static int MenuHitTest(int w, int h, int rowCount, int mx, int my)
+        {
+            if (rowCount <= 0) return -1;
+            MenuRect(w, h, rowCount, out float x, out float y, out float mw, out float mh);
+            if (mx < x || mx >= x + mw || my < y || my >= y + mh) return -1;
+            int row = (int)((my - (y + MenuPad)) / MenuRowH);
+            return row >= 0 && row < rowCount ? row : -2;
+        }
+        private static void MenuRect(int w, int h, int rows, out float x, out float y, out float mw, out float mh)
+        {
+            mw = MenuW;
+            mh = rows * MenuRowH + 2 * MenuPad;
+            x = (w - mw) / 2f;
+            y = h - BottomMargin - PillH - 10 - mh;   // floats just above the HUD pill, like upstream
+        }
+
+        private void DrawCogMenu(SKCanvas c, int w, int h,
+            IReadOnlyList<(string Label, bool Enabled, string? Value)> items, int hoverRow, string footer)
+        {
+            MenuRect(w, h, items.Count, out float x, out float y, out float mw, out float mh);
+            using (var bg = new SKPaint { Color = new SKColor(0x1C, 0x1C, 0x1E, 0xF2), IsAntialias = true })
+                c.DrawRoundRect(new SKRect(x, y, x + mw, y + mh), 10f, 10f, bg);
+            using (var bd = new SKPaint { Color = new SKColor(0x2A, 0x2A, 0x2E, 0xFF), IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1f })
+                c.DrawRoundRect(new SKRect(x + .5f, y + .5f, x + mw - .5f, y + mh - .5f), 10f, 10f, bd);
+
+            using var font = new SKFont(SKTypeface.Default, 12.5f);
+            using var valueFont = new SKFont(SKTypeface.Default, 11.5f);
+            using var on = new SKPaint { Color = SKColors.White, IsAntialias = true };
+            using var off = new SKPaint { Color = new SKColor(0x6A, 0x6A, 0x70, 0xFF), IsAntialias = true };
+            using var val = new SKPaint { Color = new SKColor(0x9A, 0x9A, 0x9E, 0xFF), IsAntialias = true };
+
+            for (int i = 0; i < items.Count; i++)
+            {
+                float ry = y + MenuPad + i * MenuRowH;
+                var (label, enabled, value) = items[i];
+                if (i == hoverRow && enabled)
+                    using (var hl = new SKPaint { Color = new SKColor(0xFF, 0xFF, 0xFF, 0x22), IsAntialias = true })
+                        c.DrawRoundRect(new SKRect(x + 4, ry, x + mw - 4, ry + MenuRowH), 6f, 6f, hl);
+                c.DrawText(label, x + 14, ry + MenuRowH - 10, SKTextAlign.Left, font, enabled ? on : off);
+                if (!string.IsNullOrEmpty(value))
+                {
+                    float vw = valueFont.MeasureText(value);
+                    c.DrawText(value, x + mw - 14 - vw, ry + MenuRowH - 10, SKTextAlign.Left, valueFont, val);
+                }
+            }
+            if (!string.IsNullOrEmpty(footer))
+            {
+                using var ffont = new SKFont(SKTypeface.Default, 10.5f);
+                float fw = ffont.MeasureText(footer);
+                c.DrawText(footer, x + mw - 10 - fw, y - 6, SKTextAlign.Left, ffont, val);
+            }
+        }
+
         // ── Save-state load picker (upstream's inline LoadPickerPanel: 5 most recent states) ──
         // Rows are (Name, RelativeTime); -2 in PickerHitTest = inside the panel but not on a row.
         public const int RowH = 26, PanelW = 280, PanelPad = 8;
@@ -151,12 +209,15 @@ namespace Emutastic.Platform
         public bool Build(int w, int h, string status, string title, string winStyle, bool maximized,
                           int titleHover, float hudAlpha, int hoverBtn, bool paused,
                           IReadOnlyList<(string Name, string RelTime)>? picker = null, int pickerHover = -1,
-                          int statusHover = -1)
+                          int statusHover = -1,
+                          IReadOnlyList<(string Label, bool Enabled, string? Value)>? cogMenu = null,
+                          int cogHover = -1, string cogFooter = "")
         {
             if (w <= 0 || h <= 0) return false;
             int aq = (int)Math.Round(Math.Clamp(hudAlpha, 0f, 1f) * 16);   // quantize alpha → limit fade re-renders
             string pickSig = picker == null ? "" : $"{string.Join("\x1f", picker.Select(p => p.Name + p.RelTime))}|{pickerHover}";
-            string sig = $"{w}x{h}|{status}|{title}|{winStyle}|{(maximized ? 1 : 0)}|{titleHover}|{aq}|{hoverBtn}|{(paused ? 1 : 0)}|{pickSig}|{statusHover}";
+            string cogSig = cogMenu == null ? "" : $"{string.Join("\x1f", cogMenu.Select(m => m.Label + m.Value + (m.Enabled ? "1" : "0")))}|{cogHover}";
+            string sig = $"{w}x{h}|{status}|{title}|{winStyle}|{(maximized ? 1 : 0)}|{titleHover}|{aq}|{hoverBtn}|{(paused ? 1 : 0)}|{pickSig}|{statusHover}|{cogSig}";
             if (sig == _sig && _bmp != null) return false;
             _sig = sig;
 
@@ -174,6 +235,7 @@ namespace Emutastic.Platform
             DrawStatus(c, w, h, status, statusHover);
             if (aq > 0) DrawHud(c, w, h, hoverBtn, paused, aq / 16f);
             if (picker != null) DrawLoadPicker(c, w, h, picker, pickerHover);
+            if (cogMenu != null) DrawCogMenu(c, w, h, cogMenu, cogHover, cogFooter);
             // Subtle rounded border at the window edge (the shim erases the corners to transparent so the
             // window reads as rounded; this traces the edge, matching the main app's 1px BorderSubtle).
             if (!maximized)

@@ -107,6 +107,13 @@ namespace Emutastic
                 SaveGameTitle = gameTitle,
                 SaveRomHash   = romHash,
             };
+            // Host→parent command channel: one prefixed line on stdout per request (the launcher
+            // redirects and parses our stdout; everything else written there is ignored).
+            EmulatorSession.EmitHostCommand = cmd =>
+            {
+                try { Console.Out.WriteLine("EMUTASTIC-CMD " + cmd); Console.Out.Flush(); }
+                catch { /* parent gone — harmless */ }
+            };
             // Launch-into-state (mirrors upstream's pendingLoadStatePath ctor param): queued now,
             // executed on the emu thread after warmup once the loop starts.
             if (!string.IsNullOrEmpty(loadStatePath)) session.QueuePendingLoad(loadStatePath);

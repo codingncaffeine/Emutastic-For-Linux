@@ -963,11 +963,80 @@ namespace Emutastic.Emulator
             List<(string Name, string RelTime, string Path)>? statePicker = null;
             int pickerHover = -1;
 
+            // Cog menu (upstream's OverlayMenu): rows carry an action key; null key = placeholder
+            // (drawn greyed). "\x01VISUALS"/"\x01BACK" switch levels; other keys are core options
+            // cycled live via CycleCoreOption. Item order/labels mirror upstream's XAML.
+            List<(string Label, bool Enabled, string? Value, string? Key)>? cogMenu = null;
+            int cogHover = -1;
+            Func<List<(string, bool, string?, string?)>> buildCogMain = () =>
+            {
+                var m = new List<(string, bool, string?, string?)>
+                {
+                    // Asks the MAIN APP to open Preferences → Controls for this console (the panel
+                    // lives there; the request crosses processes via the stdout command channel).
+                    ("Edit Game Controls…", EmitHostCommand != null, null, "\x01CONTROLS"),
+                    ("Turbo Buttons…",      false, null, null),   // not ported yet
+                    ("Flip Display",        false, null, null),   // no rotation plumbing in present yet
+                    ("Shader: None",        false, null, null),   // arrives with the shader splinter
+                    ("Overlay: On",         false, null, null),   // bezel/overlay art not ported yet
+                    ("Bezel: Off",          false, null, null),
+                };
+                if (HandlerConsoleName == "N64" && CoreOptionValue("mupen64plus-pak1").Length > 0)
+                    m.Add(("Pak", true, CoreOptionValue("mupen64plus-pak1"), "mupen64plus-pak1"));
+                m.Add(("Record",          false, null, null));    // RecordingService not ported yet
+                m.Add(("View Recordings", false, null, null));
+                m.Add(("Cheats",          false, null, null));    // cheat engine not wired in-session yet
+                m.Add(("Notes",           false, null, null));
+                m.Add(("Manual",          false, null, null));
+                if (VisualOptions.Count > 0)
+                    m.Add(("Visuals", true, "›", "\x01VISUALS")); // live core options (upstream's Visuals panel)
+                return m;
+            };
+            Func<List<(string, bool, string?, string?)>> buildCogVisuals = () =>
+            {
+                var m = new List<(string, bool, string?, string?)> { ("‹ Back", true, null, "\x01BACK") };
+                foreach (var (key, label) in VisualOptions)
+                {
+                    string cur = CoreOptionValue(key);
+                    // Unannounced this session (core didn't expose it) → greyed with n/a.
+                    m.Add(cur.Length > 0 ? (label, true, cur, key) : (label, false, "n/a", null));
+                }
+                return m;
+            };
+
             Action<int, bool> onBtn = (button, down) =>
             {
                 if (button != 0 || !down) return;
-                // 0) Open load picker has top priority below the title bar: row click loads, panel
-                //    clicks swallow, anywhere else closes it (matches upstream's toggle behavior).
+                // 0a) Open cog menu: enabled-row clicks act, panel clicks swallow, elsewhere closes
+                //     (upstream collapses OverlayMenu the same way).
+                if (cogMenu != null && titleHover < 0)
+                {
+                    _wlTop!.GetSize(out int mrw, out int mrh);
+                    int row = GlOsd.MenuHitTest(mrw, mrh, cogMenu.Count, _wlTop.MouseX, _wlTop.MouseY);
+                    if (row >= 0)
+                    {
+                        var (_, enabled, _, key) = cogMenu[row];
+                        if (!enabled || key == null) return;       // placeholder — swallow
+                        if (key == "\x01VISUALS") cogMenu = buildCogVisuals();
+                        else if (key == "\x01BACK") cogMenu = buildCogMain();
+                        else if (key == "\x01CONTROLS")
+                        {
+                            EmitHostCommand?.Invoke($"open-controls {HandlerConsoleName}");
+                            cogMenu = null;                        // close, like upstream after navigation
+                        }
+                        else
+                        {
+                            CycleCoreOption(key);                  // live option change (variables-dirty)
+                            // Rebuild the open level so the row shows the new value immediately.
+                            cogMenu = cogMenu.Any(i => i.Key == "\x01BACK") ? buildCogVisuals() : buildCogMain();
+                        }
+                        return;
+                    }
+                    if (row == -2) return;                          // panel chrome — swallow
+                    cogMenu = null;                                 // clicked elsewhere — close, fall through
+                }
+                // 0b) Open load picker: row click loads, panel clicks swallow, anywhere else closes it
+                //     (matches upstream's toggle behavior).
                 if (statePicker != null && titleHover < 0)
                 {
                     _wlTop!.GetSize(out int prw, out int prh);
@@ -1004,9 +1073,11 @@ namespace Emutastic.Emulator
                 {
                     case GlOsd.StatusBtnSave:
                         statePicker = null;   // upstream collapses the picker before saving
+                        cogMenu = null;
                         RequestSaveState(DateTime.Now.ToString("yyyy-MM-dd HH.mm.ss"));
                         return;
                     case GlOsd.StatusBtnLoad:
+                        cogMenu = null;
                         statePicker = statePicker == null ? RecentSaveStates() : null;
                         return;
                 }
@@ -1021,7 +1092,12 @@ namespace Emutastic.Emulator
                     case GlOsd.BtnSave:
                         RequestSaveState(DateTime.Now.ToString("yyyy-MM-dd HH.mm.ss"));
                         break;
-                    // Record / Cog: placeholders — no action wired yet (later phase).
+                    // Cog: toggle the settings menu (upstream's OverlayMenu).
+                    case GlOsd.BtnCog:
+                        statePicker = null;
+                        cogMenu = cogMenu == null ? buildCogMain() : null;
+                        break;
+                    // Record: placeholder — no action wired yet (later phase).
                     default: break;
                 }
                 hudHideAtMs = clock.Elapsed.TotalMilliseconds + HudTimeoutMs;   // any click keeps the HUD up
@@ -1053,7 +1129,7 @@ namespace Emutastic.Emulator
                 }
                 _wlTop.GetSize(out int ww, out int wh);
                 if (ww <= 0) { ww = winW; wh = winH; }
-                hudVisible = IsPaused || nowMs < hudHideAtMs;   // picker lives in the status bar, not the pill
+                hudVisible = IsPaused || nowMs < hudHideAtMs || cogMenu != null;   // cog menu pins the pill
                 float tgt = hudVisible ? 1f : 0f;                       // 150ms fade-in / 300ms fade-out
                 if (hudAlpha < tgt) hudAlpha = (float)Math.Min(tgt, hudAlpha + dt / 150.0);
                 else if (hudAlpha > tgt) hudAlpha = (float)Math.Max(tgt, hudAlpha - dt / 300.0);
@@ -1071,9 +1147,13 @@ namespace Emutastic.Emulator
                 pickerHover = statePicker != null && _wlTop.MouseInside
                     ? GlOsd.PickerHitTest(ww, wh, statePicker.Count, _wlTop.MouseX, _wlTop.MouseY) : -1;
                 int statusHover = _wlTop.MouseInside ? GlOsd.StatusHitTest(ww, wh, _wlTop.MouseX, _wlTop.MouseY) : -1;
+                cogHover = cogMenu != null && _wlTop.MouseInside
+                    ? GlOsd.MenuHitTest(ww, wh, cogMenu.Count, _wlTop.MouseX, _wlTop.MouseY) : -1;
                 var pickerItems = statePicker?.Select(p => (p.Name, p.RelTime)).ToList();
+                var cogItems = cogMenu?.Select(m => (m.Label, m.Enabled, m.Value)).ToList();
                 if (osd.Build(ww, wh, shownStatus, title, winStyle, _wlTop.IsMaximized, titleHover, hudAlpha, hover, IsPaused,
-                              pickerItems, pickerHover, statusHover))
+                              pickerItems, pickerHover, statusHover,
+                              cogItems, cogHover, cogMenu != null ? CoreName : ""))
                     _wlTop.SetOverlay(osd.Pixels, osd.Width, osd.Height);
 
                 // Present the latest frame every iteration; the shim's FIFO swap is the pace (re-presenting a
@@ -1497,6 +1577,36 @@ namespace Emutastic.Emulator
 
         /// <summary>The active disc-swap OSD message, or null if none is currently showing.</summary>
         public string? ActiveDiskMessage => (_diskMsg.Length > 0 && Stopwatch.GetTimestamp() < _diskMsgUntil) ? _diskMsg : null;
+
+        // ── Cog menu support (ported from upstream's OverlayMenu) ───────────────────────────────────
+        /// <summary>Host→main-app command channel (set by GameHost: writes "EMUTASTIC-CMD …" to stdout,
+        /// which GameHostLauncher reads on the parent side). Null when running in-process.</summary>
+        public static Action<string>? EmitHostCommand;
+        /// <summary>Per-console visual options (cog → Visuals), from the console handler.</summary>
+        public List<(string key, string label)> VisualOptions => _handler.GetVisualOptions();
+        public string HandlerConsoleName => _handler.ConsoleName;
+
+        /// <summary>Current value of a core option (for cog-menu value labels).</summary>
+        public string CoreOptionValue(string key) => _coreOptions.TryGetValue(key, out var v) ? v : "";
+
+        /// <summary>
+        /// Cycle a core option to its next announced valid value and mark the variables dirty —
+        /// the core re-reads them via GET_VARIABLE_UPDATE on its next frame, so visual options
+        /// (internal resolution, texture filter, …) apply LIVE, like upstream's Visuals panel.
+        /// Returns the new value, or null when the option wasn't announced this session.
+        /// </summary>
+        public string? CycleCoreOption(string key)
+        {
+            var entry = _coreOptionSchema.FirstOrDefault(e => e.Key == key);
+            if (entry == null || entry.ValidValues.Length == 0) return null;
+            string cur = _coreOptions.TryGetValue(key, out var c) ? c : entry.DefaultValue;
+            int idx = Array.IndexOf(entry.ValidValues, cur);
+            string next = entry.ValidValues[(idx + 1) % entry.ValidValues.Length];
+            _coreOptions[key] = next;
+            _coreOptionsDirty = true;
+            Trace.WriteLine($"[Emu] core option (live, cog menu) {key} = {next}");
+            return next;
+        }
 
         // ── Save states (ported from upstream EmulatorWindow.xaml.cs) ───────────────────────────────
         // Save/load run ON THE EMU THREAD between retro_run calls via volatile pending flags; the
