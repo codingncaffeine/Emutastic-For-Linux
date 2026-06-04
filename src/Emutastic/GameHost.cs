@@ -35,6 +35,7 @@ namespace Emutastic
             string? rom  = args.Length > 2 ? args[2] : null;
             string console = "", resultsPath = "";
             bool fullscreen = false, parentStdin = false;
+            int prewarmSeconds = 0;   // >0 = shader pre-warm pass: run the attract/boot loop, then auto-quit
             for (int i = 3; i < args.Length; i++)
             {
                 switch (args[i])
@@ -43,6 +44,7 @@ namespace Emutastic
                     case "--fullscreen":   fullscreen = true; break;
                     case "--results":      if (i + 1 < args.Length) resultsPath = args[++i]; break;
                     case "--parent-stdin": parentStdin = true; break;   // supervisor holds our stdin; EOF = graceful quit
+                    case "--prewarm":      if (i + 1 < args.Length && int.TryParse(args[++i], out int pw)) prewarmSeconds = Math.Clamp(pw, 1, 600); break;
                 }
             }
 
@@ -102,6 +104,24 @@ namespace Emutastic
                     session.RequestQuit();   // parent closed the pipe → graceful quit
                 }) { IsBackground = true, Name = "HostStdinWatch" };
                 stdinWatch.Start();
+            }
+
+            // Shader pre-warm pass: run the boot/attract loop for a fixed budget, then quit cleanly.
+            // The point is to make the driver COMPILE the title/menu/demo shaders into the (now
+            // never-evicted) Mesa cache up front, so the first real play session doesn't stall on
+            // them. Coverage is partial — only the states the attract loop actually reaches — but it
+            // front-loads the most common boot→title→menu path. Auto-quit on a background timer so
+            // RRunInline (main-thread present loop) still owns the window.
+            if (prewarmSeconds > 0)
+            {
+                Trace.WriteLine($"[Host] === shader pre-warm: {prewarmSeconds}s ===");
+                var warmQuit = new Thread(() =>
+                {
+                    for (int s = 0; s < prewarmSeconds && !session.QuitRequested; s++) Thread.Sleep(1000);
+                    Trace.WriteLine("[Host] pre-warm budget reached → quitting");
+                    session.RequestQuit();
+                }) { IsBackground = true, Name = "ShaderPrewarm" };
+                warmQuit.Start();
             }
 
             var sw = Stopwatch.StartNew();

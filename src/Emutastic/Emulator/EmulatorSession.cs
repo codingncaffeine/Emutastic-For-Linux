@@ -231,7 +231,11 @@ namespace Emutastic.Emulator
 
         /// <summary>Ask the loop to stop and exit cleanly (flushes SRAM). Used by the host's quit signals
         /// (stdin EOF / SIGTERM) — distinct from Dispose, which also tears down native resources.</summary>
-        public void RequestQuit() => _running = false;
+        public void RequestQuit() { _quitRequested = true; _running = false; }
+        private volatile bool _quitRequested;
+
+        /// <summary>True once a clean quit has been requested (window closed / signal / pre-warm budget hit).</summary>
+        public bool QuitRequested => _quitRequested;
 
         /// <summary>Blocks until the emulation thread has exited (the GL window closed or RequestQuit).
         /// The game host calls this on its main thread to keep the process alive for the session.</summary>
@@ -1224,6 +1228,8 @@ namespace Emutastic.Emulator
                     ptr = Marshal.StringToHGlobalAnsi(val);
                     _allocatedOptionPtrs.Add(ptr);
                     _coreOptionPtrs[key] = ptr;
+                    // First query (or value change) only — proves which value the core actually received.
+                    Trace.WriteLine($"[Emu] core option {key} = {val}");
                 }
                 Marshal.WriteIntPtr(data, IntPtr.Size, ptr);   // retro_variable.value (second field)
                 _coreOptionsDirty = false;
@@ -1433,15 +1439,72 @@ namespace Emutastic.Emulator
 
         private void RetroLog_cb(uint level, IntPtr fmt, IntPtr a0, IntPtr a1, IntPtr a2, IntPtr a3)
         {
-            // Best-effort: print the core's format string (full printf expansion isn't needed for
-            // bring-up diagnostics). Helps when validating new cores during the port.
             try
             {
-                string? s = Marshal.PtrToStringAnsi(fmt);
-                if (!string.IsNullOrEmpty(s)) System.Diagnostics.Trace.Write($"[core:{level}] {s}");
+                string f = Marshal.PtrToStringAnsi(fmt) ?? "";
+                string msg = FormatCoreLog(f, a0, a1, a2, a3);
+                string[] labels = { "DEBUG", "INFO", "WARN", "ERROR" };
+                string tag = level < (uint)labels.Length ? labels[level] : $"L{level}";
+                System.Diagnostics.Trace.WriteLine($"[CORE {tag}] {msg.TrimEnd('\n', '\r')}");
             }
             catch { /* never let a log call throw back into native code */ }
         }
+
+        /// <summary>
+        /// Minimal printf formatter for core log messages (port of upstream FormatCoreLog).
+        /// Handles the common specifiers cores use (%s, %d, %i, %u, %x, %X, %ld, %02d, etc.).
+        /// ABI NOTE (differs from upstream/Windows): on Linux x86-64 (SysV) variadic floats
+        /// go in XMM registers ONLY — they are NOT mirrored into the integer registers our
+        /// a0..a3 slots capture. So float specifiers print a placeholder and must NOT advance
+        /// argIdx (the next integer arg still arrives in the next integer register). This is
+        /// the exact inverse of the Windows rule documented upstream.
+        /// Covers the first 4 integer varargs (rdx, rcx, r8, r9); later args print literally.
+        /// </summary>
+        private static string FormatCoreLog(string fmt, IntPtr a0, IntPtr a1, IntPtr a2, IntPtr a3)
+        {
+            if (!fmt.Contains('%')) return fmt;
+
+            var args = new IntPtr[] { a0, a1, a2, a3 };
+            int argIdx = 0;
+
+            return System.Text.RegularExpressions.Regex.Replace(fmt,
+                @"%%|%[-+0 #]*\d*(?:\.\d+)?(hh?|ll?|[Lqjzt])?([diouxXscpfFgGeE])",
+                m =>
+                {
+                    if (m.Value == "%%") return "%";
+                    char type = m.Groups[2].Value[0];
+
+                    // Floats live in XMM registers we don't capture — placeholder, no slot consumed.
+                    if (type is 'f' or 'F' or 'g' or 'G' or 'e' or 'E') return "(flt)";
+
+                    if (argIdx >= args.Length) return m.Value;
+                    IntPtr arg = args[argIdx++];
+                    string spec = m.Value;
+                    bool wide = m.Groups[1].Value.StartsWith("l") || m.Groups[1].Value is "j" or "z" or "t";
+
+                    // Honour width/precision from the original specifier where practical.
+                    string widthStr = System.Text.RegularExpressions.Regex.Match(spec, @"0?(\d+)").Groups[1].Value;
+                    int width = int.TryParse(widthStr, out int w) ? w : 0;
+                    bool zeroPad = spec.Contains('0') && !spec.Contains('-');
+
+                    return type switch
+                    {
+                        's' => Marshal.PtrToStringAnsi(arg) ?? "(null)",
+                        // 32-bit ints arrive in 64-bit registers; the SysV caller need not
+                        // zero/sign-extend, so truncate unless an 'l'-class length says 64-bit.
+                        'd' or 'i' => PadNum((wide ? (long)arg : (int)(long)arg).ToString(), width, zeroPad),
+                        'u'        => PadNum((wide ? (ulong)arg : (uint)(ulong)arg).ToString(), width, zeroPad),
+                        'x'        => PadNum((wide ? (ulong)arg : (uint)(ulong)arg).ToString("x"), width, zeroPad),
+                        'X'        => PadNum((wide ? (ulong)arg : (uint)(ulong)arg).ToString("X"), width, zeroPad),
+                        'p'        => "0x" + ((ulong)arg).ToString("x16"),
+                        'c'        => ((char)(byte)arg).ToString(),
+                        _          => m.Value
+                    };
+                });
+        }
+
+        private static string PadNum(string s, int width, bool zeroPad)
+            => width > 0 ? (zeroPad ? s.PadLeft(width, '0') : s.PadLeft(width)) : s;
 
         private unsafe void Video_cb(IntPtr data, uint width, uint height, UIntPtr pitch)
         {

@@ -42,6 +42,11 @@ namespace Emutastic.Services.ConsoleHandlers
             ["reicast_widescreen_cheats"]   = "disabled",
             ["reicast_enable_dsp"]          = "enabled",
             ["reicast_per_content_vmus"]    = "disabled",
+            // Core default is "disabled" = authentic GD-ROM read speed, which makes games
+            // sit in their loading/buffering scenes in real time (logs: ~5fps emu windows
+            // at every scene change, then full 60). Fast loading is the standard cure and
+            // the libretro docs' recommended setting; user-overridable in Core Options.
+            ["reicast_gdrom_fast_loading"]  = "enabled",
             ["reicast_device_port1_slot1"]  = "VMU",
             ["reicast_device_port2_slot1"]  = "VMU",
             ["reicast_device_port3_slot1"]  = "VMU",

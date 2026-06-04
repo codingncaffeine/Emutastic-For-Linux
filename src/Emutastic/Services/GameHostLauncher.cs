@@ -78,6 +78,15 @@ namespace Emutastic.Services
                     || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY"))))
                 psi.Environment["SDL_VIDEODRIVER"] = "wayland";
 
+            // Never-evict shader cache. The per-scene freeze on 3D cores (esp. flycast/Dreamcast)
+            // is one-time GPU shader COMPILATION; Mesa persists each compiled shader to
+            // ~/.cache/mesa_shader_cache_db so a given shader only ever stalls ONCE — but the
+            // default cap (~1GB, or 5% of the fs) can EVICT old entries, re-introducing the
+            // freeze on a revisited scene. Raise the cap so accumulated shaders are never purged,
+            // making the warm-up genuinely permanent across sessions (and across pre-warm runs).
+            if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("MESA_SHADER_CACHE_MAX_SIZE")))
+                psi.Environment["MESA_SHADER_CACHE_MAX_SIZE"] = "12G";
+
             Process proc;
             try { proc = Process.Start(psi)!; }
             catch (Exception ex)
