@@ -1025,8 +1025,30 @@ public partial class MainWindow : Window
             return (found, cnt, scanDirs.Count == 0);
         });
 
-        if (noDirs) { _vm?.SetStatus($"Nothing to refresh — no {display} game folders found on disk.", autoClear: true); _refreshInProgress = false; return; }
-        if (candidates.Count == 0) { _vm?.SetStatus($"Nothing to refresh — no {display} files found in your existing {display} folders.", autoClear: true); _refreshInProgress = false; return; }
+        // Bootstrap: an empty console has no library entries to derive scan folders from
+        // (upstream has the same dead-end — on Windows the library predates it, so it never
+        // bites there). Ask for the folder instead of silently doing nothing; the import
+        // pipeline classifies .zip/.7z archives by their inner contents, so an archive-only
+        // folder (e.g. PSP) imports fine once it's actually handed to the importer.
+        if (noDirs || candidates.Count == 0)
+        {
+            string why = noDirs
+                ? $"No {display} games in the library yet"
+                : $"No new {display} files in your existing {display} folders";
+            var picked = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+            {
+                Title = $"{why} — select your {display} ROM folder",
+                AllowMultiple = false,
+            });
+            string? folder = picked.Count > 0 ? picked[0].TryGetLocalPath() : null;
+            if (string.IsNullOrEmpty(folder))
+            {
+                _vm?.SetStatus($"Refresh cancelled — no {display} folder selected.", autoClear: true);
+                _refreshInProgress = false;
+                return;
+            }
+            candidates = new List<string> { folder };   // ImportFilesAsync expands directories
+        }
         Action? onDrained = null;
         onDrained = () =>
         {
