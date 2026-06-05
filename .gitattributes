@@ -1,0 +1,5 @@
+# Vendored third-party sources — excluded from GitHub's language statistics.
+# (rcheevos ships a full Lua tree in its tests; libchdr bundles lzma/miniz/zstd.
+# Without these markers the repo reads as ~66% C when the project is C#.)
+native/rcheevos-src/** linguist-vendored
+native/libchdr-src/**  linguist-vendored
