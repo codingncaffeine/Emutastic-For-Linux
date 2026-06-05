@@ -398,6 +398,10 @@ namespace Emutastic.Configuration
     {
         public string LastModifiedUtc { get; set; } = "";
         public long SizeBytes { get; set; }
+        // SHA-256 of the plaintext content; set for library.db so the
+        // upload decision is content-based (see FullSyncAsync). Null on
+        // entries written by older builds — treated as "unknown, upload".
+        public string? Sha256 { get; set; }
     }
 
     // Video snap provider configuration

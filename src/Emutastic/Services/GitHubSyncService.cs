@@ -677,26 +677,34 @@ namespace Emutastic.Services
                             }
 
                             var snapInfo = new FileInfo(tempDb);
+                            byte[] dbBytes = File.ReadAllBytes(tempDb);
+                            // Hash the PLAINTEXT snapshot — encryption uses a random IV,
+                            // so ciphertext never compares equal even for identical content.
+                            string dbHash = Convert.ToHexString(SHA256.HashData(dbBytes));
+
+                            // Content-based decision, NOT mtime: the sync's own VACUUM
+                            // connection checkpoints the WAL on close, which rewrites
+                            // library.db and bumps its mtime — any mtime test therefore
+                            // sees the db as "modified" on every single sync and uploads
+                            // it forever (the lingering "1 up" after the save-storm fix).
                             bool dbNeedsUpload = true;
                             if (_manifestCache.Files.TryGetValue(dbRepoPath, out var dbEntry)
-                                && DateTime.TryParse(dbEntry.LastModifiedUtc, null,
-                                    System.Globalization.DateTimeStyles.RoundtripKind, out var dbRemoteMtime))
-                                // Compare the SOURCE db's mtime, not the snapshot's — the
-                                // VACUUM INTO temp file was created seconds ago, so its
-                                // mtime is always "now" and would force an upload every sync.
-                                dbNeedsUpload = snapInfo.Length != dbEntry.SizeBytes
-                                    || File.GetLastWriteTimeUtc(dbPath) > dbRemoteMtime;
+                                && !string.IsNullOrEmpty(dbEntry.Sha256))
+                            {
+                                dbNeedsUpload = !string.Equals(dbEntry.Sha256, dbHash,
+                                    StringComparison.OrdinalIgnoreCase);
+                            }
 
                             if (dbNeedsUpload)
                             {
-                                byte[] dbBytes = File.ReadAllBytes(tempDb);
                                 if (encrypted && encKey != null) dbBytes = Encrypt(dbBytes, encKey);
                                 if (await UploadFileAsync(dbRepoPath, dbBytes, ct).ConfigureAwait(false))
                                 {
                                     _manifestCache.Files[dbRepoPath] = new SyncFileEntry
                                     {
                                         LastModifiedUtc = DateTime.UtcNow.ToString("o"),
-                                        SizeBytes = snapInfo.Length
+                                        SizeBytes = snapInfo.Length,
+                                        Sha256 = dbHash
                                     };
                                     uploaded++;
                                     CloudSyncLog.Write("Database uploaded");
