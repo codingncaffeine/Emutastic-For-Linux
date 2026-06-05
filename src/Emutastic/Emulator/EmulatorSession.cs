@@ -1986,6 +1986,7 @@ namespace Emutastic.Emulator
         private volatile bool _loadStatePending;
         private string _pendingSaveName = "";
         private byte[]? _pendingLoadData;
+        private byte[]? _pendingLoadCheevosBlob;
         private string _pendingLoadName = "";
         private string _pendingLoadSavedCoreName = "";
         private int _loadStateAttempts;
@@ -2036,6 +2037,16 @@ namespace Emutastic.Emulator
             try
             {
                 _pendingLoadData = File.ReadAllBytes(statePath);
+                // Pair the rcheevos progress side-car when one exists. Older states
+                // predate it and load with a null blob (DeserializeProgress no-ops).
+                _pendingLoadCheevosBlob = null;
+                try
+                {
+                    string cheevosPath = Path.ChangeExtension(statePath, ".cheevos");
+                    if (File.Exists(cheevosPath))
+                        _pendingLoadCheevosBlob = File.ReadAllBytes(cheevosPath);
+                }
+                catch (Exception ex) { Trace.WriteLine($"[RA] Cheevos side-car read failed: {ex.Message}"); }
                 _pendingLoadName = name;
                 _pendingLoadSavedCoreName = ReadSavedCoreName(statePath);
                 _loadStatePending = true;
@@ -2170,8 +2181,27 @@ namespace Emutastic.Emulator
                 string statePath = Path.Combine(SaveStateDir, safeName + ".state");
                 string pngPath   = Path.Combine(SaveStateDir, safeName + ".png");
                 string jsonPath  = Path.Combine(SaveStateDir, safeName + ".json");
+                string cheevosPath = Path.Combine(SaveStateDir, safeName + ".cheevos");
 
                 File.WriteAllBytes(statePath, data);
+
+                // Pair the libretro state with rcheevos's runtime state so achievement
+                // hit counts and measured-progress trackers survive a load (RA Section A:
+                // "Hit counts should be stored in save states"). Side-car format keeps the
+                // .state binary-compatible with other libretro frontends. No-op when RA
+                // isn't initialized for this session.
+                try
+                {
+                    byte[]? cheevosBlob = _raClient?.SerializeProgress();
+                    if (cheevosBlob != null && cheevosBlob.Length > 0)
+                        File.WriteAllBytes(cheevosPath, cheevosBlob);
+                    else if (File.Exists(cheevosPath))
+                        File.Delete(cheevosPath); // overwriting an older state — a stale side-car would silently restore wrong progress
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[RA] Save-state cheevos side-car write failed: {ex.Message}");
+                }
 
                 try
                 {
@@ -2265,6 +2295,12 @@ namespace Emutastic.Emulator
             int attempts = _loadStateAttempts;
             _loadStatePending = false; _loadStateAttempts = 0; _loadStateWarmup = 0;
             _pendingLoadData = null; _pendingLoadSavedCoreName = "";
+
+            // Restore rcheevos's runtime state from the .cheevos side-car — only on a
+            // successful core-side load (restoring hits onto a failed/partial emulation
+            // state would mis-credit unlocks). Empty/missing blob is a no-op.
+            if (ok) _raClient?.DeserializeProgress(_pendingLoadCheevosBlob);
+            _pendingLoadCheevosBlob = null;
 
             // Re-prime controller port-device assignments: Beetle PSX HW's FrontIO rebuilds its device
             // pointers during restore and the assignment can dangle (input dead, emulation alive).
