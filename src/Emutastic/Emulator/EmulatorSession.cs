@@ -1497,6 +1497,19 @@ namespace Emutastic.Emulator
                 if (buf == null) { Thread.Sleep(1); continue; }   // no frame yet — input already pumped above
                 _wlTop.Present(buf, pw, ph);
 
+                // Screenshot collect: F12 armed the shim inside this Present's event pump, so the
+                // capture (displayed-res, pre-OSD) is ready right after the present that drew it.
+                if (_screenshotArmed)
+                {
+                    _wlTop.GetSize(out int capW, out int capH);
+                    var capBuf = new byte[Math.Max(1, capW * capH * 4)];
+                    if (_wlTop.TryTakeCapture(capBuf, out int gotW, out int gotH))
+                    {
+                        _screenshotArmed = false;
+                        SaveScreenshotAsync(capBuf, gotW, gotH);
+                    }
+                }
+
                 double frameMs = pt.Elapsed.TotalMilliseconds; pt.Restart();
                 _glSwapMsEma = _glSwapMsEma <= 0 ? _wlTop.LastSwapMs : _glSwapMsEma + 0.05 * (_wlTop.LastSwapMs - _glSwapMsEma);
                 if (_glStatGc2Base < 0) _glStatGc2Base = GC.CollectionCount(2);
@@ -1914,12 +1927,23 @@ namespace Emutastic.Emulator
             return SC_F12;
         }
 
-        /// <summary>F12 / PrintScreen / configured key: save the displayed frame into the Screenshots
-        /// library using upstream's filename convention ("{yyyyMMdd_HHmmss} {title} ({console}).png"
-        /// under Screenshots/{console}/), which the Screenshots tab's parser picks up. _frame is the
-        /// published post-rotation/flip BGRA — WYSIWYG, like upstream's capture chain.</summary>
+        private volatile bool _screenshotArmed;   // wl path: collect the shim capture after the present
+
+        /// <summary>F12 / PrintScreen / configured key: save the DISPLAYED frame into the Screenshots
+        /// library. On the wl path the shim reads the rendered game/bezel rect back at displayed
+        /// resolution, pre-OSD (upstream captures the rendered window the same way — its native-res
+        /// path is "backstop only"). Elsewhere falls back to the native-res published frame.</summary>
         private void TakeScreenshot()
         {
+            if (_wlTop != null)
+            {
+                // OnGlKey fires inside PumpEvents, which runs BEFORE the native present in the same
+                // Present() call — so arming here captures THIS frame; the loop collects it after.
+                _wlTop.RequestCapture();
+                _screenshotArmed = true;
+                return;
+            }
+            // Fallback (non-wl presents): the published post-rotation/flip BGRA at native res.
             byte[]? shot = null; int sw = 0, sh = 0;
             lock (_frameLock)
             {
@@ -1931,6 +1955,14 @@ namespace Emutastic.Emulator
                 }
             }
             if (shot == null) { ShowDiskMessage("Screenshot not available", 3); return; }
+            SaveScreenshotAsync(shot, sw, sh);
+        }
+
+        // Encode + save off-thread using upstream's filename convention
+        // ("{yyyyMMdd_HHmmss} {title} ({console}).png" under Screenshots/{console}/),
+        // which the Screenshots tab's parser picks up.
+        private void SaveScreenshotAsync(byte[] bgra, int w, int h)
+        {
             string title = string.IsNullOrWhiteSpace(SaveGameTitle)
                 ? Path.GetFileNameWithoutExtension(_romPath) : SaveGameTitle;
             string console = HandlerConsoleName;
@@ -1942,7 +1974,7 @@ namespace Emutastic.Emulator
                     string safeConsole = FileNameHelper.SanitizeFileName(console);
                     string fileName = $"{DateTime.Now:yyyyMMdd_HHmmss} {safeTitle} ({safeConsole}).png";
                     string path = Path.Combine(AppPaths.GetFolder("Screenshots", safeConsole), fileName);
-                    Services.PngEncoder.WriteBgra(path, shot, sw, sh);
+                    Services.PngEncoder.WriteBgra(path, bgra, w, h);
                     ShowDiskMessage("Screenshot saved", 3);
                 }
                 catch (Exception ex)

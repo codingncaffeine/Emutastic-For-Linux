@@ -42,6 +42,12 @@ void wlp_show_gameoverlay(void* h, int on);   // toggle visibility without re-up
 void wlp_set_bezel(void* h, const void* rgba, int w, int hh);
 void wlp_show_bezel(void* h, int on);         // toggle visibility without re-uploading
 
+// One-shot displayed-frame capture (screenshots): arm, then the NEXT wlp_present reads the game/
+// bezel rect back (BGRA top-down, pre-OSD = no HUD). Collect with wlp_take_capture — returns 1 and
+// the dims once ready (0 if pending or out too small), clearing the slot. Present-thread only.
+void wlp_request_capture(void* h);
+int  wlp_take_capture(void* h, void* out, int max_bytes, int* w, int* hh);
+
 // Reserve chrome space (title-bar height on top, status-bar height on bottom, window pixels). The game
 // is aspect-fit BETWEEN them instead of being covered by the OSD bars. Call once after create / on resize.
 void wlp_set_insets(void* h, int top, int bottom);

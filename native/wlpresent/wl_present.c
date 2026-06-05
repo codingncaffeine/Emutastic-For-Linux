@@ -61,6 +61,11 @@ typedef struct {
     GLuint ov_tex; int ov_w, ov_h, ov_on;   // RGBA OSD overlay (FPS + HUD), composited over the game quad
     GLuint gov_tex; int gov_w, gov_h, gov_on;  // RGBA game overlay (Vectrex art) — stretched over the GAME rect
     GLuint bez_tex; int bez_w, bez_h, bez_on;  // RGBA bezel frame (The Bezel Project) — aspect-fit in the content area
+    // One-shot displayed-frame capture (screenshots): armed by wlp_request_capture, filled during
+    // the next present from the back buffer AFTER the game+deco layers but BEFORE the OSD —
+    // WYSIWYG at displayed resolution, without the HUD (matches the Windows capture chain).
+    int cap_armed, cap_ready, cap_w, cap_h;
+    unsigned char *cap_buf;                    // BGRA top-down, cap_w*cap_h*4
     GLuint corner_tex;                       // quarter-circle alpha mask for rounding the 4 window corners
     // input event ring
     struct { int type, a, b; } evq[256];
@@ -393,6 +398,40 @@ int wlp_present(void *h, const void *bgra, int fw, int fh) {
         glDisable(GL_BLEND);
     }
 
+    // One-shot screenshot capture: read the displayed pixels back NOW — game + deco layers are
+    // drawn, the OSD is not yet. Captures the bezel composite rect when a bezel is up (the
+    // Windows app captures GameLayer the same way), else the game rect.
+    if (s->cap_armed) {
+        s->cap_armed = 0;
+        int cx = qx, cy = qy, cw = qw, ch = qh;
+        if (s->bez_on && s->bez_tex && s->bez_w > 0 && s->bez_h > 0) {
+            double bar = (double)s->bez_w / s->bez_h;
+            if ((double)s->w / availH > bar) { ch = availH; cw = (int)(availH * bar + 0.5); }
+            else { cw = s->w; ch = (int)(s->w / bar + 0.5); }
+            cx = (s->w - cw) / 2; cy = s->ins_bottom + (availH - ch) / 2;
+        }
+        if (cw > 0 && ch > 0) {
+            free(s->cap_buf);
+            s->cap_buf = malloc((size_t)cw * ch * 4);
+            if (s->cap_buf) {
+                glPixelStorei(GL_PACK_ALIGNMENT, 4);
+                glReadPixels(cx, cy, cw, ch, GL_BGRA, GL_UNSIGNED_BYTE, s->cap_buf);
+                // GL rows are bottom-up; flip to top-down in place for the PNG encoder.
+                size_t stride = (size_t)cw * 4;
+                unsigned char *tmp = malloc(stride);
+                if (tmp) {
+                    for (int y = 0; y < ch / 2; y++) {
+                        unsigned char *a = s->cap_buf + (size_t)y * stride;
+                        unsigned char *b = s->cap_buf + (size_t)(ch - 1 - y) * stride;
+                        memcpy(tmp, a, stride); memcpy(a, b, stride); memcpy(b, tmp, stride);
+                    }
+                    free(tmp);
+                    s->cap_w = cw; s->cap_h = ch; s->cap_ready = 1;
+                } else { free(s->cap_buf); s->cap_buf = NULL; }
+            }
+        }
+    }
+
     // OSD overlay (FPS + HUD): full-window RGBA quad, alpha-blended over the game.
     if (s->ov_on && s->ov_tex) {
         glViewport(0, 0, s->w, s->h);
@@ -487,6 +526,24 @@ void wlp_show_bezel(void *h, int on) {
     wlp *s = h; if (s) s->bez_on = on && s->bez_tex ? 1 : 0;
 }
 
+// Arm a one-shot displayed-frame capture; the NEXT wlp_present fills it (pre-OSD).
+void wlp_request_capture(void *h) {
+    wlp *s = h; if (s) { s->cap_armed = 1; s->cap_ready = 0; }
+}
+
+// Collect a finished capture: copies BGRA top-down into out (max_bytes guards), returns 1 and the
+// dims, then clears the slot. Returns 0 when no capture is ready (or it doesn't fit).
+int wlp_take_capture(void *h, void *out, int max_bytes, int *w, int *hh) {
+    wlp *s = h;
+    if (!s || !s->cap_ready || !s->cap_buf) return 0;
+    int need = s->cap_w * s->cap_h * 4;
+    if (!out || max_bytes < need) return 0;
+    memcpy(out, s->cap_buf, (size_t)need);
+    *w = s->cap_w; *hh = s->cap_h;
+    free(s->cap_buf); s->cap_buf = NULL; s->cap_ready = 0;
+    return 1;
+}
+
 // Reserve chrome space (title bar / status bar heights, window pixels). The game is fit between them.
 void wlp_set_insets(void *h, int top, int bottom) {
     wlp *s = h; if (!s) return;
@@ -554,10 +611,13 @@ void wlp_size(void *h, int *w, int *hh) {
 void wlp_destroy(void *h) {
     wlp *s = h;
     if (!s) return;
+    free(s->cap_buf); s->cap_buf = NULL;
     if (s->edpy != EGL_NO_DISPLAY) {
         eglMakeCurrent(s->edpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         if (s->tex) glDeleteTextures(1, &s->tex);
         if (s->ov_tex) glDeleteTextures(1, &s->ov_tex);
+        if (s->gov_tex) glDeleteTextures(1, &s->gov_tex);
+        if (s->bez_tex) glDeleteTextures(1, &s->bez_tex);
         if (s->corner_tex) glDeleteTextures(1, &s->corner_tex);
         if (s->esurf != EGL_NO_SURFACE) eglDestroySurface(s->edpy, s->esurf);
         if (s->ectx != EGL_NO_CONTEXT) eglDestroyContext(s->edpy, s->ectx);
