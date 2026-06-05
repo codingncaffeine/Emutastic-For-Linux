@@ -510,6 +510,17 @@ public partial class MainWindow : Window
                 App.Configuration.SetThemeConfiguration(theme);
                 App.Configuration.ScheduleSave();
             }
+            // In-game cog → "Notes"/"Manual": both windows live here (the host has no Avalonia).
+            else if (verb == "open-notes" && int.TryParse(arg, out int notesGameId))
+            {
+                var notesGame = _db?.GetGameById(notesGameId);
+                if (notesGame != null) NotesWindow.ShowFor(notesGame, this);
+            }
+            else if (verb == "open-manual" && int.TryParse(arg, out int manualGameId))
+            {
+                var manualGame = _db?.GetGameById(manualGameId);
+                if (manualGame != null) RunGuarded(() => ManualLauncher.OpenOrDownloadAsync(manualGame, _artworkFetch!));
+            }
             // In-game cog → "Add Cheat…": the dialog lives here (the host has no Avalonia).
             // Save appends to the per-game cheat JSON, then the host reloads it live.
             else if (verb == "open-cheat-editor" && int.TryParse(arg, out int cheatGameId))
@@ -1164,7 +1175,7 @@ public partial class MainWindow : Window
 
         // Deferred to their splinters (disabled stubs).
         items.Add(MenuAction("📝  Notes", () => NotesWindow.ShowFor(game, this)));
-        items.Add(MenuAction(ManualLauncher.HasUsableManual(game) ? "📖  View Manual" : "📖  Download Manual…",
+        items.Add(MenuAction(ManualLauncher.HasUsableManual(game) ? "📖  View Manual" : "⬇  Download Manual",
             () => RunGuarded(() => ManualLauncher.OpenOrDownloadAsync(game, _artworkFetch!))));
         // Cheats — only when the console's core supports them (upstream gate). Modal so two
         // windows can't last-write-wipe the same cheat JSON.

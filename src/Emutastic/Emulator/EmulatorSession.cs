@@ -1003,8 +1003,12 @@ namespace Emutastic.Emulator
                     && (Services.CheatSupport.Lookup(_corePath).Level != Services.CheatSupportLevel.NotSupported
                         || CheatsSnapshot().Count > 0);
                 m.Add(("Cheats", cheatable, "›", cheatable ? "\x01CHEATS" : null));
-                m.Add(("Notes",           false, null, null));
-                m.Add(("Manual",          false, null, null));
+                // Notes / Manual windows live in the MAIN APP (Avalonia + DB; the host has
+                // neither) — the request crosses processes like Controls/Cheats. They need
+                // --game-id to know which game (absent on bare CLI launches).
+                bool gameLinked = CheatGameId >= 0 && EmitHostCommand != null;
+                m.Add(("Notes",  gameLinked, null, gameLinked ? "\x01NOTES" : null));
+                m.Add(("Manual", gameLinked, null, gameLinked ? "\x01MANUAL" : null));
                 if (VisualOptions.Count > 0)
                     m.Add(("Visuals", true, "›", "\x01VISUALS")); // live core options (upstream's Visuals panel)
                 return m;
@@ -1086,6 +1090,16 @@ namespace Emutastic.Emulator
                             // "reload-cheats" back down our stdin. Keep the panel open — the next
                             // rebuild (toggle/back/reopen) shows the new entry.
                             EmitHostCommand?.Invoke($"open-cheat-editor {CheatGameId}");
+                            cogMenu = null;
+                        }
+                        else if (key == "\x01NOTES")
+                        {
+                            EmitHostCommand?.Invoke($"open-notes {CheatGameId}");
+                            cogMenu = null;
+                        }
+                        else if (key == "\x01MANUAL")
+                        {
+                            EmitHostCommand?.Invoke($"open-manual {CheatGameId}");
                             cogMenu = null;
                         }
                         else if (key == "\x01RECORD")
