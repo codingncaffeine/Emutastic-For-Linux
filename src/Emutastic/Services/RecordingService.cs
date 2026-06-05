@@ -60,6 +60,10 @@ namespace Emutastic.Services
         public bool IsRecording { get; private set; }
         public TimeSpan Elapsed => _elapsed.Elapsed;
 
+        /// <summary>The in-flight background encode once Stop() has run. The game-host waits on
+        /// this before process exit so closing the game mid-recording still produces the .mp4.</summary>
+        public Task? EncodeTask { get; private set; }
+
         /// <summary>Everything RecoverInterrupted needs to finish an orphaned encode.</summary>
         private sealed class RecordingSidecar
         {
@@ -199,7 +203,7 @@ namespace Emutastic.Services
             try { _audioTemp?.Flush(); _audioTemp?.Dispose(); } catch { }
             _videoTemp = null; _audioTemp = null;
             Trace.WriteLine($"[Rec] stopped after {_elapsed.Elapsed:mm\\:ss} frames={_framesWritten} dropped={_framesDropped}");
-            Task.Run(EncodeAndMux);
+            EncodeTask = Task.Run(EncodeAndMux);
         }
 
         private void EncodeAndMux()
@@ -213,11 +217,14 @@ namespace Emutastic.Services
         /// <summary>
         /// Finish any encode that a crash or hard power-off interrupted: every *.meta.json left
         /// in the recordings tree whose raw video still exists gets encoded now — forced x264,
-        /// since the interruption may well have BEEN a hardware-encoder wedge. Call once at
-        /// startup, off the UI thread.
+        /// since the interruption may well have BEEN a hardware-encoder wedge. Called at app
+        /// startup AND after every game-host exit (so a host that died mid-recording still
+        /// yields its .mp4 immediately, not at next launch). Off the UI thread.
         /// </summary>
+        private static int _sweeping;
         public static void RecoverInterrupted()
         {
+            if (Interlocked.Exchange(ref _sweeping, 1) != 0) return;   // one sweep at a time
             try
             {
                 if (FindFfmpeg() == null) return;
@@ -229,6 +236,16 @@ namespace Emutastic.Services
                     string audioRaw = outputPath + ".audio.raw";
                     try
                     {
+                        // A fresh .enc.mp4 means an encode is running on these files RIGHT NOW
+                        // (e.g. an ffmpeg orphaned by a killed host, or another process's sweep) —
+                        // leave it alone; a later sweep mops up if it never finishes.
+                        string tempMp4 = outputPath + ".enc.mp4";
+                        if (File.Exists(tempMp4) &&
+                            DateTime.UtcNow - File.GetLastWriteTimeUtc(tempMp4) < TimeSpan.FromSeconds(60))
+                        {
+                            Trace.WriteLine($"[Rec] recovery skipped (encode appears active): {outputPath}");
+                            continue;
+                        }
                         if (!File.Exists(videoRaw) || new FileInfo(videoRaw).Length == 0)
                         {
                             // Nothing salvageable — clear the leftovers.
@@ -249,6 +266,7 @@ namespace Emutastic.Services
                 }
             }
             catch (Exception ex) { Trace.WriteLine($"[Rec] recovery sweep failed: {ex.Message}"); }
+            finally { Volatile.Write(ref _sweeping, 0); }
         }
 
         private static string? EncodeAndMuxCore(string outputPath, string videoRawPath, string audioRawPath,

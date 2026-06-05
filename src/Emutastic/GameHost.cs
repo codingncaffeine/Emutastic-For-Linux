@@ -190,6 +190,15 @@ namespace Emutastic
                 warmQuit.Start();
             }
 
+            // Test hook: EMUTASTIC_AUTORECORD=1 starts a recording ~3s in — used to exercise the
+            // close-while-recording path end-to-end (stdin EOF → quit → stop → encode → exit)
+            // without keyboard/HUD interaction.
+            if (Environment.GetEnvironmentVariable("EMUTASTIC_AUTORECORD") == "1")
+            {
+                new Thread(() => { Thread.Sleep(3000); try { session.ToggleRecording(); } catch { } })
+                { IsBackground = true, Name = "AutoRecord" }.Start();
+            }
+
             var sw = Stopwatch.StartNew();
             // Run the game window on THIS (main) thread by default — Linux screen-sync prefers it. The host's
             // main thread has nothing else to do. EMUTASTIC_GL_MAINTHREAD=0 reverts to a background thread.
@@ -206,6 +215,17 @@ namespace Emutastic
             if (!mainThread) session.WaitForExit();   // inline mode already blocked until the game exited
             sw.Stop();
             session.Dispose();
+
+            // Closed mid-recording: the window is gone but the encode is still running — linger
+            // headless until it finishes rather than exiting and orphaning the raw capture.
+            // The wait is bounded by the encode's own ffmpeg timeouts (≤ ~11 min worst case).
+            var encode = session.PendingRecordingEncode;
+            if (encode != null && !encode.IsCompleted)
+            {
+                Trace.WriteLine("[Host] recording encode still running — waiting before exit…");
+                try { encode.Wait(TimeSpan.FromMinutes(12)); }
+                catch (Exception ex) { Trace.WriteLine($"[Host] encode wait ended: {ex.Message}"); }
+            }
 
             int playSeconds = (int)sw.Elapsed.TotalSeconds;
             Trace.WriteLine($"[Host] === game-host end: playSeconds={playSeconds} ===");

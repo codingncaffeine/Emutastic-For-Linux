@@ -201,6 +201,13 @@ namespace Emutastic.Services
                     catch (Exception ex) { Trace.WriteLine($"[Launcher] save-state ingest failed: {ex.Message}"); }
                 }
 
+                // Recording safety net: a host that exits cleanly finishes its own encode first,
+                // so this only finds work when the host CRASHED mid-recording/mid-encode — finish
+                // the orphaned encode now rather than at next app launch. (Skips anything a
+                // surviving ffmpeg is still actively writing.)
+                try { RecordingService.RecoverInterrupted(); }
+                catch (Exception ex) { Trace.WriteLine($"[Launcher] recording recovery failed: {ex.Message}"); }
+
                 if (onExit != null) Dispatcher.UIThread.Post(() => onExit(result));
             });
         }

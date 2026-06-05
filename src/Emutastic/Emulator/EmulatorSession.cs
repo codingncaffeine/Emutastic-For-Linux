@@ -2524,10 +2524,18 @@ namespace Emutastic.Emulator
         private static int _activeCount;
         public static bool AnyActive => System.Threading.Volatile.Read(ref _activeCount) > 0;
 
+        /// <summary>In-flight recording encode, if any — the game-host waits on this before
+        /// process exit so closing the game mid-recording still produces the final .mp4.</summary>
+        public System.Threading.Tasks.Task? PendingRecordingEncode => _recording?.EncodeTask;
+
         public void Dispose()
         {
             if (_running) System.Threading.Interlocked.Decrement(ref _activeCount);
             _running = false;
+            // Quitting mid-recording (ANY teardown path funnels through here): stop + encode
+            // rather than losing the capture. Stop() never blocks — the encode runs in the
+            // background and is exposed via PendingRecordingEncode for hosts to wait on.
+            try { if (_recording is { IsRecording: true }) _recording.Stop(); } catch { }
             // The emu thread must fully exit retro_run before we free the core / SDL handles it
             // calls into (video/audio/input callbacks). For software cores retro_run returns in
             // ~one frame, so this joins immediately. If a core hangs and the thread does NOT join,
