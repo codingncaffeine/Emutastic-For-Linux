@@ -1760,7 +1760,7 @@ namespace Emutastic.Emulator
                 string safeTitle = FileNameHelper.SanitizeFileName(SaveGameTitle.Length > 0 ? SaveGameTitle : "game");
                 string dir = Path.Combine(AppPaths.GetFolder("Recordings", FileNameHelper.SanitizeFileName(_handler.ConsoleName)), safeTitle);
                 Directory.CreateDirectory(dir);
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("xdg-open", dir) { UseShellExecute = false });
+                Services.ShellOpen.Open(dir);
             }
             catch (Exception ex) { ShowDiskMessage($"Could not open folder: {ex.Message}", 4); }
         }

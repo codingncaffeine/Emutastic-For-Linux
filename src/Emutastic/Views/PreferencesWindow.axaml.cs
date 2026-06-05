@@ -269,7 +269,7 @@ public partial class PreferencesWindow : Window
 
     private static void OpenUrl(string url)
     {
-        try { System.Diagnostics.Process.Start("xdg-open", url); } catch { }
+        Services.ShellOpen.Open(url);
     }
 
     // ════════════════════════════════════════════════════════════════════════

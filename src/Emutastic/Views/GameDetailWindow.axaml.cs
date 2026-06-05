@@ -397,7 +397,7 @@ public partial class GameDetailWindow : Window
             string rom = AppPaths.FromStoragePath(_game.RomPath);
             string? dir = System.IO.Path.GetDirectoryName(rom);
             if (!string.IsNullOrEmpty(dir) && System.IO.Directory.Exists(dir))
-                try { System.Diagnostics.Process.Start("xdg-open", dir); } catch { }
+                Services.ShellOpen.Open(dir);
         };
         menu.Items.Add(showInFiles);
 

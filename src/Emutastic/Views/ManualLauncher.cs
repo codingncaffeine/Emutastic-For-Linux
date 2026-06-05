@@ -18,7 +18,7 @@ public static class ManualLauncher
 
     private static void OpenInSystemViewer(Game g)
     {
-        try { System.Diagnostics.Process.Start("xdg-open", AppPaths.FromStoragePath(g.ManualPath)); } catch { }
+        ShellOpen.Open(AppPaths.FromStoragePath(g.ManualPath));
     }
 
     /// <summary>Library / detail-card path: download (with banner progress via the fetch

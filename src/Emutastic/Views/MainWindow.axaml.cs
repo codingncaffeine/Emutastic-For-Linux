@@ -1190,7 +1190,7 @@ public partial class MainWindow : Window
             string rom = AppPaths.FromStoragePath(game.RomPath);
             string? dir = System.IO.Path.GetDirectoryName(rom);
             if (!string.IsNullOrEmpty(dir) && System.IO.Directory.Exists(dir))
-                try { System.Diagnostics.Process.Start("xdg-open", dir); } catch { }
+                Services.ShellOpen.Open(dir);
         }));
 
         items.Add(new Separator());
@@ -1685,7 +1685,7 @@ public partial class MainWindow : Window
             }
             else
             {
-                try { System.Diagnostics.Process.Start("xdg-open", ss.FilePath); } catch { }
+                Services.ShellOpen.Open(ss.FilePath);
             }
         };
 
