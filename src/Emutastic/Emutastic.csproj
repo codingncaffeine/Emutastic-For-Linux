@@ -35,6 +35,21 @@
           DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>
 
+  <!-- rcheevos (RetroAchievements rc_client) built from the vendored source at
+       native/rcheevos-src (pinned v11.6.0). build.sh also runs the checkabi
+       harness whose numbers RcheevosInterop.VerifyAbi() asserts at runtime. -->
+  <Target Name="BuildRcheevos" BeforeTargets="Build"
+          Condition="$([MSBuild]::IsOSPlatform('Linux'))"
+          Inputs="$(MSBuildProjectDirectory)/../../native/rcheevos/build.sh;$(MSBuildProjectDirectory)/../../native/rcheevos/checkabi.c"
+          Outputs="$(MSBuildProjectDirectory)/../../native/rcheevos/librcheevos.so">
+    <Exec Command="bash &quot;$(MSBuildProjectDirectory)/../../native/rcheevos/build.sh&quot;" />
+  </Target>
+  <Target Name="CopyRcheevos" AfterTargets="BuildRcheevos;Build"
+          Condition="$([MSBuild]::IsOSPlatform('Linux')) And Exists('$(MSBuildProjectDirectory)/../../native/rcheevos/librcheevos.so')">
+    <Copy SourceFiles="$(MSBuildProjectDirectory)/../../native/rcheevos/librcheevos.so"
+          DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
   <ItemGroup>
     <!-- VENDORED: Avalonia 12.1.999 built from PR #20926 (Linux X11 drag-and-drop). Served from the
          local feed in nuget.config. Avalonia.Desktop is intentionally NOT referenced — it drags in

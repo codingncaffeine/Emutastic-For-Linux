@@ -31,6 +31,14 @@ sealed class Program
             Environment.Exit(Emutastic.GameHost.Run(args));
             return;
         }
+        // Dev-only: RetroAchievements native-foundation selftest — verifies the marshaled
+        // struct layouts against the checkabi numbers and exercises rc_client create/destroy
+        // through librcheevos.so. `Emutastic --ra-selftest`. No window, no network, no login.
+        if (args.Length >= 1 && args[0] == "--ra-selftest")
+        {
+            Environment.Exit(Emutastic.Services.RaSelfTest.Run());
+            return;
+        }
         // Dev-only: render the in-game OSD (status line + HUD pill) to PNGs for an aesthetic check —
         // `Emutastic --osd-preview [outDir]`. Pure Skia (GlOsd), no GL/window. See Platform/GlOsd.cs.
         if (args.Length >= 1 && args[0] == "--osd-preview")
