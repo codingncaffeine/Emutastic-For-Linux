@@ -1168,6 +1168,8 @@ public partial class PreferencesWindow : Window
                 this.FindControl<CheckBox>("SyncEncryptionEnabled")!.IsChecked = cfg.EncryptionEnabled;
                 this.FindControl<StackPanel>("PassphrasePanel")!.IsVisible = cfg.EncryptionEnabled;
                 this.FindControl<TextBlock>("PassphraseHint")!.IsVisible = cfg.EncryptionEnabled;
+                this.FindControl<CheckBox>("SyncPerPcRepo")!.IsChecked = cfg.UsePerPcRepo;
+                UpdatePerPcRepoCopy(cfg.UsePerPcRepo);
             }
         }
         finally { _suppressCloudSave = false; }
@@ -1183,6 +1185,45 @@ public partial class PreferencesWindow : Window
         foreach (var name in new[] { "SyncOnClose", "SyncPeriodic", "SyncManual" })
             this.FindControl<RadioButton>(name)!.IsCheckedChanged += (_, _) => SyncTimingChanged();
         this.FindControl<CheckBox>("SyncEncryptionEnabled")!.IsCheckedChanged += (_, _) => SyncEncryptionChanged();
+        this.FindControl<CheckBox>("SyncPerPcRepo")!.IsCheckedChanged += (_, _) => SyncPerPcRepoChanged();
+    }
+
+    /// <summary>
+    /// Mode-specific explainer under the per-PC repo toggle. The wording
+    /// must make the tradeoff unmistakable: shared = follows you between
+    /// PCs, separate = backup unique to this machine that other PCs never
+    /// touch.
+    /// </summary>
+    private void UpdatePerPcRepoCopy(bool perPc)
+    {
+        this.FindControl<TextBlock>("SyncRepoExplainText")!.Text = perPc
+            ? "On: this PC backs up to its own repository. Saves and the game "
+              + "library on this PC stay unique to it — they will not appear on "
+              + "your other machines, and other machines can't overwrite them."
+            : "Off: this PC shares one cloud repository with your other PCs — "
+              + "saves and your game library follow you between machines.";
+        this.FindControl<TextBlock>("SyncRepoNameText")!.Text =
+            $"Repository in use: {Services.GitHubSyncService.EffectiveRepoName}";
+    }
+
+    private void SyncPerPcRepoChanged()
+    {
+        if (_suppressCloudSave) return;
+        var cfg = App.Configuration?.GetCloudSyncConfiguration();
+        if (cfg == null) return;
+        cfg.UsePerPcRepo = this.FindControl<CheckBox>("SyncPerPcRepo")!.IsChecked == true;
+        App.Configuration!.SetCloudSyncConfiguration(cfg);
+        App.Configuration!.ScheduleSave();
+
+        // Everything cached from the previous repo is now wrong.
+        var svc = Services.GitHubSyncService.Instance;
+        svc.ResetRepoBinding();
+        UpdatePerPcRepoCopy(cfg.UsePerPcRepo);
+
+        // The shared repo was created at sign-in; a per-PC repo may not
+        // exist yet — create it now so the first sync doesn't 404.
+        if (svc.IsAuthenticated && cfg.UsePerPcRepo)
+            _ = svc.EnsureRepoExistsAsync();
     }
 
     private async Task CloudSyncSignInAsync()
