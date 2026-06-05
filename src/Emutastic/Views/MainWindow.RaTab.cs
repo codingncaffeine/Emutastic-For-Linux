@@ -1995,7 +1995,10 @@ public partial class MainWindow
                 _friendDetailWindows.Remove(userId);
             };
             _friendDetailWindows[userId] = window;
-            window.Show();
+            // Owned by the main window so it closes with the app — unowned, it outlived a main-
+            // window close (ShutdownMode is last-window-close) and, with the ✕ unwired, could
+            // only be killed from the taskbar.
+            window.Show(this);
         }
 
         private async void FriendRowRemove_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)

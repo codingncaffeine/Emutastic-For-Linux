@@ -47,7 +47,11 @@
                     Foreground="{DynamicResource TextSecondaryBrush}"
                     BorderThickness="0"
                     FontSize="12"
-                    Cursor="Hand"/>
+                    Padding="0"
+                    HorizontalContentAlignment="Center"
+                    VerticalContentAlignment="Center"
+                    Cursor="Hand"
+                    Click="TitleBarCloseBtn_Click"/>
         </Grid>
 
         <!-- Header: avatar + identity + stats glance -->
@@ -104,7 +108,8 @@
                             Padding="0"
                             Margin="0,8,0,0"
                             HorizontalAlignment="Left"
-                            Cursor="Hand">
+                            Cursor="Hand"
+                            Click="HeaderToastsToggle_Click">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Name="HeaderToastsIcon" Text="🔔" FontSize="13" VerticalAlignment="Center"
                                        Foreground="{DynamicResource TextSecondaryBrush}"/>
