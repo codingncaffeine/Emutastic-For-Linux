@@ -208,14 +208,27 @@ namespace Emutastic.Platform
 
             // close removed
             for (int i = _pads.Count - 1; i >= 0; i--)
-                if (!present.Contains(_pads[i].id)) { SDL_CloseGamepad(_pads[i].handle); _pads.RemoveAt(i); }
+                if (!present.Contains(_pads[i].id))
+                {
+                    Services.ControllerDiagLog.Write(
+                        $"[session] Removed: id={_pads[i].id} \"{Marshal.PtrToStringUTF8(SDL_GetGamepadName(_pads[i].handle)) ?? "?"}\"");
+                    SDL_CloseGamepad(_pads[i].handle);
+                    _pads.RemoveAt(i);
+                }
 
             // open new
             foreach (uint id in present)
                 if (!_pads.Exists(p => p.id == id))
                 {
                     IntPtr h = SDL_OpenGamepad(id);
-                    if (h != IntPtr.Zero) _pads.Add((id, h));
+                    if (h != IntPtr.Zero)
+                    {
+                        _pads.Add((id, h));
+                        Services.ControllerDiagLog.Write(
+                            $"[session] Detected: id={id} \"{Marshal.PtrToStringUTF8(SDL_GetGamepadName(h)) ?? "?"}\" (player {_pads.Count})");
+                    }
+                    else
+                        Services.ControllerDiagLog.Write($"[session] Open FAILED for id={id}");
                 }
         }
 

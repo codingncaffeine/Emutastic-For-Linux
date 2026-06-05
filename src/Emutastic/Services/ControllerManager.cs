@@ -54,6 +54,9 @@ namespace Emutastic.Services
 
         public bool IsConnected => _pads.Count > 0;
 
+        // Detection/hot-plug diagnostics → Logs/controller-diag.log (see ControllerDiagLog).
+        private static void CtrlLog(string msg) => ControllerDiagLog.Write($"[panel] {msg}");
+
         private readonly List<(uint id, IntPtr handle)> _pads = new();
         private readonly Dictionary<uint, bool> _prev = new();    // raw id -> last pressed (active device)
         private int _activeDevice;                                // index into _pads for capture
@@ -64,6 +67,8 @@ namespace Emutastic.Services
         public ControllerManager()
         {
             _initialized = SDL_InitSubSystem(SDL_INIT_GAMEPAD);   // refcounted — safe alongside a session's SdlInput
+            CtrlLog(_initialized ? "SDL gamepad subsystem initialized"
+                                 : "SDL gamepad subsystem init FAILED");
             Refresh();
             _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
             _timer.Tick += (_, _) => Poll();
@@ -98,7 +103,12 @@ namespace Emutastic.Services
                     IntPtr h = SDL_OpenGamepad(id);
                     if (h != IntPtr.Zero) { _pads.Add((id, h)); changed = true; }
                 }
-            if (changed) { _prev.Clear(); ConnectionChanged?.Invoke(IsConnected); }
+            if (changed)
+            {
+                _prev.Clear();
+                CtrlLog($"Device set changed: count={_pads.Count} names=[{string.Join(", ", GetDeviceNames())}]");
+                ConnectionChanged?.Invoke(IsConnected);
+            }
         }
 
         private int _refreshCounter;

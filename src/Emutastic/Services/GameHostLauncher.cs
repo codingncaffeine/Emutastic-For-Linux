@@ -92,7 +92,7 @@ namespace Emutastic.Services
                 _ = Task.Run(async () =>
                 {
                     try { await syncSvc.PullSaveBeforeLaunchAsync(game).ConfigureAwait(false); }
-                    catch (Exception ex) { Trace.WriteLine($"[CloudSync] pre-launch pull failed: {ex.Message}"); }
+                    catch (Exception ex) { CloudSyncLog.Write($"pre-launch pull failed: {ex.Message}"); }
                     Dispatcher.UIThread.Post(() => SpawnHost(corePath, romPath, console, game, loadStatePath, onExit));
                 });
                 return;

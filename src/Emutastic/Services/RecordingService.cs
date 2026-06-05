@@ -40,6 +40,28 @@ namespace Emutastic.Services
     /// </summary>
     public sealed class RecordingService
     {
+        // Dedicated recording-lifecycle log (upstream parity: Logs/recording_debug.log —
+        // capture setup, encoding, teardown, recovery). Each write echoes to Trace with
+        // the [Rec] prefix so the lines still interleave with core events in
+        // emulator-host.log. Writers live in two processes (game-host records, the
+        // library runs RecoverInterrupted) — the lock covers in-process concurrency,
+        // a rare cross-process open collision just drops the file line (Trace still has it).
+        private static readonly object _recLogGate = new();
+        private static void RecLog(string msg)
+        {
+            try
+            {
+                Trace.WriteLine($"[Rec] {msg}");
+                string path = Path.Combine(AppPaths.GetFolder("Logs"), "recording_debug.log");
+                lock (_recLogGate)
+                {
+                    LogRotation.RotateIfLarge(path);
+                    File.AppendAllText(path, $"{DateTime.Now:HH:mm:ss.fff} {msg}{Environment.NewLine}");
+                }
+            }
+            catch { /* never throw from logging */ }
+        }
+
         private const int FramePoolSize = 6;
 
         private string _outputPath = "";
@@ -120,7 +142,7 @@ namespace Emutastic.Services
                 var sc = new RecordingSidecar { Width = width, Height = height, Fps = fps, SampleRate = sampleRate, Settings = settings };
                 File.WriteAllText(outputPath + ".meta.json", JsonSerializer.Serialize(sc));
             }
-            catch (Exception ex) { Trace.WriteLine($"[Rec] sidecar write failed: {ex.Message}"); }
+            catch (Exception ex) { RecLog($"sidecar write failed: {ex.Message}"); }
 
             _frameBytes = width * height * 4;   // session frames are always tightly-packed BGRA
             _framePool = new ConcurrentBag<byte[]>();
@@ -134,7 +156,7 @@ namespace Emutastic.Services
             _videoWriter.Start(); _audioWriter.Start();
             _elapsed.Restart();
             IsRecording = true;
-            Trace.WriteLine($"[Rec] started {width}x{height}@{fps:F2} sr={sampleRate} → {outputPath}");
+            RecLog($"started {width}x{height}@{fps:F2} sr={sampleRate} → {outputPath}");
             return null;
         }
 
@@ -173,7 +195,7 @@ namespace Emutastic.Services
                     _framePool!.Add(buf);
                 }
             }
-            catch (Exception ex) { Trace.WriteLine($"[Rec] video writer ended: {ex.Message}"); }
+            catch (Exception ex) { RecLog($"video writer ended: {ex.Message}"); }
         }
 
         private void AudioWriterLoop()
@@ -186,7 +208,7 @@ namespace Emutastic.Services
                     if (rented) ArrayPool<byte>.Shared.Return(buf);
                 }
             }
-            catch (Exception ex) { Trace.WriteLine($"[Rec] audio writer ended: {ex.Message}"); }
+            catch (Exception ex) { RecLog($"audio writer ended: {ex.Message}"); }
         }
 
         /// <summary>Stop capturing and kick off the background encode (onComplete fires when done).</summary>
@@ -202,7 +224,7 @@ namespace Emutastic.Services
             try { _videoTemp?.Flush(); _videoTemp?.Dispose(); } catch { }
             try { _audioTemp?.Flush(); _audioTemp?.Dispose(); } catch { }
             _videoTemp = null; _audioTemp = null;
-            Trace.WriteLine($"[Rec] stopped after {_elapsed.Elapsed:mm\\:ss} frames={_framesWritten} dropped={_framesDropped}");
+            RecLog($"stopped after {_elapsed.Elapsed:mm\\:ss} frames={_framesWritten} dropped={_framesDropped}");
             EncodeTask = Task.Run(EncodeAndMux);
         }
 
@@ -243,7 +265,7 @@ namespace Emutastic.Services
                         if (File.Exists(tempMp4) &&
                             DateTime.UtcNow - File.GetLastWriteTimeUtc(tempMp4) < TimeSpan.FromSeconds(60))
                         {
-                            Trace.WriteLine($"[Rec] recovery skipped (encode appears active): {outputPath}");
+                            RecLog($"recovery skipped (encode appears active): {outputPath}");
                             continue;
                         }
                         if (!File.Exists(videoRaw) || new FileInfo(videoRaw).Length == 0)
@@ -257,15 +279,15 @@ namespace Emutastic.Services
                         var sc = JsonSerializer.Deserialize<RecordingSidecar>(File.ReadAllText(metaPath));
                         if (sc == null || sc.Width <= 0 || sc.Height <= 0) { File.Delete(metaPath); continue; }
                         sc.Settings.Encoder = "x264";
-                        Trace.WriteLine($"[Rec] recovering interrupted recording: {outputPath}");
+                        RecLog($"recovering interrupted recording: {outputPath}");
                         string? err = EncodeAndMuxCore(outputPath, videoRaw, audioRaw,
                                                        sc.Width, sc.Height, sc.Fps, sc.SampleRate, sc.Settings);
-                        Trace.WriteLine(err == null ? $"[Rec] recovered {outputPath}" : $"[Rec] recovery failed: {err}");
+                        RecLog(err == null ? $"recovered {outputPath}" : $"recovery failed: {err}");
                     }
-                    catch (Exception ex) { Trace.WriteLine($"[Rec] recovery skipped {metaPath}: {ex.Message}"); }
+                    catch (Exception ex) { RecLog($"recovery skipped {metaPath}: {ex.Message}"); }
                 }
             }
-            catch (Exception ex) { Trace.WriteLine($"[Rec] recovery sweep failed: {ex.Message}"); }
+            catch (Exception ex) { RecLog($"recovery sweep failed: {ex.Message}"); }
             finally { Volatile.Write(ref _sweeping, 0); }
         }
 
@@ -291,7 +313,7 @@ namespace Emutastic.Services
                 bool vaapiRequested = settings.Encoder.Equals("VAAPI", StringComparison.OrdinalIgnoreCase);
                 bool vaapiBlocked = vaapiRequested && File.Exists(VaapiMarkerPath);
                 if (vaapiBlocked)
-                    Trace.WriteLine("[Rec] VAAPI requested but blacklisted by an earlier mid-encode failure — using x264");
+                    RecLog("VAAPI requested but blacklisted by an earlier mid-encode failure — using x264");
                 bool useVaapi = vaapiRequested && !vaapiBlocked && !lossless && !settings.HighChroma
                     && File.Exists("/dev/dri/renderD128") && ProbeEncoder(ffmpeg, "h264_vaapi");
 
@@ -330,7 +352,7 @@ namespace Emutastic.Services
                 string vaapiDev = useVaapi ? "-vaapi_device /dev/dri/renderD128 " : "";
                 string step1 = $"-y {vaapiDev}-f rawvideo -pixel_format bgra -video_size {width}x{height} " +
                                $"-framerate {fpsArg} -i \"{videoRawPath}\" -sws_flags neighbor -vf \"{vf}\" {codec} -an \"{tempMp4}\"";
-                Trace.WriteLine($"[Rec] encode ({(useVaapi ? "VAAPI" : "x264")}): ffmpeg {step1}");
+                RecLog($"encode ({(useVaapi ? "VAAPI" : "x264")}): ffmpeg {step1}");
 
                 bool step1Ok;
                 if (useVaapi)
@@ -349,7 +371,7 @@ namespace Emutastic.Services
                     if (useVaapi)
                     {
                         // VAAPI can fail driver-side — retry on x264 rather than losing the recording.
-                        Trace.WriteLine("[Rec] VAAPI encode failed — retrying with libx264 (VAAPI now blacklisted)");
+                        RecLog("VAAPI encode failed — retrying with libx264 (VAAPI now blacklisted)");
                         string sw = $"-y -f rawvideo -pixel_format bgra -video_size {width}x{height} " +
                                     $"-framerate {fpsArg} -i \"{videoRawPath}\" -sws_flags neighbor " +
                                     $"-vf \"scale={targetW}:{targetH}:flags=neighbor\" -c:v libx264 -preset {x264Preset} -crf {crf} -pix_fmt {pixFmtOut} -an \"{tempMp4}\"";
@@ -370,12 +392,12 @@ namespace Emutastic.Services
                 {
                     File.Move(tempMp4, outputPath, overwrite: true);
                 }
-                Trace.WriteLine($"[Rec] saved {outputPath}");
+                RecLog($"saved {outputPath}");
             }
             catch (Exception ex)
             {
                 error = $"Encode failed: {ex.Message}";
-                Trace.WriteLine($"[Rec] EncodeAndMux: {ex}");
+                RecLog($"EncodeAndMux: {ex}");
             }
             finally
             {
@@ -417,12 +439,12 @@ namespace Emutastic.Services
                     string? line;
                     while ((line = p.StandardError.ReadLine()) != null) tail = line;
                 });
-                if (!p.WaitForExit(timeoutMs)) { try { p.Kill(true); } catch { } Trace.WriteLine("[Rec] ffmpeg timed out"); return false; }
+                if (!p.WaitForExit(timeoutMs)) { try { p.Kill(true); } catch { } RecLog("ffmpeg timed out"); return false; }
                 errTask.Wait(2000);
-                if (p.ExitCode != 0) Trace.WriteLine($"[Rec] ffmpeg exit={p.ExitCode}: {tail}");
+                if (p.ExitCode != 0) RecLog($"ffmpeg exit={p.ExitCode}: {tail}");
                 return p.ExitCode == 0;
             }
-            catch (Exception ex) { Trace.WriteLine($"[Rec] ffmpeg launch failed: {ex.Message}"); return false; }
+            catch (Exception ex) { RecLog($"ffmpeg launch failed: {ex.Message}"); return false; }
         }
 
         private void Cleanup()

@@ -224,14 +224,14 @@ namespace Emutastic.Services
                 req.Content = new StringContent(body, Encoding.UTF8, "application/json");
                 using var resp = await Http.SendAsync(req, ct).ConfigureAwait(false);
                 if (resp.StatusCode == HttpStatusCode.UnprocessableEntity)
-                    Trace.WriteLine("[CloudSync] Repo already exists (422)");
+                    CloudSyncLog.Write("Repo already exists (422)");
                 else
                     resp.EnsureSuccessStatusCode();
-                Trace.WriteLine($"[CloudSync] Created repo {_username}/{RepoName}");
+                CloudSyncLog.Write($"Created repo {_username}/{RepoName}");
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[CloudSync] Repo creation failed: {ex.Message}");
+                CloudSyncLog.Write($"Repo creation failed: {ex.Message}");
             }
         }
 
@@ -284,12 +284,12 @@ namespace Emutastic.Services
                     return true;
                 }
 
-                Trace.WriteLine($"[CloudSync] Upload failed {repoPath}: {resp.StatusCode}");
+                CloudSyncLog.Write($"Upload failed {repoPath}: {resp.StatusCode}");
                 return false;
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[CloudSync] Upload exception {repoPath}: {ex.Message}");
+                CloudSyncLog.Write($"Upload exception {repoPath}: {ex.Message}");
                 return false;
             }
         }
@@ -325,12 +325,12 @@ namespace Emutastic.Services
                     return true;
                 }
 
-                Trace.WriteLine($"[CloudSync] Delete failed {repoPath}: {resp.StatusCode}");
+                CloudSyncLog.Write($"Delete failed {repoPath}: {resp.StatusCode}");
                 return false;
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[CloudSync] Delete exception {repoPath}: {ex.Message}");
+                CloudSyncLog.Write($"Delete exception {repoPath}: {ex.Message}");
                 return false;
             }
         }
@@ -355,7 +355,7 @@ namespace Emutastic.Services
             if (!known) return;
 
             if (await DeleteFileAsync(counterpart, ct).ConfigureAwait(false))
-                Trace.WriteLine($"[CloudSync] Removed stale variant: {counterpart}");
+                CloudSyncLog.Write($"Removed stale variant: {counterpart}");
             else
                 _manifestCache.Files.TryRemove(counterpart, out _);
         }
@@ -381,7 +381,7 @@ namespace Emutastic.Services
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[CloudSync] Download exception {repoPath}: {ex.Message}");
+                CloudSyncLog.Write($"Download exception {repoPath}: {ex.Message}");
                 return null;
             }
         }
@@ -410,7 +410,7 @@ namespace Emutastic.Services
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[CloudSync] SHA cache refresh failed: {ex.Message}");
+                CloudSyncLog.Write($"SHA cache refresh failed: {ex.Message}");
             }
         }
 
@@ -488,7 +488,7 @@ namespace Emutastic.Services
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[CloudSync] Manifest load failed: {ex.Message}");
+                CloudSyncLog.Write($"Manifest load failed: {ex.Message}");
                 _manifestCache = new SyncManifest();
             }
         }
@@ -513,7 +513,7 @@ namespace Emutastic.Services
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[CloudSync] Manifest save failed: {ex.Message}");
+                CloudSyncLog.Write($"Manifest save failed: {ex.Message}");
             }
         }
 
@@ -585,7 +585,7 @@ namespace Emutastic.Services
                     string counterpart = isEnc ? stale[..^4] : stale + ".enc";
                     if (!_shaCache.ContainsKey(counterpart)) continue; // lone copy — keep
                     if (await DeleteFileAsync(stale, ct).ConfigureAwait(false))
-                        Trace.WriteLine($"[CloudSync] Removed stale variant: {stale}");
+                        CloudSyncLog.Write($"Removed stale variant: {stale}");
                 }
 
                 // UPLOAD: local saves newer than the manifest.
@@ -691,7 +691,7 @@ namespace Emutastic.Services
                                         SizeBytes = snapInfo.Length
                                     };
                                     uploaded++;
-                                    Trace.WriteLine("[CloudSync] Database uploaded");
+                                    CloudSyncLog.Write("Database uploaded");
                                 }
                                 else errors++;
                             }
@@ -717,19 +717,19 @@ namespace Emutastic.Services
                                 Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
                                 File.WriteAllBytes(dbPath, remoteDb);
                                 downloaded++;
-                                Trace.WriteLine("[CloudSync] Database downloaded from remote");
+                                CloudSyncLog.Write("Database downloaded from remote");
                             }
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    Trace.WriteLine($"[CloudSync] Database sync failed: {ex.Message}");
+                    CloudSyncLog.Write($"Database sync failed: {ex.Message}");
                     errors++;
                 }
 
                 await SaveManifestAsync(ct).ConfigureAwait(false);
-                Trace.WriteLine($"[CloudSync] Full sync: {uploaded} up, {downloaded} down, {errors} errors");
+                CloudSyncLog.Write($"Full sync: {uploaded} up, {downloaded} down, {errors} errors");
                 return new SyncResult(uploaded, downloaded, errors);
             }
             finally { _fullSyncLock.Release(); }
@@ -748,7 +748,7 @@ namespace Emutastic.Services
             var gameLock = GetGameLock(game.RomHash);
             if (!await gameLock.WaitAsync(5000, ct).ConfigureAwait(false))
             {
-                Trace.WriteLine("[CloudSync] Lock timeout — skipping download, using local save");
+                CloudSyncLog.Write("Lock timeout — skipping download, using local save");
                 return;
             }
             try
@@ -774,12 +774,12 @@ namespace Emutastic.Services
                     }
                     Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
                     File.WriteAllBytes(localPath, remote);
-                    Trace.WriteLine($"[CloudSync] Downloaded remote save: {repoPath}");
+                    CloudSyncLog.Write($"Downloaded remote save: {repoPath}");
                 }
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[CloudSync] Pre-launch download failed: {ex.Message}");
+                CloudSyncLog.Write($"Pre-launch download failed: {ex.Message}");
             }
             finally { gameLock.Release(); }
         }
@@ -814,12 +814,12 @@ namespace Emutastic.Services
                         SizeBytes = new FileInfo(localPath).Length
                     };
                     await SaveManifestAsync(ct).ConfigureAwait(false);
-                    Trace.WriteLine($"[CloudSync] Uploaded save: {repoPath}");
+                    CloudSyncLog.Write($"Uploaded save: {repoPath}");
                 }
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[CloudSync] Post-session upload failed: {ex.Message}");
+                CloudSyncLog.Write($"Post-session upload failed: {ex.Message}");
             }
         }
     }
