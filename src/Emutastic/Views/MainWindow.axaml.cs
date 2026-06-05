@@ -100,11 +100,16 @@ public partial class MainWindow : Window
         // Search box → debounced VM search (scoped to the current console when one is selected).
         var search = this.FindControl<TextBox>("SearchBox")!;
         var searchClear = this.FindControl<Button>("SearchClear")!;
+        var searchCount = this.FindControl<TextBlock>("SearchResultCount")!;
         search.TextChanged += (_, _) =>
         {
             if (_suppressSearchTextChanged) return;
             string text = search.Text ?? "";
             searchClear.IsVisible = !string.IsNullOrEmpty(text);
+            // Count readout only while a query is typed (upstream: DataTrigger on
+            // SearchBox.Text). On the Library tab only — Save States / Screenshots
+            // searches don't go through the VM, so GameCountText would be stale.
+            searchCount.IsVisible = !string.IsNullOrEmpty(text) && ActiveTab() == "Library";
             // Route the query to whichever tab is active (each keeps its own filter).
             // Save States / Screenshots repopulate synchronously on the UI thread, so
             // debounce keystrokes (matches upstream's 180ms cancellable delay).
@@ -207,12 +212,20 @@ public partial class MainWindow : Window
     private void OnTabClick(object? sender, RoutedEventArgs e)
     {
         if (sender is not ToggleButton clicked) return;
+        ActivateTab((clicked.Tag as string) ?? "Library");
+    }
+
+    /// <summary>Switches the active top-level tab: toggle states + content swap +
+    /// search routing. Shared by OnTabClick and OnNavigated — sidebar navigation
+    /// must land in the Library tab (upstream 6e1f073).</summary>
+    private void ActivateTab(string tag)
+    {
         foreach (var name in new[] { "TabLibrary", "TabSaveStates", "TabScreenshots", "TabAchievements" })
         {
             var tab = this.FindControl<ToggleButton>(name)!;
-            tab.IsChecked = ReferenceEquals(tab, clicked);
+            tab.IsChecked = (tab.Tag as string) == tag;
         }
-        ShowTab((clicked.Tag as string) ?? "Library");
+        ShowTab(tag);
     }
 
     private bool _suppressSearchTextChanged;
@@ -251,6 +264,9 @@ public partial class MainWindow : Window
         _screenshotsSearchQuery = "";
         if (searchClear  != null) searchClear.IsVisible  = false;
         if (searchBorder != null) searchBorder.IsVisible = tag != "Achievements";
+        // The clear above is suppressed, so TextChanged won't hide the count readout.
+        if (this.FindControl<TextBlock>("SearchResultCount") is { } searchCount)
+            searchCount.IsVisible = false;
         _suppressSearchTextChanged = false;
 
         switch (tag)
@@ -385,6 +401,28 @@ public partial class MainWindow : Window
     // Runs after every navigation: keeps the 2D/3D toggle and the per-console spacing control in sync.
     private void OnNavigated(string tag)
     {
+        // Sidebar navigation always lands in the Library tab. Without this,
+        // clicking a console while on Save States/Screenshots/Achievements
+        // left the old tab's content on screen and kept the search box
+        // routed to that tab's search.
+        if (ActiveTab() != "Library") ActivateTab("Library");
+
+        // Navigating away ends the current search (upstream OnNavigated): clear the
+        // box with TextChanged suppressed — the freshly navigated view replaces the
+        // result set, so no SearchGames("") pass is wanted (the VM cancels any
+        // in-flight search itself via CancelInFlightSearch).
+        var searchBox = this.FindControl<TextBox>("SearchBox");
+        if (!string.IsNullOrEmpty(searchBox?.Text))
+        {
+            _suppressSearchTextChanged = true;
+            searchBox!.Text = "";
+            _suppressSearchTextChanged = false;
+            // Suppressed clear ⇒ TextChanged won't hide these (upstream hides them
+            // via Style triggers on SearchBox.Text; ours are toggled in code).
+            if (this.FindControl<Button>("SearchClear") is { } sc) sc.IsVisible = false;
+            if (this.FindControl<TextBlock>("SearchResultCount") is { } cnt) cnt.IsVisible = false;
+        }
+
         _currentNavTag = tag;
         UpdateBoxArtToggleVisibility();
         UpdateSpacingControl(tag, IsConsoleTag(tag));

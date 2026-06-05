@@ -235,6 +235,7 @@ namespace Emutastic.ViewModels
 
         private async Task NavigateToRecentlyAddedAsync()
         {
+            CancelInFlightSearch();
             IsShowingFavorites = false;
             IsMixedView = true;
             var games = _db.GetRecentlyAdded(25);
@@ -248,6 +249,7 @@ namespace Emutastic.ViewModels
 
         private async Task NavigateToCollectionAsync(int collectionId)
         {
+            CancelInFlightSearch();
             IsShowingFavorites = false;
             IsMixedView = true;
             var games = _db.GetGamesByCollectionId(collectionId);
@@ -266,12 +268,6 @@ namespace Emutastic.ViewModels
             InvalidateCache();
         }
 
-        public void AddGame(Game game)
-        {
-            _allGames.Add(game);
-            InvalidateCache();
-            // Filter update is handled by the caller (RefreshGame covers UI updates during import).
-        }
 
         public void RefreshGame(Game updated)
         {
@@ -327,6 +323,15 @@ namespace Emutastic.ViewModels
                 _allGames.Add(updated);
                 _gameIndex[updated.Id] = updated;
             }
+
+            // The cached search index now lags reality: this call either added a
+            // game it has never seen or rewrote fields it indexed (Title,
+            // Developer, …). Unlike the console caches below (updated in place,
+            // by design), the search index is a flat snapshot — drop it and let
+            // the next unscoped search rebuild. Without this, games imported or
+            // renamed mid-session are silently invisible to search in the
+            // All Games / Favorites / Recently Played views until restart.
+            _searchIndex = null;
 
             var target = existing ?? updated;
             string console = target.Console ?? "";
@@ -419,6 +424,7 @@ namespace Emutastic.ViewModels
 
         public async Task FilterGamesAsync()
         {
+            CancelInFlightSearch();
             var console = SelectedConsole;
 
             // Cache hit — reuse the previously built collection for this console.
@@ -458,6 +464,7 @@ namespace Emutastic.ViewModels
 
         public void LoadFavorites(DatabaseService db)
         {
+            CancelInFlightSearch();
             var favs = db.GetFavorites();
             Games = new ObservableCollection<Game>(favs);
             IsGroupedView = false;
@@ -467,6 +474,7 @@ namespace Emutastic.ViewModels
 
         public void LoadRecent(DatabaseService db)
         {
+            CancelInFlightSearch();
             var recent = db.GetRecentlyPlayed();
             Games = new ObservableCollection<Game>(recent);
             IsGroupedView = false;
@@ -480,11 +488,19 @@ namespace Emutastic.ViewModels
         // prevents results flicker as the user types out a longer query.
         private System.Threading.CancellationTokenSource? _searchCts;
 
+        // Any navigation that replaces Games must also kill an in-flight search:
+        // OnNavigated clears the search box with TextChanged suppressed, so no
+        // SearchGames("") arrives to cancel it, and the stale result set would
+        // otherwise land on top of the freshly navigated view ~200ms later.
+        private void CancelInFlightSearch() => _searchCts?.Cancel();
+
         // Pre-computed lowercased searchable text per game (gameId → text).
         // Concatenates Title + Console + Developer + Publisher + Genre + Year
         // so search hits all of them in a single substring scan. Built lazily
-        // on first search and invalidated via InvalidateCache (which fires on
-        // every library mutation — Reload / AddGame / RefreshGame / RemoveGame).
+        // on first search and invalidated on every library mutation:
+        // Reload / RemoveGame go through InvalidateCache; RefreshGame
+        // nulls _searchIndex directly (it deliberately keeps the console caches
+        // alive, so it must not call InvalidateCache).
         // volatile so a concurrent invalidate is seen by the next search pass
         // without a lock.
         private volatile Dictionary<int, string>? _searchIndex;
@@ -553,7 +569,11 @@ namespace Emutastic.ViewModels
                     foreach (var g in snapshot)
                     {
                         if (g == null) continue;
-                        if (!index.TryGetValue(g.Id, out var text)) continue;
+                        // Self-healing: a game missing from the cached index
+                        // (added after the index was built) must never be
+                        // silently unsearchable — compute its text inline.
+                        if (!index.TryGetValue(g.Id, out var text))
+                            text = BuildSearchableText(g);
                         bool all = true;
                         foreach (var t in tokens)
                         {
@@ -573,6 +593,11 @@ namespace Emutastic.ViewModels
             Games = new ObservableCollection<Game>(filtered);
             IsGroupedView = false;
             GameCountText = filtered.Count == 1 ? "1 result" : $"{filtered.Count} results";
+            // The 400ms "Searching…" continuation is still pending whenever the
+            // search finishes faster than that (the common case). Cancel it so
+            // it can't overwrite the final result count. Safe: every later
+            // consumer of this CTS only ever calls Cancel() again.
+            cts.Cancel();
         }
 
         /// <summary>
@@ -670,7 +695,20 @@ namespace Emutastic.ViewModels
         internal static string NormalizeForSearch(string value)
         {
             if (string.IsNullOrEmpty(value)) return "";
-            string decomposed = value.Normalize(System.Text.NormalizationForm.FormD);
+            string decomposed;
+            try
+            {
+                decomposed = value.Normalize(System.Text.NormalizationForm.FormD);
+            }
+            catch (ArgumentException)
+            {
+                // Ill-formed UTF-16 (e.g. a lone surrogate smuggled in via a
+                // filename or DAT entry) makes Normalize throw. One bad title
+                // must not take down the whole search pass — fall back to a
+                // plain lowercase of the raw string (loses accent-blindness
+                // for this one field only).
+                return value.ToLowerInvariant();
+            }
             var sb = new System.Text.StringBuilder(decomposed.Length);
             foreach (char c in decomposed)
             {

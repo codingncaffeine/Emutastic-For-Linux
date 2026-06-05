@@ -238,8 +238,24 @@
 
                         <!-- RIGHT: OpenEmu-style recessed search field — chisel border, dark
                              top-to-bottom gradient, and a soft downward drop shadow (upstream
-                             DropShadowEffect BlurRadius 2 / down 1 / 0.6) so it reads recessed. -->
-                        <Border Grid.Column="2" Name="SearchBorder" Width="180" Height="26" CornerRadius="14" Padding="10,0" VerticalAlignment="Center"
+                             DropShadowEffect BlurRadius 2 / down 1 / 0.6) so it reads recessed.
+                             The muted count readout to its left surfaces GameCountText
+                             ("Searching…" / "2 results") and only shows while a query is
+                             typed (toggled in the TextChanged handler, alongside the clear
+                             button — Avalonia stand-in for upstream's DataTrigger on
+                             SearchBox.Text) — the per-console count already lives in the
+                             sidebar badge. -->
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Name="SearchResultCount"
+                                   Text="{Binding GameCountText}"
+                                   FontFamily="{DynamicResource PrimaryFont}"
+                                   FontSize="11"
+                                   Foreground="{DynamicResource TextMutedBrush}"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,8,0"
+                                   IsHitTestVisible="False"
+                                   IsVisible="False"/>
+                        <Border Name="SearchBorder" Width="180" Height="26" CornerRadius="14" Padding="10,0" VerticalAlignment="Center"
                                 Background="{DynamicResource SearchFillBrush}" BorderBrush="{DynamicResource ToolbarChiselBrush}"
                                 BorderThickness="1" Margin="0,0,12,0">
                             <Border.Effect>
@@ -256,6 +272,7 @@
                                         IsVisible="False" ToolTip.Tip="Clear search (Esc)"/>
                             </Grid>
                         </Border>
+                        </StackPanel>
                     </Grid>
                 </Border>
 
