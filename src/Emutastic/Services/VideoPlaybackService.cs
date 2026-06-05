@@ -41,7 +41,12 @@ namespace Emutastic.Services
             try
             {
                 Core.Initialize();   // resolves the native libvlc (no-op past the first call)
-                var lib = new LibVLC("--no-audio", "--no-osd", "--no-snapshot-preview");
+                // --avcodec-hw=none: force software decode. VLC's default ("any") picks
+                // VAAPI on AMD, which submits to the GPU's UVD block — on this machine the
+                // first UVD job hung the ring and the wedged SMU made the GPU reset
+                // unrecoverable (hard OS freeze, 2026-06-05). Decode-side twin of the
+                // h264_vaapi encode freeze (40100d4). Snaps are tiny clips; CPU decode is free.
+                var lib = new LibVLC("--no-audio", "--no-osd", "--no-snapshot-preview", "--avcodec-hw=none");
                 sw.Stop();
                 Trace.WriteLine($"[VideoPlayback] LibVLC warmed in {sw.ElapsedMilliseconds}ms");
                 return lib;
