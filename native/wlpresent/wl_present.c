@@ -2,6 +2,7 @@
 // RetroArch's model: a bare top-level surface, plain eglSwapBuffers (Mesa FIFO @ interval 1) as the clock.
 // Built into libwlpresent.so; flat ABI in wl_present.h.
 #include "wl_present.h"
+#include "wl_shader.h"
 #include "xdg-shell-client-protocol.h"
 #include "xdg-decoration-unstable-v1-client-protocol.h"
 #include "cursor-shape-v1-client-protocol.h"
@@ -72,6 +73,7 @@ typedef struct {
     int shader_preset;
     GLuint shd_prog[6]; int shd_tried[6];      // lazily compiled, index 1..5 used
     GLint shd_u_h[6], shd_u_tex[6];
+    sc_chain *glslp;                           // downloaded .glslp chain (overrides the built-in preset)
     GLuint corner_tex;                       // quarter-circle alpha mask for rounding the 4 window corners
     // input event ring
     struct { int type, a, b; } evq[256];
@@ -476,10 +478,29 @@ void wlp_set_shader(void *h, int preset) {
     wlp *s = h; if (!s) return;
     if (preset < 0 || preset > 6) preset = 0;
     s->shader_preset = preset;
+    // A built-in pick clears any downloaded chain (they're alternatives, like upstream's picker).
+    if (s->glslp) { sc_free(s->glslp); s->glslp = NULL; }
     glBindTexture(GL_TEXTURE_2D, s->tex);
     GLint f = (preset == 6) ? GL_LINEAR : GL_NEAREST;
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, f);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, f);
+}
+
+// Load a downloaded .glslp preset chain (libretro shaders_glsl pack). NULL or a failed load
+// clears back to the plain quad + whatever built-in preset is set. Returns 1 on success.
+// Present-thread only (GL context; compiles every pass).
+int wlp_set_glslp(void *h, const char *presetPath) {
+    wlp *s = h; if (!s) return 0;
+    if (s->glslp) { sc_free(s->glslp); s->glslp = NULL; }
+    // The chain manages per-pass filtering on the game texture; reset to the built-in preset's
+    // filter when clearing so a stale LINEAR doesn't linger on the plain path.
+    glBindTexture(GL_TEXTURE_2D, s->tex);
+    GLint f = (s->shader_preset == 6) ? GL_LINEAR : GL_NEAREST;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, f);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, f);
+    if (!presetPath || !presetPath[0]) return 1;
+    s->glslp = sc_load(presetPath);
+    return s->glslp != NULL;
 }
 
 int wlp_present(void *h, const void *bgra, int fw, int fh) {
@@ -511,21 +532,31 @@ int wlp_present(void *h, const void *bgra, int fw, int fh) {
     int qx = (s->w - qw) / 2;
     int qy = s->ins_bottom + (availH - qh) / 2;   // GL y is bottom-up: ins_bottom is the low edge
     glViewport(qx, qy, qw, qh);
-    // Built-in shader preset on the game quad (fragment-only; fixed-function vertex stage feeds
-    // gl_TexCoord[0]). screenHeight = SOURCE frame height, like the Windows .fx shaders' c0.
-    GLuint shd = (s->shader_preset >= 1 && s->shader_preset <= 5) ? shd_get(s, s->shader_preset) : 0;
-    if (shd) {
-        glf.UseProgram(shd);
-        if (s->shd_u_tex[s->shader_preset] >= 0) glf.Uniform1i(s->shd_u_tex[s->shader_preset], 0);
-        if (s->shd_u_h[s->shader_preset] >= 0)   glf.Uniform1f(s->shd_u_h[s->shader_preset], (float)fh);
+    // Downloaded .glslp chain takes the game draw when active; on failure fall through to the
+    // plain/built-in path (and drop the chain so we don't retry every frame).
+    int chainDrew = 0;
+    if (s->glslp) {
+        chainDrew = sc_draw(s->glslp, s->tex, fw, fh, qx, qy, qw, qh);
+        if (!chainDrew) { sc_free(s->glslp); s->glslp = NULL; }
+        glViewport(qx, qy, qw, qh);   // restore for the deco layers below
     }
-    glBegin(GL_QUADS);
-        glTexCoord2f(0, 0); glVertex2f(-1,  1);
-        glTexCoord2f(1, 0); glVertex2f( 1,  1);
-        glTexCoord2f(1, 1); glVertex2f( 1, -1);
-        glTexCoord2f(0, 1); glVertex2f(-1, -1);
-    glEnd();
-    if (shd) glf.UseProgram(0);
+    if (!chainDrew) {
+        // Built-in shader preset on the game quad (fragment-only; fixed-function vertex stage feeds
+        // gl_TexCoord[0]). screenHeight = SOURCE frame height, like the Windows .fx shaders' c0.
+        GLuint shd = (s->shader_preset >= 1 && s->shader_preset <= 5) ? shd_get(s, s->shader_preset) : 0;
+        if (shd) {
+            glf.UseProgram(shd);
+            if (s->shd_u_tex[s->shader_preset] >= 0) glf.Uniform1i(s->shd_u_tex[s->shader_preset], 0);
+            if (s->shd_u_h[s->shader_preset] >= 0)   glf.Uniform1f(s->shd_u_h[s->shader_preset], (float)fh);
+        }
+        glBegin(GL_QUADS);
+            glTexCoord2f(0, 0); glVertex2f(-1,  1);
+            glTexCoord2f(1, 0); glVertex2f( 1,  1);
+            glTexCoord2f(1, 1); glVertex2f( 1, -1);
+            glTexCoord2f(0, 1); glVertex2f(-1, -1);
+        glEnd();
+        if (shd) glf.UseProgram(0);
+    }
 
     // Game overlay (Vectrex translucent art): stretched over the GAME rect exactly (upstream's
     // Stretch=Fill over GameLayer), alpha-blended. Static texture — uploaded once per game.
@@ -778,6 +809,7 @@ void wlp_destroy(void *h) {
     wlp *s = h;
     if (!s) return;
     free(s->cap_buf); s->cap_buf = NULL;
+    if (s->glslp) { sc_free(s->glslp); s->glslp = NULL; }
     if (s->edpy != EGL_NO_DISPLAY) {
         eglMakeCurrent(s->edpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         if (s->tex) glDeleteTextures(1, &s->tex);

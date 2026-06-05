@@ -44,6 +44,7 @@ namespace Emutastic.Platform
         [DllImport(LIB)] static extern void wlp_set_bezel(IntPtr h, IntPtr rgba, int w, int hh);
         [DllImport(LIB)] static extern void wlp_show_bezel(IntPtr h, int on);
         [DllImport(LIB)] static extern void wlp_set_shader(IntPtr h, int preset);
+        [DllImport(LIB)] static extern int wlp_set_glslp(IntPtr h, [MarshalAs(UnmanagedType.LPUTF8Str)] string? presetPath);
         [DllImport(LIB)] static extern void wlp_request_capture(IntPtr h);
         [DllImport(LIB)] static extern int wlp_take_capture(IntPtr h, IntPtr outBuf, int maxBytes, out int w, out int hh);
         [DllImport(LIB)] static extern void wlp_set_insets(IntPtr h, int top, int bottom);
@@ -159,8 +160,14 @@ namespace Emutastic.Platform
         }
         public void ShowBezel(bool on) { if (_h != IntPtr.Zero) wlp_show_bezel(_h, on ? 1 : 0); }
 
-        /// <summary>Built-in shader preset on the game quad (0=None … 6=Smooth). Present thread only.</summary>
+        /// <summary>Built-in shader preset on the game quad (0=None … 6=Smooth). Present thread only.
+        /// Picking a built-in clears any downloaded chain.</summary>
         public void SetShader(int preset) { if (_h != IntPtr.Zero) wlp_set_shader(_h, preset); }
+
+        /// <summary>Activate a downloaded .glslp chain (null clears). False = failed to load
+        /// (plain quad stays). Present thread only — compiles every pass.</summary>
+        public bool SetGlslp(string? presetPath)
+            => _h != IntPtr.Zero && wlp_set_glslp(_h, presetPath) == 1;
 
         /// <summary>Arm a one-shot displayed-frame capture; the next Present fills it (pre-OSD).</summary>
         public void RequestCapture() { if (_h != IntPtr.Zero) wlp_request_capture(_h); }

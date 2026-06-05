@@ -1949,6 +1949,93 @@ public partial class PreferencesWindow : Window
             panel.Children.Add(row);
         }
 
+        // ── Video shaders (upstream's "Video Shaders (libretro)" row). Windows uses the slang pack
+        // through librashader (D3D11, no Linux binaries) — Linux downloads the GLSL pack instead:
+        // the same shader library in .glslp form, run by our GL chain in the game host. ──
+        panel.Children.Add(new TextBlock { Text = "VIDEO SHADERS", Theme = (Avalonia.Styling.ControlTheme?)(this.TryFindResource("PrefLabel", out var tvs) ? tvs : null), Margin = new Thickness(0, 8, 0, 4) });
+        panel.Children.Add(new Border { Height = 1, Background = Brush("BorderNormalBrush"), Margin = new Thickness(0, 0, 0, 8) });
+        {
+            int shCount = Services.ShaderCatalog.IsInstalled() ? Services.ShaderCatalog.GetDownloaded().Count : 0;
+            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), Margin = new Thickness(0, 0, 0, 16) };
+            var info = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            info.Children.Add(new TextBlock { Text = "Video Shaders (libretro)", FontSize = 12, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextPrimaryBrush") });
+            var status = new TextBlock { FontSize = 10, FontFamily = Font("PrimaryFont"),
+                Text = shCount > 0 ? $"{shCount} presets installed — pick in-game via the cog → Shader"
+                                   : "Community shader pack: CRT, LCD, NTSC, scalers and more. The built-in shaders stay available without this download.",
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = new SolidColorBrush(Color.Parse(shCount > 0 ? "#30D158" : "#888888")) };
+            info.Children.Add(status);
+            Grid.SetColumn(info, 0);
+            var bar = new ProgressBar { Height = 3, Width = 80, Minimum = 0, Maximum = 100, IsVisible = false, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
+            Grid.SetColumn(bar, 1);
+            var btn = new Button { Content = shCount > 0 ? "Re-download" : "Download", Theme = (Avalonia.Styling.ControlTheme?)(this.TryFindResource("PrefSecondaryBtn", out var tvb) ? tvb : null), Padding = new Thickness(10, 4), FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+            Grid.SetColumn(btn, 2);
+            btn.Click += async (_, _) =>
+            {
+                btn.IsEnabled = false; bar.IsVisible = true; bar.Value = 0;
+                status.Text = "Downloading shader pack…"; status.Foreground = Brush("TextMutedBrush");
+                try
+                {
+                    string root = Services.ShaderCatalog.GlslRoot;
+                    string tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"shaders_glsl-{Guid.NewGuid():N}.zip");
+                    await Task.Run(async () =>
+                    {
+                        using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+                        http.DefaultRequestHeaders.Add("User-Agent", "Emutastic");
+                        using var resp = await http.GetAsync("https://buildbot.libretro.com/assets/frontend/shaders_glsl.zip",
+                            System.Net.Http.HttpCompletionOption.ResponseHeadersRead);
+                        resp.EnsureSuccessStatusCode();
+                        long total = resp.Content.Headers.ContentLength ?? 0;
+                        await using (var src = await resp.Content.ReadAsStreamAsync())
+                        await using (var dst = System.IO.File.Create(tmp))
+                        {
+                            var chunk = new byte[1 << 16]; long got = 0; int n;
+                            while ((n = await src.ReadAsync(chunk)) > 0)
+                            {
+                                await dst.WriteAsync(chunk.AsMemory(0, n)); got += n;
+                                if (total > 0)
+                                {
+                                    long pct = got * 70 / total;
+                                    Avalonia.Threading.Dispatcher.UIThread.Post(() => bar.Value = pct);
+                                }
+                            }
+                        }
+                        Avalonia.Threading.Dispatcher.UIThread.Post(() => { bar.Value = 75; status.Text = "Extracting…"; });
+                        // Extract, stripping a single top-level "shaders_glsl/" component if the
+                        // zip carries one, so presets land directly under Shaders/glsl/.
+                        using (var zip = System.IO.Compression.ZipFile.OpenRead(tmp))
+                        {
+                            foreach (var entry in zip.Entries)
+                            {
+                                if (string.IsNullOrEmpty(entry.Name)) continue;   // directory entry
+                                string rel = entry.FullName.Replace('\\', '/');
+                                if (rel.StartsWith("shaders_glsl/", StringComparison.OrdinalIgnoreCase))
+                                    rel = rel.Substring("shaders_glsl/".Length);
+                                if (rel.Length == 0 || rel.Contains("..")) continue;
+                                string dest = System.IO.Path.Combine(root, rel);
+                                System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(dest)!);
+                                using var es = entry.Open();
+                                using var os = System.IO.File.Create(dest);
+                                es.CopyTo(os);
+                            }
+                        }
+                        System.IO.File.WriteAllText(System.IO.Path.Combine(root, ".installed"),
+                            DateTime.UtcNow.ToString("o"));
+                        try { System.IO.File.Delete(tmp); } catch { }
+                    });
+                    int n2 = Services.ShaderCatalog.GetDownloaded().Count;
+                    bar.Value = 100;
+                    status.Text = $"{n2} presets installed — pick in-game via the cog → Shader";
+                    status.Foreground = new SolidColorBrush(Color.Parse("#30D158"));
+                    btn.Content = "Re-download";
+                }
+                catch (Exception ex) { status.Text = $"Failed: {ex.Message}"; status.Foreground = Brush("AccentBrush"); }
+                finally { bar.IsVisible = false; btn.IsEnabled = true; }
+            };
+            row.Children.Add(info); row.Children.Add(bar); row.Children.Add(btn);
+            panel.Children.Add(row);
+        }
+
         // ── Overlays & bezels (upstream's Bezels row; Vectrex overlays are folder-driven) ──
         panel.Children.Add(new TextBlock { Text = "OVERLAYS & BEZELS", Theme = (Avalonia.Styling.ControlTheme?)(this.TryFindResource("PrefLabel", out var tob) ? tob : null), Margin = new Thickness(0, 8, 0, 4) });
         panel.Children.Add(new Border { Height = 1, Background = Brush("BorderNormalBrush"), Margin = new Thickness(0, 0, 0, 8) });

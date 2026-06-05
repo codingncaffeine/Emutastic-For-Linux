@@ -173,6 +173,7 @@ namespace Emutastic.Emulator
             ("LcdGrid", "LCD Grid"), ("Smooth", "Smooth"),
         };
         private int _shaderPreset;   // present-thread state (restored at init, set by the cog)
+        private string? _glslpRel;   // active downloaded .glslp (relative path) — overrides the built-in
         private long _frameSeq;
         private int _frameCountSample;            // frames produced since the last SampleStats (real fps)
         private long _coreRunTicks, _coreRunCalls; // accumulated retro_run time + call count for avg ms
@@ -1030,13 +1031,24 @@ namespace Emutastic.Emulator
             _wlTop.SetInsets((int)GlOsd.TitleBarHeight, (int)GlOsd.StatusBarHeight);
             _wlTop.SetAspect(DisplayAspectRatio);   // render at the display aspect (0 → frame pixel ratio)
             InitDecorations();                       // bezel + Vectrex overlay (art loads off-thread)
-            // Restore the per-game shader (upstream's RestoreShaderPreset). "slang:" values (the
-            // downloaded pack) fall back to None until the librashader runtime is ported.
+            // Restore the per-game shader (upstream's RestoreShaderPreset): a built-in enum name,
+            // or "glsl:<relpath>" for a downloaded pack preset (Linux runs the GLSL pack — a
+            // Windows-saved "slang:" value degrades to None, mirroring upstream's missing-pack
+            // fallback). Missing/failed presets degrade silently to None the same way.
             if (CheatGameId >= 0)
             {
                 string saved = App.Configuration?.GetValue($"shader_{CheatGameId}", "None") ?? "None";
-                int idx = Array.FindIndex(ShaderPresets, p => p.EnumName.Equals(saved, StringComparison.OrdinalIgnoreCase));
-                if (idx > 0) { _shaderPreset = idx; _wlTop.SetShader(idx); }
+                if (saved.StartsWith("glsl:", StringComparison.OrdinalIgnoreCase))
+                {
+                    string rel = saved.Substring(5);
+                    string? abs = Services.ShaderCatalog.Resolve(rel);
+                    if (abs != null && _wlTop.SetGlslp(abs)) _glslpRel = rel;
+                }
+                else
+                {
+                    int idx = Array.FindIndex(ShaderPresets, p => p.EnumName.Equals(saved, StringComparison.OrdinalIgnoreCase));
+                    if (idx > 0) { _shaderPreset = idx; _wlTop.SetShader(idx); }
+                }
             }
 
             // Save-state load picker (upstream's inline LoadPickerPanel): null = closed.
@@ -1066,7 +1078,12 @@ namespace Emutastic.Emulator
                 // Shader picker — SW cores only, like upstream (OverlayShaderBtn is collapsed for
                 // HW cores: their frames carry the core's own enhanced rendering).
                 if (!_hwRenderActive)
-                    m.Add(($"Shader: {ShaderPresets[_shaderPreset].Display}", true, "›", "\x01SHADER"));
+                {
+                    string shLabel = _glslpRel != null
+                        ? $"Shader: {Path.GetFileNameWithoutExtension(_glslpRel)}"
+                        : $"Shader: {ShaderPresets[_shaderPreset].Display}";
+                    m.Add((shLabel, true, "›", "\x01SHADER"));
+                }
                 // Vectrex overlay / bezel rows appear only when their art exists for this game
                 // (upstream keeps OverlayToggleBtn/BezelToggleBtn Collapsed the same way).
                 if (_govRowVisible)
@@ -1135,13 +1152,34 @@ namespace Emutastic.Emulator
                 return m;
             };
             // Shader level (upstream's ShaderPanel picker, as a cog submenu): the 7 built-ins with
-            // a check on the active one. Row keys "\x04<index>" select. Downloaded slang presets
-            // join this list when the librashader runtime lands.
+            // a check on the active one, then one row per downloaded-pack category ("crt ›" …).
+            // Row keys: "\x04<index>" built-in, "\x05<cat>:<page>" open category, "\x06<relpath>"
+            // pick a downloaded preset. Category pages are capped (the GL menu doesn't scroll).
+            const int ShaderPageSize = 12;
             Func<List<(string, bool, string?, string?)>> buildCogShader = () =>
             {
                 var m = new List<(string, bool, string?, string?)> { ("‹ Back", true, null, "\x01BACK") };
                 for (int i = 0; i < ShaderPresets.Length; i++)
-                    m.Add((ShaderPresets[i].Display, true, i == _shaderPreset ? "✓" : null, $"\x04{i}"));
+                    m.Add((ShaderPresets[i].Display, true,
+                           _glslpRel == null && i == _shaderPreset ? "✓" : null, $"\x04{i}"));
+                var downloaded = Services.ShaderCatalog.GetDownloaded();
+                foreach (var cat in downloaded.Select(d => d.Category).Distinct())
+                    m.Add(($"{cat} ›", true,
+                           _glslpRel != null && _glslpRel.StartsWith(cat + "/", StringComparison.OrdinalIgnoreCase) ? "✓" : null,
+                           $"\x05{cat}:0"));
+                return m;
+            };
+            Func<string, int, List<(string, bool, string?, string?)>> buildCogShaderCat = (cat, page) =>
+            {
+                var m = new List<(string, bool, string?, string?)> { ("‹ Back", true, null, "\x01SHADER") };
+                var items = Services.ShaderCatalog.GetDownloaded()
+                    .Where(d => d.Category.Equals(cat, StringComparison.OrdinalIgnoreCase)).ToList();
+                int pages = Math.Max(1, (items.Count + ShaderPageSize - 1) / ShaderPageSize);
+                page = Math.Clamp(page, 0, pages - 1);
+                foreach (var it in items.Skip(page * ShaderPageSize).Take(ShaderPageSize))
+                    m.Add((it.Display, true, _glslpRel == it.RelativePath ? "✓" : null, $"\x06{it.RelativePath}"));
+                if (pages > 1)
+                    m.Add(($"more… ({page + 1}/{pages})", true, "›", $"\x05{cat}:{(page + 1) % pages}"));
                 return m;
             };
             // Cheats level (upstream's CheatsMenu): Add/Import actions + one toggle row per cheat.
@@ -1316,10 +1354,42 @@ namespace Emutastic.Emulator
                             // Apply live (we're on the present thread — the GL context is here) and
                             // persist per game through the parent, like upstream's immediate save.
                             _shaderPreset = shaderIdx;
+                            _glslpRel = null;             // SetShader clears the chain in the shim too
                             _wlTop!.SetShader(shaderIdx);
                             if (CheatGameId >= 0)
                                 EmitHostCommand?.Invoke($"save-shader {CheatGameId} {ShaderPresets[shaderIdx].EnumName}");
                             cogMenu = buildCogShader();   // refresh the check mark
+                        }
+                        else if (key.Length > 1 && key[0] == '\x05')
+                        {
+                            // Open a downloaded-pack category page: "\x05<cat>:<page>".
+                            var spec = key.Substring(1);
+                            int colon = spec.LastIndexOf(':');
+                            string cat = colon > 0 ? spec[..colon] : spec;
+                            int page = colon > 0 && int.TryParse(spec.AsSpan(colon + 1), out int pg) ? pg : 0;
+                            cogMenu = buildCogShaderCat(cat, page);
+                        }
+                        else if (key.Length > 1 && key[0] == '\x06')
+                        {
+                            // Pick a downloaded preset: compile + activate the chain right here
+                            // (present thread). Failure (unsupported feature, compile error) keeps
+                            // the previous state and says so, like upstream's IsReady fallback.
+                            string rel = key.Substring(1);
+                            string? abs = Services.ShaderCatalog.Resolve(rel);
+                            if (abs != null && _wlTop!.SetGlslp(abs))
+                            {
+                                _glslpRel = rel;
+                                if (CheatGameId >= 0)
+                                    EmitHostCommand?.Invoke($"save-shader {CheatGameId} glsl:{rel}");
+                            }
+                            else
+                            {
+                                // The failed load cleared any active chain in the shim.
+                                _glslpRel = null;
+                                ShowDiskMessage("Shader failed to load — see emulator.log", 4);
+                            }
+                            int slash = rel.IndexOf('/');
+                            cogMenu = buildCogShaderCat(slash > 0 ? rel[..slash] : "misc", 0);
                         }
                         else if (key.Length > 1 && key[0] == '\x02' && int.TryParse(key.AsSpan(1), out int cheatIdx))
                         {

@@ -17,6 +17,7 @@ regen() {
 [ "${1:-}" = "regen" ] && regen
 
 gcc -shared -fPIC -O2 \
+    wl_shader.c \
     wl_present.c \
     wl_hwgl.c \
     xdg-shell-protocol.c \

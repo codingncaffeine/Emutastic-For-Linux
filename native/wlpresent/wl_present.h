@@ -44,7 +44,13 @@ void wlp_show_bezel(void* h, int on);         // toggle visibility without re-up
 
 // Built-in shader preset on the game quad (cog "Shader: …"): 0=None, 1=CRT Scanlines, 2=GB DMG,
 // 3=GB DMG LCD, 4=GB Pocket, 5=LCD Grid, 6=Smooth (linear filtering). Present-thread only.
+// Picking a built-in clears any downloaded .glslp chain.
 void wlp_set_shader(void* h, int preset);
+
+// Downloaded .glslp preset (libretro shaders_glsl pack): compiles + activates the multi-pass
+// chain (overrides the built-in preset). NULL clears. Returns 1 ok / 0 failed (falls back to the
+// plain quad). Present-thread only.
+int wlp_set_glslp(void* h, const char* presetPath);
 
 // One-shot displayed-frame capture (screenshots): arm, then the NEXT wlp_present reads the game/
 // bezel rect back (BGRA top-down, pre-OSD = no HUD). Collect with wlp_take_capture — returns 1 and
