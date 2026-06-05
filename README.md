@@ -146,6 +146,22 @@ Follows the XDG Base Directory spec:
 ~/.cache/Emutastic/              (transient caches)
 ```
 
+### Installing & updating
+Three release artifacts per version (built by `packaging/build-release.sh`):
+- `emutastic_<ver>_amd64.deb` — system install (`/usr/lib/emutastic`, `emutastic` on PATH,
+  desktop entry). **Portable mode is not available on a .deb install** (the install dir is
+  root-owned); data lives in `~/.local/share/Emutastic`.
+- `Emutastic-<ver>-linux-x64.tar.gz` — self-contained; extract anywhere writable and run
+  `./Emutastic`. Data in `~/.local/share/Emutastic` unless you opt into portable mode.
+- `Emutastic-<ver>-linux-x64-portable.tar.gz` — same, with `portable.txt` pre-dropped:
+  fully self-contained out of the box.
+
+**In-app updates** (Preferences → About): the app checks the latest GitHub release and,
+when newer, offers **Update Now** — tarball installs self-replace and relaunch (your
+`portable.txt` and `PortableData/` are untouched); .deb installs download the package and
+install it via a system authorization prompt (`pkexec dpkg -i`), then relaunch.
+Development builds (run from `bin/Release`) update via `git pull` instead.
+
 ### Portable mode
 
 Drop an empty `portable.txt` next to the executable **or** launch with `--portable`, and **everything**

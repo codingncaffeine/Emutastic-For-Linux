@@ -13,6 +13,11 @@ sealed class Program
     {
         // Headless data-layer self-test (no Avalonia/window): `Emutastic --selftest-library <rom>`.
         // Verifies ROM identification + the SQLite library round-trip at runtime.
+        // Portable mode FIRST, for EVERY entry path (library, game-host, selftests,
+        // previews) — anything below may touch AppPaths.DataRoot. Idempotent; the
+        // later per-path calls are harmless.
+        Emutastic.AppPaths.DetectPortableMode(args);
+
         if (args.Length >= 1 && args[0] == "--selftest-library")
         {
             Emutastic.SelfTest.RunLibrary(args.Length > 1 ? args[1] : null);
@@ -29,6 +34,15 @@ sealed class Program
         if (args.Length >= 1 && args[0] == "--game-host")
         {
             Environment.Exit(Emutastic.GameHost.Run(args));
+            return;
+        }
+        // Dev-only: in-app-update selftest — `Emutastic --selftest-update` runs the
+        // full check→pick→download→apply pipeline headlessly against EMUTASTIC_UPDATE_API
+        // (a local mock in tests). On success the process hands off to the relaunch
+        // script and EXITS; the relaunched binary is the proof.
+        if (args.Length >= 1 && args[0] == "--selftest-update")
+        {
+            Environment.Exit(Emutastic.Services.UpdateSelfTest.Run());
             return;
         }
         // Dev-only: RetroAchievements native-foundation selftest — verifies the marshaled

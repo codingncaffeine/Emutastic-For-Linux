@@ -110,6 +110,9 @@ namespace Emutastic.Services
             if (!string.IsNullOrEmpty(console)) { psi.ArgumentList.Add("--console"); psi.ArgumentList.Add(console); }
             psi.ArgumentList.Add("--results"); psi.ArgumentList.Add(results);
             psi.ArgumentList.Add("--parent-stdin");   // we hold the child's stdin; closing it = graceful quit
+            // Portable mode forwarding: the child re-detects via portable.txt next to the
+            // exe, but a CLI-only `--portable` launch has no marker — forward the flag.
+            if (AppPaths.IsPortable) psi.ArgumentList.Add("--portable");
 
             // Save-state context: the host writes .state/.png/.json into this dir (same convention
             // ImportService.DiscoverSaveStates scans); we ingest DB rows when the host exits.

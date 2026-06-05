@@ -179,10 +179,36 @@ public partial class PreferencesWindow : Window
     private void WireAbout()
     {
         this.FindControl<Button>("AboutOpenRepoBtn")!.Click += (_, _) => OpenUrl(GitHubRepoUrl);
+        this.FindControl<Button>("AboutUpdateNowBtn")!.Click += (_, _) => _ = RunInAppUpdateAsync();
         this.FindControl<Button>("AboutOpenLatestReleaseBtn")!.Click += (_, _) => OpenUrl(_latestReleaseUrl ?? GitHubReleasesUrl);
         this.FindControl<Button>("AboutRecheckBtn")!.Click += (_, _) => _ = CheckLatestReleaseAsync();
         this.FindControl<Button>("AboutLicenseBtn")!.Click += (_, _) => OpenUrl(GitHubRepoUrl + "/blob/main/LICENSE");
         this.FindControl<Button>("AboutCoresBtn")!.Click += (_, _) => OpenUrl(GitHubRepoUrl + "#credits");
+    }
+
+    private readonly List<Services.UpdateService.ReleaseAsset> _latestAssets = new();
+    private Services.UpdateService.ReleaseAsset? _pendingUpdateAsset;
+    private Services.UpdateService.InstallKind _pendingUpdateKind;
+
+    /// <summary>In-app update: download the right artifact for this install kind and
+    /// apply it (tarball self-swap or pkexec dpkg). On success the app restarts
+    /// itself; this method only returns on failure/cancel.</summary>
+    private async Task RunInAppUpdateAsync()
+    {
+        var asset = _pendingUpdateAsset;
+        if (asset == null) return;
+        var btn = this.FindControl<Button>("AboutUpdateNowBtn")!;
+        var recheck = this.FindControl<Button>("AboutRecheckBtn")!;
+        var status = this.FindControl<TextBlock>("AboutUpdateStatusText")!;
+        btn.IsEnabled = false;
+        recheck.IsEnabled = false;
+        var progress = new Progress<(int pct, string msg)>(p => status.Text = p.msg);
+        string? error = await Services.UpdateService.DownloadAndApplyAsync(
+            asset, _pendingUpdateKind, progress, _windowCts.Token);
+        // Reaching here means it did NOT hand off to the relaunch script.
+        status.Text = error ?? "Update did not complete.";
+        btn.IsEnabled = true;
+        recheck.IsEnabled = true;
     }
 
     private void LoadAboutSettings()
@@ -206,6 +232,7 @@ public partial class PreferencesWindow : Window
         latest.Text = "Checking…";
         status.Text = "";
         openLatest.IsVisible = false;
+        this.FindControl<Button>("AboutUpdateNowBtn")!.IsVisible = false;
         recheck.IsEnabled = false;
 
         try
@@ -219,15 +246,37 @@ public partial class PreferencesWindow : Window
             _latestReleaseUrl = obj.Value<string>("html_url");
             if (string.IsNullOrWhiteSpace(_latestReleaseUrl)) _latestReleaseUrl = GitHubReleasesUrl;
 
+            // Release assets — what the in-app updater downloads (names are the
+            // packaging/build-release.sh contract; see UpdateService).
+            _latestAssets.Clear();
+            if (obj["assets"] is Newtonsoft.Json.Linq.JArray assetsArr)
+                foreach (var a in assetsArr)
+                    _latestAssets.Add(new Services.UpdateService.ReleaseAsset(
+                        a.Value<string>("name") ?? "",
+                        a.Value<string>("browser_download_url") ?? "",
+                        a.Value<long?>("size") ?? 0));
+
             latest.Text = string.IsNullOrWhiteSpace(tag) ? "—" : tag;
 
             if (TryCompareVersions(tag, out int cmp))
             {
                 if (cmp > 0)
                 {
-                    status.Text = "A newer release is available.";
+                    var kind = Services.UpdateService.DetectInstallKind();
+                    var asset = Services.UpdateService.PickAsset(kind, _latestAssets);
+                    bool canSelfUpdate = asset != null
+                        && kind is Services.UpdateService.InstallKind.Deb or Services.UpdateService.InstallKind.SelfContained;
+                    status.Text = kind switch
+                    {
+                        Services.UpdateService.InstallKind.Dev => "A newer release is available. (Development build — update via git.)",
+                        _ when !canSelfUpdate => "A newer release is available — open it on GitHub to update.",
+                        _ => "A newer release is available.",
+                    };
                     status.Foreground = this.TryFindResource("AccentBrush", out var a) ? a as IBrush : Brushes.OrangeRed;
                     openLatest.IsVisible = true;
+                    this.FindControl<Button>("AboutUpdateNowBtn")!.IsVisible = canSelfUpdate;
+                    _pendingUpdateAsset = canSelfUpdate ? asset : null;
+                    _pendingUpdateKind = kind;
                 }
                 else if (cmp < 0)
                     status.Text = "Your installed version is newer than the latest release (development build).";
