@@ -54,6 +54,7 @@ public partial class GameDetailWindow : Window
         PopulateData();
         SetupAnimateIn();
         _ = LoadSnapAsync();
+        _ = LoadRetroAchievementsAsync();
     }
 
     protected override void OnClosed(EventArgs e)
@@ -61,6 +62,7 @@ public partial class GameDetailWindow : Window
         // Signal in-flight async work (placeholder decode, snap-video worker) to drop
         // its results instead of writing into a dead window.
         _closed = true;
+        _raRefreshCts?.Cancel();
 
         if (_vlcPlayer != null)
         {
@@ -452,6 +454,312 @@ public partial class GameDetailWindow : Window
 
     private Task Info(string title, string message) =>
         new ConfirmDialog(title, message, "OK", infoOnly: true).ShowDialog<bool>(this);
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  A8e — RetroAchievements section (port of upstream's detail-card RA pane)
+    // ════════════════════════════════════════════════════════════════════════
+
+    private System.Threading.CancellationTokenSource? _raRefreshCts;
+
+    // Badge tiles (56×56 from media.retroachievements.org) — small per-app cache so
+    // reopening cards doesn't refetch; misses render as blank tiles, never throw.
+    private static readonly System.Net.Http.HttpClient _raBadgeHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
+    private static readonly Dictionary<string, Bitmap?> _raBadgeCache = new();
+
+    private IBrush Res(string key, string fallbackHex)
+        => this.TryFindResource(key, ActualThemeVariant, out var v) && v is IBrush b
+            ? b : new SolidColorBrush(Color.Parse(fallbackHex));
+
+    /// <summary>Renders whatever's cached, then fires a background refresh and re-renders.
+    /// Bails fast for users who haven't opted into RA.</summary>
+    private async Task LoadRetroAchievementsAsync()
+    {
+        var raConfig = App.Configuration?.GetRetroAchievementsConfiguration();
+        if (raConfig == null || !raConfig.Enabled)
+        {
+            Get<StackPanel>("RASection").IsVisible = false;
+            return;
+        }
+
+        RenderRetroAchievements();
+
+        _raRefreshCts?.Cancel();
+        _raRefreshCts = new System.Threading.CancellationTokenSource();
+        var token = _raRefreshCts.Token;
+        try
+        {
+            if (App.Configuration == null) return;
+            var svc = new Services.RetroAchievementsService(App.Configuration, _db);
+            await svc.RefreshDetailForGameAsync(_game, token);
+            if (token.IsCancellationRequested || _closed) return;
+            RenderRetroAchievements();
+        }
+        catch (OperationCanceledException) { /* window closed during fetch */ }
+        catch
+        {
+            // Network failures are swallowed inside the service; this belt covers any
+            // DB / render glitch so a flaky API can never crash the card.
+        }
+    }
+
+    /// <summary>Pushes the cached typed views into the UI. Safe to call repeatedly;
+    /// hides sub-sections piece by piece rather than the whole pane.</summary>
+    private void RenderRetroAchievements()
+    {
+        var prog = _game.RAProgressionTyped;
+        var user = _game.RAUserProgressTyped;
+        var section = Get<StackPanel>("RASection");
+        var label = Get<TextBlock>("RAProgressLabel");
+        var bar = Get<ProgressBar>("RAProgress");
+
+        // No progression data — one labeled status line, driven by RALastLaunchOutcome,
+        // so "never launched" / "no set authored" / "ROM unrecognized" don't all look
+        // like the same empty pane (upstream's four-state matrix verbatim).
+        if (prog == null || prog.NumAchievements <= 0)
+        {
+            bool identified  = _game.RAGameId > 0;
+            bool unsupported = _game.RAGameId >= 1_000_000_000;   // RA's "unsupported version" placeholder band
+            bool emptySet    = prog != null && prog.NumAchievements <= 0;
+            string status = (identified, unsupported, emptySet, _game.RALastLaunchOutcome) switch
+            {
+                (true,  true,  _,    _)                 => "This ROM dump isn't on the RetroAchievements database — try a different release",
+                (true,  false, true, _)                 => "No achievements authored for this game yet",
+                (true,  false, false, _)                => "Fetching achievement data…",
+                (false, _,     _,    "not_in_database") => $"This {_game.Console} ROM isn't in the RetroAchievements database — try a different dump",
+                (false, _,     _,    "load_failed")     => "RetroAchievements identification failed — try relaunching",
+                _                                        => "Not checked yet — launch this game with RetroAchievements enabled",
+            };
+            section.IsVisible = true;
+            label.Text = status;
+            bar.Value = 0;
+            bar.IsVisible = false;
+            Get<StackPanel>("ComingUpSection").IsVisible = false;
+            Get<TextBlock>("RATimingsCaption").IsVisible = false;
+            return;
+        }
+
+        section.IsVisible = true;
+        bar.IsVisible = true;
+
+        // The unlock track follows the user's hardcore setting (hardcore unlocks are the
+        // ones that count there); falls back to softcore when logged out.
+        bool hardcore = App.Configuration?.GetRetroAchievementsConfiguration()?.HardcoreMode == true;
+
+        int total  = prog.NumAchievements;
+        int earned = hardcore
+            ? (user?.NumAwardedToUserHardcore ?? 0)
+            : (user?.NumAwardedToUser ?? 0);
+        int userPts = 0;
+        if (user != null)
+        {
+            foreach (var a in user.Achievements.Values)
+            {
+                string? earnedDate = hardcore ? a.DateEarnedHardcore : a.DateEarned;
+                if (!string.IsNullOrEmpty(earnedDate)) userPts += a.Points;
+            }
+        }
+
+        if (user != null)
+        {
+            label.Text = userPts > 0 ? $"{earned} / {total}  ·  {userPts:N0} pts" : $"{earned} / {total}";
+            bar.Value = total > 0 ? earned * 100.0 / total : 0;
+            // Mastered (100%) flips the bar to gold; otherwise theme accent.
+            bar.Foreground = (earned >= total && total > 0)
+                ? new SolidColorBrush(Color.FromRgb(0xFF, 0xC8, 0x3D))
+                : Res("AccentBrush", "#E03535");
+        }
+        else
+        {
+            label.Text = $"{total} achievements";
+            bar.Value = 0;
+        }
+
+        BuildComingUp(prog, user, hardcore);
+        BuildTimingsCaption(prog, hardcore);
+    }
+
+    private void BuildComingUp(Models.RAProgression prog, Models.RAUserProgress? user, bool hardcore)
+    {
+        var grid = Get<Avalonia.Controls.Primitives.UniformGrid>("ComingUpGrid");
+        var sectionPanel = Get<StackPanel>("ComingUpSection");
+        grid.Children.Clear();
+
+        // Logged-out users have no "earned" set — every achievement would be "Coming
+        // up", which is meaningless. Hide instead.
+        if (user == null || user.Achievements.Count == 0)
+        {
+            sectionPanel.IsVisible = false;
+            return;
+        }
+
+        var earnedIds = new HashSet<int>();
+        foreach (var a in user.Achievements.Values)
+        {
+            string? earnedDate = hardcore ? a.DateEarnedHardcore : a.DateEarned;
+            if (!string.IsNullOrEmpty(earnedDate)) earnedIds.Add(a.Id);
+        }
+
+        // Live in-game progress (captured by rcheevos last session) wins — "closest to
+        // unlocking right now" — but only when its captured mode matches the current
+        // mode (softcore-captured % is meaningless under hardcore). Remaining slots
+        // fill from the community proxy: ascending median TTU, tiebreak popularity.
+        // Null/zero medians are no-data signals, not "instant" — skipped.
+        var live = _game.RALiveProgressTyped;
+        var liveMap = (live != null && live.Hardcore == hardcore)
+            ? live.Achievements
+            : new Dictionary<int, Models.RALiveAchievementProgress>();
+
+        var unearned = prog.Achievements.Where(a => !earnedIds.Contains(a.Id)).ToList();
+
+        var liveHits = unearned
+            .Where(a => liveMap.TryGetValue(a.Id, out var lp) && lp.Percent > 0 && lp.Percent < 100)
+            .OrderByDescending(a => liveMap[a.Id].Percent)
+            .ToList();
+        var liveHitIds = new HashSet<int>(liveHits.Select(a => a.Id));
+
+        var proxyPool = unearned
+            .Where(a => !liveHitIds.Contains(a.Id))
+            .Select(a => new
+            {
+                Ach = a,
+                Median = hardcore ? (a.MedianTimeToUnlockHardcore ?? a.MedianTimeToUnlock) : a.MedianTimeToUnlock,
+                Pop    = hardcore ? a.NumAwardedHardcore : a.NumAwarded,
+            })
+            .Where(x => x.Median.HasValue && x.Median.Value > 0)
+            .OrderBy(x => x.Median!.Value)
+            .ThenByDescending(x => x.Pop)
+            .Select(x => x.Ach)
+            .ToList();
+
+        var picks = liveHits.Concat(proxyPool).Take(3).ToList();
+        if (picks.Count == 0)
+        {
+            sectionPanel.IsVisible = false;
+            return;
+        }
+
+        foreach (var ach in picks)
+        {
+            int median = (hardcore ? (ach.MedianTimeToUnlockHardcore ?? ach.MedianTimeToUnlock) : ach.MedianTimeToUnlock) ?? 0;
+            liveMap.TryGetValue(ach.Id, out var livePick);
+            grid.Children.Add(BuildBadgeTile(ach, median, livePick));
+        }
+        sectionPanel.IsVisible = true;
+    }
+
+    /// <summary>One "Coming up" tile: 56×56 badge, truncated title, and a caption — the
+    /// user's live progress (accent) when available, else the community median (muted).
+    /// Tooltip carries the full description + points.</summary>
+    private Control BuildBadgeTile(Models.RAAchievement ach, int medianSec, Models.RALiveAchievementProgress? live)
+    {
+        var panel = new StackPanel { Margin = new Thickness(0, 0, 6, 0) };
+
+        var img = new Image
+        {
+            Width = 56, Height = 56,
+            Stretch = Avalonia.Media.Stretch.UniformToFill,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+        };
+        if (!string.IsNullOrEmpty(ach.BadgeName))
+            _ = LoadBadgeIntoAsync(img, $"https://media.retroachievements.org/Badge/{ach.BadgeName}.png");
+        panel.Children.Add(img);
+
+        panel.Children.Add(new TextBlock
+        {
+            Text = ach.Title,
+            FontFamily = (Avalonia.Media.FontFamily)(this.FindResource("PrimaryFont") ?? FontFamily.Default),
+            FontSize = 11,
+            FontWeight = FontWeight.SemiBold,
+            Foreground = Res("TextPrimaryBrush", "#FFFFFF"),
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+            TextAlignment = Avalonia.Media.TextAlignment.Center,
+            TextTrimming = Avalonia.Media.TextTrimming.CharacterEllipsis,
+            MaxWidth = 110,
+            Margin = new Thickness(0, 4, 0, 0),
+        });
+
+        string captionText;
+        IBrush captionBrush;
+        if (live != null && live.Percent > 0 && live.Percent < 100)
+        {
+            string pctStr = $"{live.Percent:0.#}%";
+            captionText = string.IsNullOrEmpty(live.ProgressText) ? pctStr : $"{pctStr} · {live.ProgressText}";
+            captionBrush = Res("AccentBrush", "#E03535");   // your data, not a community average
+        }
+        else
+        {
+            captionText = "~" + FormatDuration(medianSec);
+            captionBrush = Res("TextMutedBrush", "#9A9A9A"); // estimate
+        }
+        panel.Children.Add(new TextBlock
+        {
+            Text = captionText,
+            FontFamily = (Avalonia.Media.FontFamily)(this.FindResource("PrimaryFont") ?? FontFamily.Default),
+            FontSize = 10,
+            Foreground = captionBrush,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+            Margin = new Thickness(0, 1, 0, 0),
+        });
+
+        var tip = new System.Text.StringBuilder();
+        tip.AppendLine(ach.Title);
+        if (!string.IsNullOrEmpty(ach.Description)) { tip.AppendLine(); tip.AppendLine(ach.Description); }
+        tip.AppendLine();
+        tip.Append($"{ach.Points} pts");
+        ToolTip.SetTip(panel, tip.ToString());
+
+        return panel;
+    }
+
+    private static async Task LoadBadgeIntoAsync(Image img, string url)
+    {
+        Bitmap? bmp;
+        lock (_raBadgeCache)
+        {
+            if (_raBadgeCache.TryGetValue(url, out bmp))
+            {
+                if (bmp != null) img.Source = bmp;
+                return;
+            }
+        }
+        try
+        {
+            byte[] png = await _raBadgeHttp.GetByteArrayAsync(url);
+            using var ms = new System.IO.MemoryStream(png);
+            bmp = new Bitmap(ms);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.WriteLine($"[RA] badge load failed ({url}): {ex.Message}");
+            bmp = null;
+        }
+        lock (_raBadgeCache) { _raBadgeCache[url] = bmp; }
+        if (bmp != null)
+            Avalonia.Threading.Dispatcher.UIThread.Post(() => img.Source = bmp);
+    }
+
+    private void BuildTimingsCaption(Models.RAProgression prog, bool hardcore)
+    {
+        var caption = Get<TextBlock>("RATimingsCaption");
+        // Sample-size gate — under n=20 the medians are too noisy to present as typical.
+        const int MinSamples = 20;
+        int? beatSec = hardcore ? (prog.MedianTimeToBeatHardcore ?? prog.MedianTimeToBeat) : prog.MedianTimeToBeat;
+        string? beat = beatSec.HasValue && prog.TimesUsedInBeatMedian >= MinSamples
+            ? FormatDuration(beatSec.Value) : null;
+        string? master = prog.MedianTimeToMaster.HasValue && prog.TimesUsedInMasteryMedian >= MinSamples
+            ? FormatDuration(prog.MedianTimeToMaster.Value) : null;
+
+        if (beat == null && master == null)
+        {
+            caption.IsVisible = false;
+            return;
+        }
+        var parts = new List<string>();
+        if (beat != null) parts.Add($"beat ~{beat}");
+        if (master != null) parts.Add($"master ~{master}");
+        caption.Text = "Typical run: " + string.Join("  ·  ", parts);
+        caption.IsVisible = true;
+    }
 
     private T Get<T>(string name) where T : Control => this.FindControl<T>(name)!;
 }

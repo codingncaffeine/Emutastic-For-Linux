@@ -155,6 +155,22 @@
                             <ProgressBar Name="RAProgress" Height="6" Minimum="0" Maximum="100" Value="0"
                                          Background="{DynamicResource BgTertiaryBrush}" Foreground="{DynamicResource AccentBrush}"
                                          BorderThickness="0"/>
+
+                            <!-- "Coming up" — three unearned achievements: live in-game progress first
+                                 (closest to unlocking), then ascending community median time-to-unlock.
+                                 Hidden when logged out or no eligible achievements remain. -->
+                            <StackPanel Name="ComingUpSection" Margin="0,14,0,0" IsVisible="False">
+                                <TextBlock Text="Coming up" FontFamily="{DynamicResource PrimaryFont}"
+                                           FontSize="10" FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextMutedBrush}" Margin="0,0,0,8"/>
+                                <UniformGrid Name="ComingUpGrid" Rows="1" Columns="3" HorizontalAlignment="Stretch"/>
+                            </StackPanel>
+
+                            <!-- Typical-run caption — only when median sample sizes are trustworthy (n ≥ 20). -->
+                            <TextBlock Name="RATimingsCaption" FontFamily="{DynamicResource PrimaryFont}"
+                                       FontSize="11" FontStyle="Italic"
+                                       Foreground="{DynamicResource TextMutedBrush}"
+                                       Margin="0,12,0,0" IsVisible="False"/>
                         </StackPanel>
                     </StackPanel>
                 </ScrollViewer>
