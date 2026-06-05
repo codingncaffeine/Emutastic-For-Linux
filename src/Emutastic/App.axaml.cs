@@ -178,6 +178,13 @@ public partial class App : Application
                 desktop.MainWindow = new MainWindow();
             }
             Services.StartupTrace.Stop("App.CreateMainWindow", swWin);
+
+            // Finish any recording encode that a crash or hard power-off interrupted — the raw
+            // frames + .meta.json sidecar are still on disk. Library launches only (the game-host
+            // direct-launch path must not race a concurrently running library instance over the
+            // same files). Background thread: this can run real ffmpeg encodes.
+            if (files.Length < 2)
+                System.Threading.Tasks.Task.Run(Services.RecordingService.RecoverInterrupted);
         }
 
         base.OnFrameworkInitializationCompleted();

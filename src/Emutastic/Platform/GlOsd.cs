@@ -241,7 +241,7 @@ namespace Emutastic.Platform
                           int statusHover = -1,
                           IReadOnlyList<(string Label, bool Enabled, string? Value)>? cogMenu = null,
                           int cogHover = -1, string cogFooter = "",
-                          SKBitmap? fxFrame = null)
+                          SKBitmap? fxFrame = null, bool recording = false)
         {
             if (w <= 0 || h <= 0) return false;
             int aq = (int)Math.Round(Math.Clamp(hudAlpha, 0f, 1f) * 16);   // quantize alpha → limit fade re-renders
@@ -250,7 +250,7 @@ namespace Emutastic.Platform
             // A pause-effect frame is a fresh animation every tick — bypass the signature cache
             // while one is active (cheap: the effect only runs while the game is paused).
             string fxSig = fxFrame != null ? (_fxSeq++).ToString() : "";
-            string sig = $"{w}x{h}|{status}|{title}|{winStyle}|{(maximized ? 1 : 0)}|{titleHover}|{aq}|{hoverBtn}|{(paused ? 1 : 0)}|{pickSig}|{statusHover}|{cogSig}|{fxSig}";
+            string sig = $"{w}x{h}|{status}|{title}|{winStyle}|{(maximized ? 1 : 0)}|{titleHover}|{aq}|{hoverBtn}|{(paused ? 1 : 0)}|{pickSig}|{statusHover}|{cogSig}|{fxSig}|{(recording ? 1 : 0)}";
             if (sig == _sig && _bmp != null) return false;
             _sig = sig;
 
@@ -269,8 +269,8 @@ namespace Emutastic.Platform
             if (fxFrame != null)
                 c.DrawBitmap(fxFrame, new SKRect(0, 0, w, h));
             DrawTitleBar(c, w, title, winStyle, maximized, titleHover);
-            DrawStatus(c, w, h, status, statusHover);
-            if (aq > 0) DrawHud(c, w, h, hoverBtn, paused, aq / 16f);
+            DrawStatus(c, w, h, status, statusHover, recording);
+            if (aq > 0) DrawHud(c, w, h, hoverBtn, paused, aq / 16f, recording);
             if (picker != null) DrawLoadPicker(c, w, h, picker, pickerHover);
             if (cogMenu != null) DrawCogMenu(c, w, h, cogMenu, cogHover, cogFooter);
             // Subtle rounded border at the window edge (the shim erases the corners to transparent so the
@@ -285,7 +285,7 @@ namespace Emutastic.Platform
         // Full-width bottom status bar (mirrors EmulatorWindow.xaml's status Border: BgSecondary fill, a
         // 1px top border, ~11px muted left-aligned text). Borderless own-toplevel has no chrome row, so the
         // bar overlays the very bottom edge of the game.
-        private static void DrawStatus(SKCanvas c, int w, int h, string status, int statusHover)
+        private static void DrawStatus(SKCanvas c, int w, int h, string status, int statusHover, bool recording = false)
         {
             float top = h - StatusBarH;
             using (var bar = new SKPaint { Color = new SKColor(0x16, 0x16, 0x19, 0xF0) })
@@ -298,6 +298,19 @@ namespace Emutastic.Platform
             StatusButtonRects(w, h, out var saveR, out var loadR);
             DrawStatusBtn(c, saveR, "Save State", statusHover == StatusBtnSave, isLoad: false);
             DrawStatusBtn(c, loadR, "Load State", statusHover == StatusBtnLoad, isLoad: true);
+
+            // "⏺ REC" indicator left of the buttons while recording (upstream's RecIndicator:
+            // red #E03535, 11pt bold). The dot is drawn as a filled circle (no emoji font needed).
+            if (recording)
+            {
+                using var recFont = new SKFont(SKTypeface.FromFamilyName(null, SKFontStyle.Bold), 12f);
+                using var recPaint = new SKPaint { Color = new SKColor(0xE0, 0x35, 0x35, 0xFF), IsAntialias = true };
+                float rw = recFont.MeasureText("REC");
+                float rx = saveR.Left - 18 - rw;
+                float cy2 = top + StatusBarH / 2f;
+                c.DrawCircle(rx - 9, cy2, 4f, recPaint);
+                c.DrawText("REC", rx, cy2 + 4.2f, SKTextAlign.Left, recFont, recPaint);
+            }
 
             if (string.IsNullOrEmpty(status)) return;
             using var font = new SKFont { Size = 12.5f, Edging = SKFontEdging.Antialias };
@@ -462,7 +475,7 @@ namespace Emutastic.Platform
             else c.DrawRect(new SKRect(cx - 5, cy - 5, cx + 5, cy + 5), p);
         }
 
-        private void DrawHud(SKCanvas c, int w, int h, int hoverBtn, bool paused, float fade)
+        private void DrawHud(SKCanvas c, int w, int h, int hoverBtn, bool paused, float fade, bool recording = false)
         {
             byte A(byte a) => (byte)(a * fade);
             float pillW = PillWidth();
@@ -501,7 +514,7 @@ namespace Emutastic.Platform
                     case BtnPause:  if (paused) DrawPlay(c, cx, cy, g); else DrawPauseBars(c, cx, cy, g); break;
                     case BtnReset:  DrawReset(c, cx, cy, g); break;
                     case BtnSave:   DrawSave(c, cx, cy, g); break;
-                    case BtnRecord: DrawRecord(c, cx, cy, A(0xFF), g); break;
+                    case BtnRecord: DrawRecord(c, cx, cy, A(0xFF), g, recording); break;
                     case BtnCog:    DrawCog(c, cx, cy, g); break;
                 }
             });
@@ -614,13 +627,17 @@ namespace Emutastic.Platform
             c.DrawRect(new SKRect(cx - r + 3, cy + 1, cx + r - 3, cy + r - 2), p);    // label
         }
 
-        // Record: a filled circle (Material "RecordCircle") — placeholder.
-        private static void DrawRecord(SKCanvas c, float cx, float cy, byte a, SKPaint p)
+        // Record: a filled circle (Material "RecordCircle") — red while recording (upstream's
+        // OverlayRecordIcon turns #E03535 during capture).
+        private static void DrawRecord(SKCanvas c, float cx, float cy, byte a, SKPaint p, bool recording = false)
         {
+            var keep = p.Color;
+            if (recording) p.Color = new SKColor(0xE0, 0x35, 0x35, a);
             p.Style = SKPaintStyle.Stroke;
             c.DrawCircle(cx, cy, 10f, p);
             p.Style = SKPaintStyle.Fill;
             c.DrawCircle(cx, cy, 5.5f, p);
+            p.Color = keep;
         }
 
         // Cog: gear (Material "Cog"/"Settings") — placeholder.

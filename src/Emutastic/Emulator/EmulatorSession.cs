@@ -274,7 +274,7 @@ namespace Emutastic.Emulator
             { 29, 0 }, { 27, 8 }, { 4, 1 }, { 22, 9 },     // Z=B, X=A, A=Y, S=X
             { 40, 3 }, { 229, 2 }, { 20, 10 }, { 26, 11 }, // Enter=START, RShift=SELECT, Q=L, W=R
         };
-        const int SC_ESCAPE = 41, SC_F11 = 68, SC_P = 19, SC_F5 = 62, SC_F7 = 64;
+        const int SC_ESCAPE = 41, SC_F11 = 68, SC_P = 19, SC_F5 = 62, SC_F7 = 64, SC_F9 = 66;
 
         // Emu-thread handler for the GL window's keyboard. Game buttons feed SdlInput's player-1 fallback;
         // a few non-game scancodes drive the session (quit / fullscreen / pause).
@@ -289,6 +289,7 @@ namespace Emutastic.Emulator
                 case SC_P:      _paused = !_paused; break;
                 case SC_F5:     RequestSaveState("Quick Save"); break;   // upstream's F5 quick save
                 case SC_F7:     RequestQuickLoad(); break;               // upstream's F7 quick load
+                case SC_F9:     ToggleRecording(); break;                // upstream's F9 record toggle
             }
         }
 
@@ -994,8 +995,8 @@ namespace Emutastic.Emulator
                 };
                 if (HandlerConsoleName == "N64" && CoreOptionValue("mupen64plus-pak1").Length > 0)
                     m.Add(("Pak", true, CoreOptionValue("mupen64plus-pak1"), "mupen64plus-pak1"));
-                m.Add(("Record",          false, null, null));    // RecordingService not ported yet
-                m.Add(("View Recordings", false, null, null));
+                m.Add((IsRecording ? "Stop Recording" : "Record", true, null, "\x01RECORD"));
+                m.Add(("View Recordings", true, null, "\x01VIEWREC"));
                 // Cheats: live when the core supports them (or legacy cheats exist for this game) and
                 // we know which game this is (--game-id; absent on bare CLI launches).
                 bool cheatable = CheatGameId >= 0
@@ -1087,6 +1088,16 @@ namespace Emutastic.Emulator
                             EmitHostCommand?.Invoke($"open-cheat-editor {CheatGameId}");
                             cogMenu = null;
                         }
+                        else if (key == "\x01RECORD")
+                        {
+                            ToggleRecording();
+                            cogMenu = buildCogMain();   // refresh the Record ↔ Stop Recording label
+                        }
+                        else if (key == "\x01VIEWREC")
+                        {
+                            OpenRecordingsFolder();
+                            cogMenu = null;
+                        }
                         else if (key == "\x01IMPORTCHEATS")
                         {
                             int added = ImportCheatsFromDatabase();
@@ -1168,12 +1179,15 @@ namespace Emutastic.Emulator
                     case GlOsd.BtnSave:
                         RequestSaveState(DateTime.Now.ToString("yyyy-MM-dd HH.mm.ss"));
                         break;
+                    // Record: toggle capture; icon turns red while recording (upstream parity).
+                    case GlOsd.BtnRecord:
+                        ToggleRecording();
+                        break;
                     // Cog: toggle the settings menu (upstream's OverlayMenu).
                     case GlOsd.BtnCog:
                         statePicker = null;
                         cogMenu = cogMenu == null ? buildCogMain() : null;
                         break;
-                    // Record: placeholder — no action wired yet (later phase).
                     default: break;
                 }
                 hudHideAtMs = clock.Elapsed.TotalMilliseconds + HudTimeoutMs;   // any click keeps the HUD up
@@ -1254,7 +1268,7 @@ namespace Emutastic.Emulator
                 var cogItems = cogMenu?.Select(m => (m.Label, m.Enabled, m.Value)).ToList();
                 if (osd.Build(ww, wh, shownStatus, title, winStyle, _wlTop.IsMaximized, titleHover, hudAlpha, hover, IsPaused,
                               pickerItems, pickerHover, statusHover,
-                              cogItems, cogHover, cogMenu != null ? CoreName : "", fxFrame))
+                              cogItems, cogHover, cogMenu != null ? CoreName : "", fxFrame, IsRecording))
                     _wlTop.SetOverlay(osd.Pixels, osd.Width, osd.Height);
 
                 // Present the latest frame every iteration; the shim's FIFO swap is the pace (re-presenting a
@@ -1292,6 +1306,8 @@ namespace Emutastic.Emulator
 
             _running = false;   // window closed → stop the emu thread
             _wlTop.PointerButton -= onBtn; _wlTop.MouseMoved -= showHud;
+            // Quitting mid-recording: stop + encode rather than losing the capture.
+            try { if (_recording is { IsRecording: true }) _recording.Stop(); } catch { }
             try { pauseFx?.Dispose(); } catch { }
             try { osd.Dispose(); } catch { }
             var w = _wlTop; _wlTop = null;
@@ -1679,6 +1695,61 @@ namespace Emutastic.Emulator
 
         /// <summary>The active disc-swap OSD message, or null if none is currently showing.</summary>
         public string? ActiveDiskMessage => (_diskMsg.Length > 0 && Stopwatch.GetTimestamp() < _diskMsgUntil) ? _diskMsg : null;
+
+        // ── Recording (ported from upstream's ffmpeg path; Linux has no WGC — every core's frames
+        //    already land here as packed BGRA, so the ffmpeg path covers all of them) ────────────────
+        private Services.RecordingService? _recording;
+        public bool IsRecording => _recording?.IsRecording == true;
+
+        /// <summary>F9 / HUD record button / cog "Record": start or stop the capture.</summary>
+        public void ToggleRecording()
+        {
+            if (_recording is { IsRecording: true })
+            {
+                var elapsed = _recording.Elapsed;
+                _recording.Stop();   // encode continues in the background; onComplete shows the result
+                ShowDiskMessage($"Recording stopped ({elapsed:mm\\:ss}) — encoding…", 4);
+                return;
+            }
+            int w, h;
+            lock (_frameLock) { w = _frameW; h = _frameH; }
+            string safeTitle = FileNameHelper.SanitizeFileName(SaveGameTitle.Length > 0 ? SaveGameTitle : "game");
+            string outDir = Path.Combine(AppPaths.GetFolder("Recordings", FileNameHelper.SanitizeFileName(_handler.ConsoleName)), safeTitle);
+            string outputPath = Path.Combine(outDir, DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".mp4");
+
+            var cfg = App.Configuration?.GetRecordingConfiguration();
+            var settings = new Services.RecordingEncodeSettings
+            {
+                Quality = cfg?.Quality ?? "High",
+                OutputScale = cfg?.OutputScale ?? 2,
+                Encoder = cfg?.Encoder ?? "Auto",
+                HighChroma = cfg?.HighChroma ?? false,
+                AudioBitrateKbps = cfg?.AudioBitrateKbps ?? 192,
+                // CD-i's half-height interlaced framebuffer breaks uniform scaling (upstream's only
+                // aspect special case — every other console records at the buffer's pixel aspect).
+                DisplayAspectRatio = _handler.ConsoleName == "CDi" ? _core?.AvInfo.geometry.aspect_ratio ?? 0f : 0f,
+            };
+            var rec = new Services.RecordingService();
+            string? err = rec.Start(outputPath, w, h, TargetFps, (int)Math.Round(_sampleRate),
+                error => ShowDiskMessage(error ?? "Recording saved to Recordings", error == null ? 4 : 6),
+                settings);
+            if (err != null) { ShowDiskMessage(err, 5); return; }
+            _recording = rec;
+            ShowDiskMessage("Recording started — press F9 to stop", 4);
+        }
+
+        /// <summary>Cog "View Recordings": open this game's recordings folder in the file manager.</summary>
+        public void OpenRecordingsFolder()
+        {
+            try
+            {
+                string safeTitle = FileNameHelper.SanitizeFileName(SaveGameTitle.Length > 0 ? SaveGameTitle : "game");
+                string dir = Path.Combine(AppPaths.GetFolder("Recordings", FileNameHelper.SanitizeFileName(_handler.ConsoleName)), safeTitle);
+                Directory.CreateDirectory(dir);
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("xdg-open", dir) { UseShellExecute = false });
+            }
+            catch (Exception ex) { ShowDiskMessage($"Could not open folder: {ex.Message}", 4); }
+        }
 
         // ── Cheats (ported from upstream EmulatorWindow's cheat engine) ─────────────────────────────
         // Per-game cheats load at boot and apply ON THE EMU THREAD between retro_run calls (same
@@ -2293,6 +2364,9 @@ namespace Emutastic.Emulator
                     {
                         lock (_frameLock) { _frame = back; _frameW = ow; _frameH = oh; _frameSeq++; }
                         FrameReady?.Invoke();
+                        // Recording tap (HW): the readback buffer is packed BGRA top-down — exactly
+                        // what the recorder wants. Drops itself if dims changed mid-recording.
+                        _recording?.QueueVideoFrame(back, ow * oh * 4);
                     }
                     // Count the frame even when the never-block ring had no completed readback yet
                     // (the core DID render; its pixels just land 1-3 frames later) — the fps display
@@ -2363,6 +2437,9 @@ namespace Emutastic.Emulator
             }
             System.Threading.Interlocked.Increment(ref _frameCountSample);   // real produced-frame rate
             FrameReady?.Invoke();                                            // push the frame to the window to present
+            // Recording tap (SW): bgra is the finished packed top-down frame (post-rotation,
+            // so the video matches what's on screen). Drops itself on mid-record dim changes.
+            _recording?.QueueVideoFrame(bgra, w * h * 4);
         }
 
         // Rotate a tightly-packed BGRA buffer counter-clockwise by deg (90/180/270). Returns the
@@ -2415,8 +2492,31 @@ namespace Emutastic.Emulator
             }
         }
 
-        private void Audio_cb(short left, short right) => _audio?.QueueSample(left, right);
-        private UIntPtr AudioBatch_cb(IntPtr data, UIntPtr frames) { _audio?.QueueBatch(data, (int)frames); return frames; }
+        // Recording taps capture the core's RAW samples (its true rate, pre-DRC — DRC only nudges
+        // the playback stream's resample ratio; the recording must not inherit that wobble).
+        private byte[] _recAudioBuf = new byte[8192];
+        private void Audio_cb(short left, short right)
+        {
+            _audio?.QueueSample(left, right);
+            if (_recording is { IsRecording: true })
+            {
+                _recAudioBuf[0] = (byte)left;  _recAudioBuf[1] = (byte)(left >> 8);
+                _recAudioBuf[2] = (byte)right; _recAudioBuf[3] = (byte)(right >> 8);
+                _recording.QueueAudioSamples(_recAudioBuf, 4);
+            }
+        }
+        private UIntPtr AudioBatch_cb(IntPtr data, UIntPtr frames)
+        {
+            _audio?.QueueBatch(data, (int)frames);
+            if (_recording is { IsRecording: true })
+            {
+                int bytes = (int)frames * 4;   // S16LE stereo
+                if (_recAudioBuf.Length < bytes) _recAudioBuf = new byte[bytes];
+                Marshal.Copy(data, _recAudioBuf, 0, bytes);
+                _recording.QueueAudioSamples(_recAudioBuf, bytes);
+            }
+            return frames;
+        }
         private void InputPoll_cb() { /* SdlInput.Poll already called at top of the loop */ }
 
         // Number of live emulator sessions. The Controls-panel ControllerManager checks this so it

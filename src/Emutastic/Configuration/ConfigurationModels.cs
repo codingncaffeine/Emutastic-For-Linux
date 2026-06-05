@@ -124,7 +124,10 @@ namespace Emutastic.Configuration
         /// </summary>
         public int OutputScale { get; set; } = 2;
 
-        /// <summary>"Auto" (NVENC if available, else x264), "NVENC", or "x264".</summary>
+        /// <summary>"Auto"/"x264" → software libx264. "VAAPI" → hardware encode, explicit
+        /// opt-in only — never picked by Auto, since a broken GPU encode ring hangs the OS
+        /// (and one mid-encode failure blacklists it via a marker file). "NVENC" is the
+        /// upstream Windows value; accepted but unavailable here.</summary>
         public string Encoder { get; set; } = "Auto";
 
         /// <summary>
