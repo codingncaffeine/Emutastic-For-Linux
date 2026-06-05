@@ -599,6 +599,18 @@ public partial class MainWindow : Window
                     App.Configuration.ScheduleSave();
                 }
             }
+            // Game window closed → remember its size for that game's next launch.
+            else if (verb == "save-win-size" && App.Configuration != null)
+            {
+                var ws = (arg ?? "").Split(' ');
+                if (ws.Length == 3 && int.TryParse(ws[0], out int winGameId)
+                    && int.TryParse(ws[1], out int winW) && int.TryParse(ws[2], out int winH))
+                {
+                    App.Configuration.SetValue($"gameWin_{winGameId}_w", winW);
+                    App.Configuration.SetValue($"gameWin_{winGameId}_h", winH);
+                    App.Configuration.ScheduleSave();
+                }
+            }
             // In-game cog → shader pick: persist per game (upstream's shader_{gameId} key).
             else if (verb == "save-shader" && App.Configuration != null)
             {

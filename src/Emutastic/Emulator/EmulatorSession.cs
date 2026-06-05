@@ -160,7 +160,6 @@ namespace Emutastic.Emulator
         private volatile byte[]? _pendingBezelRgba; private int _pendingBezelW, _pendingBezelH;
         private volatile byte[]? _pendingGovRgba; private int _pendingGovW, _pendingGovH;
         private volatile bool _bezelRowVisible, _bezelActive, _bezelLoaded, _bezelFetching;
-        private double _bezelAr;
         private volatile bool _govRowVisible, _govActive;                           // Vectrex overlay state
 
         // ── Built-in shader presets (upstream's ShaderPreset enum, same order/names — the index is
@@ -174,6 +173,10 @@ namespace Emutastic.Emulator
         };
         private int _shaderPreset;   // present-thread state (restored at init, set by the cog)
         private string? _glslpRel;   // active downloaded .glslp (relative path) — overrides the built-in
+
+        /// <summary>Per-game window size from the parent ("--win-size", saved at last session end);
+        /// 0 = use the default. The host can't read per-game config rows itself.</summary>
+        public int RestoreWinW, RestoreWinH;
         private long _frameSeq;
         private int _frameCountSample;            // frames produced since the last SampleStats (real fps)
         private long _coreRunTicks, _coreRunCalls; // accumulated retro_run time + call count for avg ms
@@ -999,6 +1002,9 @@ namespace Emutastic.Emulator
             // aspect — otherwise the chrome makes the area wider than DAR and the game can't fill it.
             int chrome = (int)GlOsd.TitleBarHeight + (int)GlOsd.StatusBarHeight;
             int winH = 720, winW = Math.Max(1, (int)Math.Round((winH - chrome) * ar));
+            // Per-game remembered size (saved at session end, handed down by the parent) wins
+            // over the AR-derived default — resize Mario Bros once, it reopens that way.
+            if (RestoreWinW > 200 && RestoreWinH > 150) { winW = RestoreWinW; winH = RestoreWinH; }
             _wlTop = WlToplevelPresenter.TryCreate(winW, winH, out string? err);
             if (_wlTop == null)
             {
@@ -1124,7 +1130,10 @@ namespace Emutastic.Emulator
             // Turbo level (upstream's TurboButtonsDialog as a cog submenu): one pill-toggle row per
             // turbo-able button. With descriptors, they are authoritative for EVERY port (a single-port
             // NES must not render phantom P2-P4 rows); without them, fall back to the canonical 8 for
-            // port 0. Row keys "\x03<port>:<id>" toggle + save through the parent.
+            // port 0. Row keys "\x03<port>:<id>" toggle + save through the parent. PAGINATED — the GL
+            // menu doesn't scroll, and 4 declared ports × 8 buttons would overflow the window.
+            const int TurboPageSize = 12;
+            int turboPage = 0;
             Func<List<(string, bool, string?, string?)>> buildCogTurbo = () =>
             {
                 var m = new List<(string, bool, string?, string?)> { ("‹ Back", true, null, "\x01BACK") };
@@ -1136,6 +1145,7 @@ namespace Emutastic.Emulator
                 // Prefix rows with the player number only when more than one port has buttons.
                 int portsWithButtons = _descriptorsReceived
                     ? _joypadDescriptors.Count(d => d.Keys.Any(k => !TurboBlacklist.Contains(k))) : 1;
+                var rows = new List<(string, bool, string?, string?)>();
                 for (int p = 0; p < 4; p++)
                 {
                     var btns = _descriptorsReceived ? _joypadDescriptors[p] : (p == 0 ? fallback : null);
@@ -1145,10 +1155,15 @@ namespace Emutastic.Emulator
                     {
                         if (TurboBlacklist.Contains(id)) continue;
                         string row = portsWithButtons > 1 ? $"P{p + 1} · {label}" : label;
-                        m.Add((row, true, set.Contains(id) ? "\x01ON" : "\x01OFF", $"\x03{p}:{id}"));
+                        rows.Add((row, true, set.Contains(id) ? "\x01ON" : "\x01OFF", $"\x03{p}:{id}"));
                     }
                 }
-                if (m.Count == 1) m.Add(("No turbo-able buttons", false, null, null));
+                if (rows.Count == 0) { m.Add(("No turbo-able buttons", false, null, null)); return m; }
+                int pages = Math.Max(1, (rows.Count + TurboPageSize - 1) / TurboPageSize);
+                turboPage %= pages;   // "more…" advances past the last page → wrap to the first
+                m.AddRange(rows.Skip(turboPage * TurboPageSize).Take(TurboPageSize));
+                if (pages > 1)
+                    m.Add(($"more… ({turboPage + 1}/{pages})", true, "›", "\x07"));
                 return m;
             };
             // Shader level (upstream's ShaderPanel picker, as a cog submenu): the 7 built-ins with
@@ -1318,11 +1333,10 @@ namespace Emutastic.Emulator
                             }
                             else
                             {
+                                // The shim fits the game (at ITS aspect) inside the bezel rect, so
+                                // no render-DAR change is needed here.
                                 _bezelActive = !_bezelActive;
                                 _wlTop!.ShowBezel(_bezelActive);
-                                // The game renders at the bezel's AR while active so it lands in
-                                // the transparent cutout (upstream's WindowAr override).
-                                _wlTop.SetAspect(_bezelActive && _bezelAr > 0.01 ? _bezelAr : DisplayAspectRatio);
                             }
                             if (CheatGameId >= 0)
                                 Services.BezelService.SetEnabledForGame(CheatGameId, _bezelActive);
@@ -1346,7 +1360,8 @@ namespace Emutastic.Emulator
                                 : $"Added {added} cheat{(added == 1 ? "" : "s")} (off by default)", 4);
                             cogMenu = buildCogCheats();
                         }
-                        else if (key == "\x01TURBO") cogMenu = buildCogTurbo();
+                        else if (key == "\x01TURBO") { turboPage = 0; cogMenu = buildCogTurbo(); }
+                        else if (key == "\x07") { turboPage++; cogMenu = buildCogTurbo(); }   // next turbo page (builder wraps)
                         else if (key == "\x01SHADER") cogMenu = buildCogShader();
                         else if (key.Length > 1 && key[0] == '\x04' && int.TryParse(key.AsSpan(1), out int shaderIdx)
                                  && shaderIdx >= 0 && shaderIdx < ShaderPresets.Length)
@@ -1574,8 +1589,7 @@ namespace Emutastic.Emulator
                     _pendingBezelRgba = null;
                     _wlTop.SetBezel(bezRgba, _pendingBezelW, _pendingBezelH);
                     _bezelLoaded = true;
-                    _wlTop.ShowBezel(_bezelActive);
-                    if (_bezelActive && _bezelAr > 0.01) _wlTop.SetAspect(_bezelAr);
+                    _wlTop.ShowBezel(_bezelActive);   // the shim fits the game inside the bezel rect
                 }
                 if (_pendingGovRgba is byte[] govRgba)
                 {
@@ -1642,6 +1656,14 @@ namespace Emutastic.Emulator
             }
 
             _running = false;   // window closed → stop the emu thread
+            // Remember this game's window size for the next launch (parent persists; skipped when
+            // maximized so a fullscreen session doesn't bake in a giant floating size).
+            if (CheatGameId >= 0 && !_wlTop.IsMaximized)
+            {
+                _wlTop.GetSize(out int endW, out int endH);
+                if (endW > 200 && endH > 150)
+                    EmitHostCommand?.Invoke($"save-win-size {CheatGameId} {endW} {endH}");
+            }
             _wlTop.PointerButton -= onBtn; _wlTop.MouseMoved -= showHud;
             // Quitting mid-recording: stop + encode rather than losing the capture.
             try { if (_recording is { IsRecording: true }) _recording.Stop(); } catch { }
@@ -2156,7 +2178,6 @@ namespace Emutastic.Emulator
                 if (!ok) return false;
                 if (bezel)
                 {
-                    _bezelAr = (double)bmp.Width / bmp.Height;
                     _pendingBezelW = bmp.Width; _pendingBezelH = bmp.Height;
                     _pendingBezelRgba = rgba;   // volatile publish LAST (dims travel with it)
                 }

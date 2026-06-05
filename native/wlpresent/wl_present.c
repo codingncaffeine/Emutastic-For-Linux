@@ -526,11 +526,24 @@ int wlp_present(void *h, const void *bgra, int fw, int fh) {
     // ratio — consoles like CD-i output a frame whose pixel ratio differs from its 4:3 display aspect.
     // Fall back to the frame's pixel ratio when no DAR was set.
     double dar = s->dar > 0.0 ? s->dar : (double)fw / fh;
+    // Bezel rect first (when active): it becomes the game's fit CONTAINER, so the game keeps ITS
+    // aspect and lands in the art's transparent cutout whatever shape the window is. (The Windows
+    // app resizes the whole window to the bezel AR instead; fitting the game within the drawn
+    // bezel achieves the same alignment without forcing the window.)
+    int bezOn = s->bez_on && s->bez_tex && s->bez_w > 0 && s->bez_h > 0;
+    int bx = 0, by = s->ins_bottom, bw = s->w, bh = availH;
+    if (bezOn) {
+        double bar = (double)s->bez_w / s->bez_h;
+        if ((double)s->w / availH > bar) { bh = availH; bw = (int)(availH * bar + 0.5); }
+        else { bw = s->w; bh = (int)(s->w / bar + 0.5); }
+        bx = (s->w - bw) / 2; by = s->ins_bottom + (availH - bh) / 2;
+    }
+    int gcw = bezOn ? bw : s->w, gch = bezOn ? bh : availH;   // game fit container
     int qw, qh;
-    if ((double)s->w / availH > dar) { qh = availH; qw = (int)(availH * dar + 0.5); }   // area wider than DAR → bound by height
-    else { qw = s->w; qh = (int)(s->w / dar + 0.5); }                                   // area taller → bound by width
-    int qx = (s->w - qw) / 2;
-    int qy = s->ins_bottom + (availH - qh) / 2;   // GL y is bottom-up: ins_bottom is the low edge
+    if ((double)gcw / gch > dar) { qh = gch; qw = (int)(gch * dar + 0.5); }   // area wider than DAR → bound by height
+    else { qw = gcw; qh = (int)(gcw / dar + 0.5); }                           // area taller → bound by width
+    int qx = bx + (gcw - qw) / 2;
+    int qy = by + (gch - qh) / 2;   // GL y is bottom-up: ins_bottom is the low edge
     glViewport(qx, qy, qw, qh);
     // Downloaded .glslp chain takes the game draw when active; on failure fall through to the
     // plain/built-in path (and drop the chain so we don't retry every frame).
@@ -573,16 +586,11 @@ int wlp_present(void *h, const void *bgra, int fw, int fh) {
         glDisable(GL_BLEND);
     }
 
-    // Bezel frame (The Bezel Project): aspect-fit at the BEZEL's own ratio in the content area
-    // between the chrome insets, alpha-blended over the game (its transparent center is the game
-    // window). C# forces the render DAR to the bezel AR while active, so the game lands in the
-    // cutout. Static texture — uploaded once per game.
-    if (s->bez_on && s->bez_tex && s->bez_w > 0 && s->bez_h > 0) {
-        double bar = (double)s->bez_w / s->bez_h;
-        int bw, bh;
-        if ((double)s->w / availH > bar) { bh = availH; bw = (int)(availH * bar + 0.5); }
-        else { bw = s->w; bh = (int)(s->w / bar + 0.5); }
-        glViewport((s->w - bw) / 2, s->ins_bottom + (availH - bh) / 2, bw, bh);
+    // Bezel frame (The Bezel Project): drawn at the rect computed above (the game's fit
+    // container), alpha-blended over the game — its transparent center is the game window.
+    // Static texture — uploaded once per game.
+    if (bezOn) {
+        glViewport(bx, by, bw, bh);
         glBindTexture(GL_TEXTURE_2D, s->bez_tex);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -600,13 +608,10 @@ int wlp_present(void *h, const void *bgra, int fw, int fh) {
     // Windows app captures GameLayer the same way), else the game rect.
     if (s->cap_armed) {
         s->cap_armed = 0;
-        int cx = qx, cy = qy, cw = qw, ch = qh;
-        if (s->bez_on && s->bez_tex && s->bez_w > 0 && s->bez_h > 0) {
-            double bar = (double)s->bez_w / s->bez_h;
-            if ((double)s->w / availH > bar) { ch = availH; cw = (int)(availH * bar + 0.5); }
-            else { cw = s->w; ch = (int)(s->w / bar + 0.5); }
-            cx = (s->w - cw) / 2; cy = s->ins_bottom + (availH - ch) / 2;
-        }
+        // Bezel up → capture the bezel composite rect (the Windows app captures GameLayer the
+        // same way); otherwise just the game rect.
+        int cx = bezOn ? bx : qx, cy = bezOn ? by : qy;
+        int cw = bezOn ? bw : qw, ch = bezOn ? bh : qh;
         if (cw > 0 && ch > 0) {
             free(s->cap_buf);
             s->cap_buf = malloc((size_t)cw * ch * 4);

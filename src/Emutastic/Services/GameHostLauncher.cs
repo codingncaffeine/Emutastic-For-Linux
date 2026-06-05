@@ -158,6 +158,11 @@ namespace Emutastic.Services
                     string turbo = string.Join(";", Enumerable.Range(0, 4)
                         .Select(p => App.Configuration.GetValue($"turbo_p{p}_{game.Id}", "")));
                     if (turbo != ";;;") { psi.ArgumentList.Add("--turbo"); psi.ArgumentList.Add(turbo); }
+
+                    // Per-game remembered window size (saved at session end via "save-win-size").
+                    int gw = App.Configuration.GetValue($"gameWin_{game.Id}_w", 0);
+                    int gh = App.Configuration.GetValue($"gameWin_{game.Id}_h", 0);
+                    if (gw > 0 && gh > 0) { psi.ArgumentList.Add("--win-size"); psi.ArgumentList.Add($"{gw}x{gh}"); }
                 }
             }
 

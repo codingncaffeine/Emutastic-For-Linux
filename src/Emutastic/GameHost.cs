@@ -39,7 +39,7 @@ namespace Emutastic
             string? core = args.Length > 1 ? args[1] : null;
             string? rom  = args.Length > 2 ? args[2] : null;
             string console = "", resultsPath = "";
-            string saveDir = "", gameTitle = "", romHash = "", loadStatePath = "", patchPath = "", turboSpec = "";
+            string saveDir = "", gameTitle = "", romHash = "", loadStatePath = "", patchPath = "", turboSpec = "", winSize = "";
             int gameId = -1;
             bool fullscreen = false, parentStdin = false;
             int prewarmSeconds = 0;   // >0 = shader pre-warm pass: run the attract/boot loop, then auto-quit
@@ -60,6 +60,8 @@ namespace Emutastic
                     case "--patch":        if (i + 1 < args.Length) patchPath = args[++i]; break;
                     // Per-game turbo sets ("p0csv;p1csv;p2csv;p3csv") — this process reads no config.
                     case "--turbo":        if (i + 1 < args.Length) turboSpec = args[++i]; break;
+                    // Per-game remembered window size ("WxH"), saved at the last session's end.
+                    case "--win-size":     if (i + 1 < args.Length) winSize = args[++i]; break;
                     // Library row id — names the per-game cheat file (Cheats/{Console}/{id}.json).
                     case "--game-id":      if (i + 1 < args.Length && int.TryParse(args[i + 1], out int gid)) { i++; gameId = gid; } break;
                     case "--prewarm":
@@ -128,6 +130,11 @@ namespace Emutastic
             if (!string.IsNullOrEmpty(loadStatePath)) session.QueuePendingLoad(loadStatePath);
             // Saved per-game turbo sets (upstream's LoadTurboConfig, handed down by the parent).
             if (!string.IsNullOrEmpty(turboSpec)) session.SetTurboConfig(turboSpec);
+            // Per-game remembered window size ("WxH" from the parent).
+            int xPos = winSize.IndexOf('x');
+            if (xPos > 0 && int.TryParse(winSize.AsSpan(0, xPos), out int rw)
+                         && int.TryParse(winSize.AsSpan(xPos + 1), out int rh))
+            { session.RestoreWinW = rw; session.RestoreWinH = rh; }
 
             // Quit signals → ask the loop to stop cleanly (flushes SRAM), distinct from a hard kill:
             //  • SIGTERM/SIGINT (incl. the PR_SET_PDEATHSIG signal when the parent dies),
