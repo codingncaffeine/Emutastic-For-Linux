@@ -150,7 +150,7 @@ Follows the XDG Base Directory spec:
     DATs/                        (No-Intro / Redump DATs — downloadable in-app)
     Cores/                       (libretro core .so files — downloadable in-app)
     System/                      (BIOS files)
-    Save States/ / Screenshots/ / Recordings/ / Artwork/ / Manuals/ / Cheats/ / Logs/ / ...
+    Saves/ (SRAM) / Save States/ / Screenshots/ / Recordings/ / Artwork/ / Manuals/ / Cheats/ / Themes/ / Logs/ / ...
 ```
 
 ### Installing & updating
