@@ -731,12 +731,6 @@
                                            FontFamily="{DynamicResource PrimaryFont}" VerticalAlignment="Center"/>
                             </StackPanel>
 
-                            <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,24,0,16"/>
-                            <TextBlock Text="CLOUD SYNC (GITHUB)" Theme="{StaticResource PrefLabel}"/>
-                            <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,0,0,12"/>
-                            <TextBlock TextWrapping="Wrap" FontSize="12" FontFamily="{DynamicResource PrimaryFont}"
-                                       Foreground="{DynamicResource TextMutedBrush}"
-                                       Text="Sync saves + database across machines via a private GitHub repo — coming in a future update."/>
                         
                             <!-- ── Cloud Sync (GitHub) — A9 port of upstream's Backups section ── -->
                             <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,24,0,16"/>
