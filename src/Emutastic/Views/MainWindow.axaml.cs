@@ -203,7 +203,7 @@ public partial class MainWindow : Window
     }
 
     // Tab strip: keep one checked and swap the content view. Library / Save States /
-    // Screenshots are live; Achievements lands in U8 (status note + blank content).
+    // Screenshots / Achievements are all live (Achievements = the A8f RA tab).
     private void OnTabClick(object? sender, RoutedEventArgs e)
     {
         if (sender is not ToggleButton clicked) return;
@@ -227,6 +227,9 @@ public partial class MainWindow : Window
         if (library != null) library.IsVisible = tag == "Library";
         if (saves   != null) saves.IsVisible   = tag == "SaveStates";
         if (shots   != null) shots.IsVisible   = tag == "Screenshots";
+        var ach = this.FindControl<Grid>("AchievementsView");
+        if (ach != null) ach.IsVisible = tag == "Achievements";
+        if (tag == "Achievements") PopulateAchievementsView();
 
         // Reset the shared search box for the new tab (upstream Tab_Click clears the
         // query, retargets the placeholder, and hides the box on Achievements).
@@ -530,6 +533,8 @@ public partial class MainWindow : Window
                 // A session just ended → the user-progress cache is stale by definition.
                 if (g.RAGameId > 0 && App.Configuration != null && _db != null)
                     new Services.RetroAchievementsService(App.Configuration, _db).InvalidateUserProgressForGame(g);
+                // …and so are the Achievements-tab spotlight + recent-unlocks caches.
+                try { _raData?.InvalidatePostPlay(); } catch { }
             }
             catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"[RA] session ingest failed: {ex.Message}"); }
         };
@@ -578,6 +583,7 @@ public partial class MainWindow : Window
             }
         };
         _vm = new MainViewModel(_db);
+        WireRaTab();
         _artworkFetch = new ArtworkFetchService(_db, new ArtworkService(), _vm);
         WireImportEvents();
         DataContext = _vm;

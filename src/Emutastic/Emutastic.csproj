@@ -18,6 +18,7 @@
     <!-- Also copy the HUD power glyph as a loose file so the game-host's own-toplevel OSD (no Avalonia
          asset loader in that process) can Skia-decode it from disk for the overlay. -->
     <None Include="Assets\buttons\powerbutton.png" Link="powerbutton.png" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Assets\Sounds\Notification1.mp3" Link="Assets/Sounds/Notification1.mp3" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- Build the native Wayland presenter shim (libwlpresent.so) from native/wlpresent/ and drop it beside

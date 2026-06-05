@@ -1,0 +1,77 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Emutastic.Views.FriendBriefCard"
+        SystemDecorations="None" TransparencyLevelHint="Transparent" Background="Transparent"
+        CanResize="False" ShowInTaskbar="False"
+        Width="340" SizeToContent="Height" Topmost="True">
+    <Border Background="{DynamicResource BgSecondaryBrush}" BorderBrush="{DynamicResource BorderNormalBrush}"
+            BorderThickness="1" CornerRadius="10" Padding="14">
+        <StackPanel>
+            <Grid ColumnDefinitions="Auto,*,Auto">
+                <Border Grid.Column="0" Width="56" Height="56" CornerRadius="28"
+                        Background="{DynamicResource BgTertiaryBrush}" ClipToBounds="True">
+                    <Image Name="BriefAvatar" Stretch="UniformToFill"/>
+                </Border>
+                <StackPanel Grid.Column="1" Margin="12,0,8,0" VerticalAlignment="Center">
+                    <!-- Grid (not StackPanel) so the * column bounds the username and
+                         CharacterEllipsis actually engages (upstream's note). -->
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Name="BriefName" Grid.Column="0" FontFamily="{DynamicResource PrimaryFont}"
+                                   FontSize="15" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}"
+                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                        <!-- Mutual-follow chip: shown only when this friend appears in YOUR
+                             retroachievements.org follow list. -->
+                        <Border Name="BriefMutualChip" Grid.Column="1" Background="{DynamicResource BgTertiaryBrush}"
+                                BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1" CornerRadius="4"
+                                Padding="6,1,6,1" Margin="8,0,0,0" IsVisible="False">
+                            <TextBlock Text="MUTUAL" FontFamily="{DynamicResource PrimaryFont}" FontSize="9"
+                                       FontWeight="SemiBold" Foreground="{DynamicResource AccentBrush}"/>
+                        </Border>
+                    </Grid>
+                    <TextBlock Name="BriefPoints" FontFamily="{DynamicResource PrimaryFont}" FontSize="12"
+                               Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3,0,0"/>
+                    <TextBlock Name="BriefMotto" FontFamily="{DynamicResource PrimaryFont}" FontSize="11"
+                               FontStyle="Italic" Foreground="{DynamicResource TextMutedBrush}"
+                               TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+                </StackPanel>
+                <!-- Per-friend notification bell (glyph stand-in for upstream's
+                     MaterialDesign PackIcon — no icon package on the Linux side). -->
+                <Button Name="BriefToastsToggle" Grid.Column="2" Background="Transparent" BorderThickness="0"
+                        Padding="4" VerticalAlignment="Top" Cursor="Hand">
+                    <TextBlock Name="BriefToastsIcon" Text="🔔" FontSize="13"/>
+                </Button>
+            </Grid>
+
+            <Border Background="{DynamicResource BorderSubtleBrush}" Height="1" Margin="0,12,0,12"/>
+
+            <!-- Last-played row with game image -->
+            <Grid Name="BriefLastPlayedRow" ColumnDefinitions="Auto,*">
+                <Border Grid.Column="0" Width="40" Height="40" CornerRadius="4"
+                        Background="{DynamicResource BgTertiaryBrush}" ClipToBounds="True">
+                    <Image Name="BriefLastGameImage" Stretch="UniformToFill"/>
+                </Border>
+                <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center">
+                    <TextBlock Name="BriefLastPlayedLabel" FontFamily="{DynamicResource PrimaryFont}" FontSize="9"
+                               FontWeight="SemiBold" Foreground="{DynamicResource TextMutedBrush}" Text="LAST PLAYED"/>
+                    <TextBlock Name="BriefLastActivity" FontFamily="{DynamicResource PrimaryFont}" FontSize="12"
+                               FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}"
+                               TextTrimming="CharacterEllipsis" Margin="0,2,0,0" Text="—"/>
+                </StackPanel>
+            </Grid>
+
+            <!-- 24h-unlock pill -->
+            <Border Name="BriefUnlocks24hCard" Background="{DynamicResource BgTertiaryBrush}" CornerRadius="6"
+                    Padding="10,6,10,6" Margin="0,10,0,0" IsVisible="False">
+                <TextBlock Name="BriefUnlocks24hText" FontFamily="{DynamicResource PrimaryFont}" FontSize="11"
+                           Foreground="{DynamicResource TextSecondaryBrush}" HorizontalAlignment="Center"/>
+            </Border>
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0" Spacing="8">
+                <Button Name="RemoveBtn" Content="Remove" Padding="12,5" FontSize="11"
+                        Theme="{StaticResource PrefActionBtn}"/>
+                <Button Name="OpenProfileBtn" Content="Open Full Profile" Padding="12,5" FontSize="11"
+                        Theme="{StaticResource PrefActionBtn}"/>
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</Window>
