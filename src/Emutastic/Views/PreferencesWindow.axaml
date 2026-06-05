@@ -592,6 +592,45 @@
                                 </StackPanel>
                                 <ToggleSwitch Name="RAHardcoreToggle" Grid.Column="1" OnContent="" OffContent="" VerticalAlignment="Center"/>
                             </Grid>
+
+                            <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,16,0,16"/>
+
+                            <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,16">
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="Sync follows from RetroAchievements on launch" FontSize="14" FontWeight="SemiBold"
+                                               FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextPrimaryBrush}"/>
+                                    <TextBlock Text="When enabled, Emutastic pulls your retroachievements.org follow list at startup and adds anyone new to your friends list. Existing friends are never removed; their notification preferences are preserved. New entries are muted by default — toggle the bell on each friend card to enable toasts. Takes effect on next launch."
+                                               FontSize="11" FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextSecondaryBrush}"
+                                               TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                </StackPanel>
+                                <ToggleSwitch Name="RASyncFollowsToggle" Grid.Column="1" OnContent="" OffContent="" VerticalAlignment="Center"/>
+                            </Grid>
+
+                            <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,0,0,20"/>
+
+                            <!-- ── Toast appearance ─────────────────────────────
+                                 Interactive controls are built procedurally into
+                                 TsAppearanceHost by BuildToastAppearanceUI() in
+                                 code-behind (upstream's ThemeEditor pattern). -->
+                            <TextBlock Text="TOAST APPEARANCE" Theme="{StaticResource PrefLabel}"/>
+                            <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,0,0,16"/>
+                            <TextBlock Text="Customize how the in-game achievement unlock toast looks — shape, background, border, drop shadow, text colors, fonts and sizes, where it appears, and how long it stays. Changes apply to the next unlock."
+                                       FontSize="12" FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextSecondaryBrush}"
+                                       TextWrapping="Wrap" Margin="0,0,0,16"/>
+
+                            <ContentControl Name="TsPreviewHost" Margin="0,0,0,10"/>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,12" Spacing="8">
+                                <Button Name="TsPreviewBtn" Content="Preview animation" Theme="{StaticResource PrefActionBtn}"/>
+                                <Button Name="TsResetBtn" Content="Reset to defaults" Theme="{StaticResource PrefActionBtn}"/>
+                            </StackPanel>
+
+                            <Border BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
+                                    CornerRadius="6" Padding="12,8,6,8">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="360">
+                                    <StackPanel Name="TsAppearanceHost" Margin="0,0,6,0"/>
+                                </ScrollViewer>
+                            </Border>
                         </StackPanel>
                     </ScrollViewer>
                 </Grid>

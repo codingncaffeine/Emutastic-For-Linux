@@ -2662,10 +2662,13 @@ namespace Emutastic.Emulator
                 if (_raToast == null) return (null, 0f);
                 var t = _raToast.Value;
                 double el = (DateTime.UtcNow - t.ShownAt).TotalSeconds;
+                // Hold time follows the user's ToastStyle.DurationSec (default 4s).
+                double hold = Services.ToastStyleRenderer.Duration(
+                    App.Configuration?.GetRetroAchievementsConfiguration()?.ToastStyle).TotalSeconds;
                 float a;
                 if (el < 0.25) a = (float)(el / 0.25);
-                else if (el < 4.25) a = 1f;
-                else if (el < 4.65) a = (float)((4.65 - el) / 0.40);
+                else if (el < 0.25 + hold) a = 1f;
+                else if (el < 0.65 + hold) a = (float)((0.65 + hold - el) / 0.40);
                 else { _raToast = null; return (null, 0f); }
                 return ((t.Header, t.Title, t.Desc, t.Points, t.Badge), a);
             }

@@ -736,6 +736,7 @@ public partial class PreferencesWindow : Window
     {
         this.FindControl<ToggleSwitch>("RAEnabledToggle")!.IsCheckedChanged += (_, _) => SaveAchievementsSettings();
         this.FindControl<ToggleSwitch>("RAHardcoreToggle")!.IsCheckedChanged += (_, _) => SaveAchievementsSettings();
+        this.FindControl<ToggleSwitch>("RASyncFollowsToggle")!.IsCheckedChanged += (_, _) => SaveAchievementsSettings();
         this.FindControl<TextBox>("RAUsernameBox")!.LostFocus += (_, _) => SaveAchievementsSettings();
         this.FindControl<TextBox>("RAPasswordBox")!.LostFocus += (_, _) => SaveAchievementsSettings();
         this.FindControl<TextBox>("RAApiKeyBox")!.LostFocus += (_, _) => SaveAchievementsSettings();
@@ -754,8 +755,15 @@ public partial class PreferencesWindow : Window
         this.FindControl<TextBlock>("RATokenStatus")!.Text = !string.IsNullOrEmpty(ra.Token)
             ? "Login token saved — password not required for future sessions."
             : "No login token yet — password required for first login.";
+        this.FindControl<ToggleSwitch>("RASyncFollowsToggle")!.IsChecked = ra.SyncFollowsOnLaunch;
+
+        // Toast-appearance customizer (built once, repopulated on every entry).
+        BuildToastAppearanceUI();
+        PopulateToastAppearance();
+
         _suppressRaSave = false;
         _achievementsLoaded = true;
+        UpdateToastConditionalRows();
     }
 
     private void SaveAchievementsSettings()
@@ -768,6 +776,7 @@ public partial class PreferencesWindow : Window
         ra.Password     = this.FindControl<TextBox>("RAPasswordBox")!.Text ?? "";
         ra.ApiKey       = (this.FindControl<TextBox>("RAApiKeyBox")!.Text ?? "").Trim();
         ra.HardcoreMode = this.FindControl<ToggleSwitch>("RAHardcoreToggle")!.IsChecked == true;
+        ra.SyncFollowsOnLaunch = this.FindControl<ToggleSwitch>("RASyncFollowsToggle")!.IsChecked == true;
         App.Configuration!.SetRetroAchievementsConfiguration(ra);
         App.Configuration!.ScheduleSave();
     }

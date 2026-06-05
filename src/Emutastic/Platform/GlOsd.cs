@@ -151,24 +151,45 @@ namespace Emutastic.Platform
             }
         }
 
-        // ── RetroAchievements unlock toast (A8c) ─────────────────────────────────────
-        // Skia rendition of upstream ToastStyleRenderer's DEFAULT style (the host has no
-        // Avalonia): top-center 20px from the edge, horizontal gradient #F21A1A2E→#C81A1A2E,
-        // 1.5px accent border, r=12 card, drop shadow (blur 20 depth 6 @75%), gold eyebrow
-        // header 9pt, white title 14.5pt, #CCFFFFFF desc 11.5pt, gold points 10.5pt, 48px
-        // badge in a gold frame. Caller animates alpha (250ms in / 4s hold / 400ms out).
-        // Style customization (AchievementToastStyle) arrives with its settings UI phase.
-        private static void DrawRaToast(SKCanvas c, int w,
+        // ── RetroAchievements unlock toast (A8c/A8f-4) ───────────────────────────────
+        // Skia rendition of ToastStyleRenderer driven by the user's AchievementToastStyle
+        // (shape, gradient/solid/image background, border, shadow, per-element colors,
+        // fonts, sizes, 6-anchor position). The host reads config once per session;
+        // "Changes apply to the next unlock" matches upstream's contract.
+        private static Configuration.AchievementToastStyle? _toastStyle;
+        private static SKBitmap? _toastBgImage;
+        private static string _toastBgImagePath = "";
+
+        private static Configuration.AchievementToastStyle ToastStyle()
+        {
+            if (_toastStyle != null) return _toastStyle;
+            try { _toastStyle = App.Configuration?.GetRetroAchievementsConfiguration()?.ToastStyle; } catch { }
+            return _toastStyle ??= new Configuration.AchievementToastStyle();
+        }
+
+        private static SKColor ToastColor(string? hex, SKColor fallback)
+        {
+            if (string.IsNullOrWhiteSpace(hex)) return fallback;
+            return SKColor.TryParse(hex.Trim(), out var c) ? c : fallback;
+        }
+
+        private static void DrawRaToast(SKCanvas c, int w, int h,
             (string Header, string Title, string Desc, string Points, SKBitmap? Badge) t, float alpha)
         {
-            using var headerFont = new SKFont(SKTypeface.FromFamilyName(null, SKFontStyle.Bold), 9f);
-            using var titleFont  = new SKFont(SKTypeface.FromFamilyName(null, SKFontStyle.Bold), 14.5f);
-            using var descFont   = new SKFont(SKTypeface.Default, 11.5f);
-            using var pointsFont = new SKFont(SKTypeface.FromFamilyName(null, SKFontStyle.Bold), 10.5f);
+            var st = ToastStyle();
+            var gold = new SKColor(0xFF, 0xD7, 0x00, 0xFF);
+            var accent = new SKColor(0xE0, 0x35, 0x35, 0xFF);
+
+            using var headerFont = new SKFont(SKTypeface.FromFamilyName(null, SKFontStyle.Bold), (float)st.HeaderSize);
+            using var titleFont  = new SKFont(SKTypeface.FromFamilyName(
+                string.IsNullOrWhiteSpace(st.TitleFont) ? null : st.TitleFont, SKFontStyle.Bold), (float)st.TitleSize);
+            using var descFont   = new SKFont(SKTypeface.FromFamilyName(
+                string.IsNullOrWhiteSpace(st.DescFont) ? null : st.DescFont), (float)st.DescSize);
+            using var pointsFont = new SKFont(SKTypeface.FromFamilyName(null, SKFontStyle.Bold), (float)st.PointsSize);
 
             const float pad = 14, badgeSize = 48, gap = 12, edge = 20;
-            bool hasBadge = t.Badge != null;
-            bool hasHeader = t.Header.Length > 0;
+            bool hasBadge = t.Badge != null && st.ShowBadge;
+            bool hasHeader = t.Header.Length > 0 && st.ShowHeader;
             bool hasDesc = t.Desc.Length > 0;
             bool hasPoints = t.Points.Length > 0;
 
@@ -177,35 +198,94 @@ namespace Emutastic.Platform
                                             hasPoints ? pointsFont.MeasureText(t.Points) : 0));
             textW = Math.Min(textW, 360);
             float bw = pad + (hasBadge ? badgeSize + gap : 0) + textW + pad;
-            float textH = (hasHeader ? 13 : 0) + 19 + (hasDesc ? 15 : 0) + (hasPoints ? 15 : 0);
+            float lineTitle = titleFont.Size + 7, lineHeader = headerFont.Size + 6;
+            float lineDesc = descFont.Size + 4, linePoints = pointsFont.Size + 5;
+            float textH = (hasHeader ? lineHeader : 0) + lineTitle + (hasDesc ? lineDesc : 0) + (hasPoints ? linePoints : 0);
             float bh = Math.Max(pad * 2 + textH, hasBadge ? pad * 2 + badgeSize : 0);
-            float x = (w - bw) / 2f, y = edge;
+
+            // 6-anchor position (upstream ApplyPosition; EdgeMargin = 20).
+            float x, y;
+            string pos = (st.Position ?? "TopCenter").Trim().ToLowerInvariant();
+            x = pos switch
+            {
+                "topleft" or "bottomleft"   => edge,
+                "topright" or "bottomright" => w - bw - edge,
+                _                            => (w - bw) / 2f,
+            };
+            y = pos.StartsWith("bottom") ? h - bh - edge - StatusBarH : edge;
             var box = new SKRect(x, y, x + bw, y + bh);
 
-            // Whole-toast alpha via a save-layer so overlapping elements fade as one.
+            float radius = (float)Services.ToastStyleRenderer.ResolveRadius(st);
+            radius = Math.Min(radius, bh / 2f);   // huge radius → stadium/pill silhouette
+
             using (var layer = new SKPaint { Color = new SKColor(255, 255, 255, (byte)(alpha * 255)) })
             {
                 c.SaveLayer(layer);
 
-                using (var shadow = new SKPaint
+                if (st.ShadowEnabled)
                 {
-                    Color = new SKColor(0, 0, 0, 0xBF), IsAntialias = true,
-                    ImageFilter = SKImageFilter.CreateDropShadowOnly(0, 6, 10, 10, new SKColor(0, 0, 0, 0xBF))
-                })
-                    c.DrawRoundRect(box, 12, 12, shadow);
+                    var sc = ToastColor(st.ShadowColor, SKColors.Black)
+                        .WithAlpha((byte)(255 * Math.Clamp(st.ShadowOpacity / 100.0, 0, 1)));
+                    using var shadow = new SKPaint
+                    {
+                        Color = sc, IsAntialias = true,
+                        ImageFilter = SKImageFilter.CreateDropShadowOnly(
+                            0, (float)st.ShadowDepth, (float)st.ShadowBlur / 2f, (float)st.ShadowBlur / 2f, sc),
+                    };
+                    c.DrawRoundRect(box, radius, radius, shadow);
+                }
 
-                using (var bg = new SKPaint
+                byte bgA = (byte)(255 * Math.Clamp(st.BackgroundOpacity / 100.0, 0, 1));
+                if (!string.IsNullOrWhiteSpace(st.BackgroundImage) && System.IO.File.Exists(st.BackgroundImage))
                 {
-                    IsAntialias = true,
-                    Shader = SKShader.CreateLinearGradient(
-                        new SKPoint(box.Left, box.Top), new SKPoint(box.Right, box.Top),
-                        new[] { new SKColor(0x1A, 0x1A, 0x2E, 0xF2), new SKColor(0x1A, 0x1A, 0x2E, 0xC8) },
-                        null, SKShaderTileMode.Clamp)
-                })
-                    c.DrawRoundRect(box, 12, 12, bg);
-                using (var border = new SKPaint
-                { Color = new SKColor(0xE0, 0x35, 0x35, 0xFF), IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1.5f })
-                    c.DrawRoundRect(box, 12, 12, border);
+                    if (_toastBgImagePath != st.BackgroundImage)
+                    {
+                        _toastBgImage?.Dispose();
+                        try { _toastBgImage = SKBitmap.Decode(st.BackgroundImage); } catch { _toastBgImage = null; }
+                        _toastBgImagePath = st.BackgroundImage;
+                    }
+                    if (_toastBgImage != null)
+                    {
+                        using var ip = new SKPaint { IsAntialias = true, Color = new SKColor(255, 255, 255, bgA) };
+                        c.Save();
+                        using (var clip = new SKRoundRect(box, radius)) c.ClipRoundRect(clip, antialias: true);
+                        // UniformToFill
+                        float scale = Math.Max(bw / _toastBgImage.Width, bh / _toastBgImage.Height);
+                        float iw = _toastBgImage.Width * scale, ih = _toastBgImage.Height * scale;
+                        c.DrawBitmap(_toastBgImage, new SKRect(box.Left + (bw - iw) / 2, box.Top + (bh - ih) / 2,
+                            box.Left + (bw + iw) / 2, box.Top + (bh + ih) / 2), ip);
+                        c.Restore();
+                    }
+                }
+                else if (st.UseGradient)
+                {
+                    var g0 = ToastColor(st.GradientStart, new SKColor(0x1A, 0x1A, 0x2E, 0xF2)).WithAlpha(
+                        (byte)(ToastColor(st.GradientStart, new SKColor(0x1A, 0x1A, 0x2E, 0xF2)).Alpha * bgA / 255));
+                    var g1 = ToastColor(st.GradientEnd, new SKColor(0x1A, 0x1A, 0x2E, 0xC8)).WithAlpha(
+                        (byte)(ToastColor(st.GradientEnd, new SKColor(0x1A, 0x1A, 0x2E, 0xC8)).Alpha * bgA / 255));
+                    using var bg = new SKPaint
+                    {
+                        IsAntialias = true,
+                        Shader = SKShader.CreateLinearGradient(
+                            new SKPoint(box.Left, box.Top), new SKPoint(box.Right, box.Top),
+                            new[] { g0, g1 }, null, SKShaderTileMode.Clamp),
+                    };
+                    c.DrawRoundRect(box, radius, radius, bg);
+                }
+                else
+                {
+                    using var bg = new SKPaint
+                    { Color = ToastColor(st.BackgroundColor, new SKColor(0x1A, 0x1A, 0x2E)).WithAlpha(bgA), IsAntialias = true };
+                    c.DrawRoundRect(box, radius, radius, bg);
+                }
+
+                if (st.BorderThickness > 0)
+                    using (var border = new SKPaint
+                    {
+                        Color = ToastColor(st.BorderColor, accent), IsAntialias = true,
+                        Style = SKPaintStyle.Stroke, StrokeWidth = (float)st.BorderThickness,
+                    })
+                        c.DrawRoundRect(box, radius, radius, border);
 
                 float tx = box.Left + pad;
                 if (hasBadge)
@@ -213,19 +293,23 @@ namespace Emutastic.Platform
                     var br = new SKRect(tx, box.MidY - badgeSize / 2, tx + badgeSize, box.MidY + badgeSize / 2);
                     c.DrawBitmap(t.Badge, br);
                     using (var frame = new SKPaint
-                    { Color = new SKColor(0xFF, 0xD7, 0x00, 0xFF), IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1.5f })
+                    {
+                        Color = ToastColor(st.BadgeFrameColor, gold), IsAntialias = true,
+                        Style = SKPaintStyle.Stroke, StrokeWidth = 1.5f,
+                    })
                         c.DrawRoundRect(br, 4, 4, frame);
                     tx += badgeSize + gap;
                 }
 
-                float ty = box.Top + pad + (hasHeader ? 9 : 14);
-                using var gold  = new SKPaint { Color = new SKColor(0xFF, 0xD7, 0x00, 0xFF), IsAntialias = true };
-                using var white = new SKPaint { Color = SKColors.White, IsAntialias = true };
-                using var dim   = new SKPaint { Color = new SKColor(0xFF, 0xFF, 0xFF, 0xCC), IsAntialias = true };
-                if (hasHeader) { c.DrawText(t.Header, tx, ty, SKTextAlign.Left, headerFont, gold); ty += 16; }
-                c.DrawText(t.Title, tx, ty + 6, SKTextAlign.Left, titleFont, white); ty += 22;
-                if (hasDesc) { c.DrawText(t.Desc, tx, ty + 4, SKTextAlign.Left, descFont, dim); ty += 15; }
-                if (hasPoints) c.DrawText(t.Points, tx, ty + 5, SKTextAlign.Left, pointsFont, gold);
+                float ty = box.Top + pad + (hasHeader ? headerFont.Size : titleFont.Size * 0.4f);
+                using var headerPaint = new SKPaint { Color = ToastColor(st.HeaderColor, gold), IsAntialias = true };
+                using var titlePaint  = new SKPaint { Color = ToastColor(st.TitleColor, SKColors.White), IsAntialias = true };
+                using var descPaint   = new SKPaint { Color = ToastColor(st.DescColor, new SKColor(0xFF, 0xFF, 0xFF, 0xCC)), IsAntialias = true };
+                using var pointsPaint = new SKPaint { Color = ToastColor(st.PointsColor, gold), IsAntialias = true };
+                if (hasHeader) { c.DrawText(t.Header, tx, ty, SKTextAlign.Left, headerFont, headerPaint); ty += lineHeader; }
+                c.DrawText(t.Title, tx, ty + titleFont.Size * 0.5f, SKTextAlign.Left, titleFont, titlePaint); ty += lineTitle;
+                if (hasDesc) { c.DrawText(t.Desc, tx, ty + descFont.Size * 0.35f, SKTextAlign.Left, descFont, descPaint); ty += lineDesc; }
+                if (hasPoints) c.DrawText(t.Points, tx, ty + pointsFont.Size * 0.45f, SKTextAlign.Left, pointsFont, pointsPaint);
 
                 c.Restore();
             }
@@ -357,7 +441,7 @@ namespace Emutastic.Platform
             if (aq > 0) DrawHud(c, w, h, hoverBtn, paused, aq / 16f, recording);
             if (picker != null) DrawLoadPicker(c, w, h, picker, pickerHover);
             if (cogMenu != null) DrawCogMenu(c, w, h, cogMenu, cogHover, cogFooter);
-            if (raToast != null && taq > 0) DrawRaToast(c, w, raToast.Value, taq / 16f);
+            if (raToast != null && taq > 0) DrawRaToast(c, w, h, raToast.Value, taq / 16f);
             // Subtle rounded border at the window edge (the shim erases the corners to transparent so the
             // window reads as rounded; this traces the edge, matching the main app's 1px BorderSubtle).
             if (!maximized)
