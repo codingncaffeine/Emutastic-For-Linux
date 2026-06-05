@@ -649,6 +649,22 @@ int wlp_present(void *h, const void *bgra, int fw, int fh) {
         glDisable(GL_BLEND);
     }
 
+    // Force the window OPAQUE before the corner pass: the translucent HUD/menu/toast blends
+    // (and a shader chain's output) leave destination ALPHA < 1, and on this alpha-enabled
+    // surface the compositor then shows whatever sits BEHIND the window through those pixels
+    // (a terminal bled through a maximized game). Write alpha=1 across the window — RGB
+    // untouched — then draw_corners re-erases just the rounded corners.
+    glViewport(0, 0, s->w, s->h);
+    glDisable(GL_TEXTURE_2D);
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
+    glColor4f(0, 0, 0, 1);
+    glBegin(GL_QUADS);
+        glVertex2f(-1,  1); glVertex2f( 1,  1); glVertex2f( 1, -1); glVertex2f(-1, -1);
+    glEnd();
+    glColor4f(1, 1, 1, 1);   // immediate-mode color MODULATES textured quads — restore white
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glEnable(GL_TEXTURE_2D);
+
     draw_corners(s);   // erase the 4 corners to transparent → rounded window (skipped when maximized)
 
     eglSwapBuffers(s->edpy, s->esurf);   // Mesa FIFO @ interval 1 = the clock
