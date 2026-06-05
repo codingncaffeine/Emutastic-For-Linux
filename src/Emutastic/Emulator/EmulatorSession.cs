@@ -129,6 +129,7 @@ namespace Emutastic.Emulator
         private byte[]? _uiBuf;       // UI copy target (TrySnapshot writes it, PumpFrame reads it)
         private int _frameW, _frameH;
         private volatile int _rotationDeg;   // 0/90/180/270, set by ENV_SET_ROTATION
+        private volatile bool _userFlip;     // cog "Flip Display": extra 180° composed with the core rotation (session-local, like upstream)
         private long _frameSeq;
         private int _frameCountSample;            // frames produced since the last SampleStats (real fps)
         private long _coreRunTicks, _coreRunCalls; // accumulated retro_run time + call count for avg ms
@@ -1000,7 +1001,7 @@ namespace Emutastic.Emulator
                     // lives there; the request crosses processes via the stdout command channel).
                     ("Edit Game Controls…", EmitHostCommand != null, null, "\x01CONTROLS"),
                     ("Turbo Buttons…",      false, null, null),   // not ported yet
-                    ("Flip Display",        false, null, null),   // no rotation plumbing in present yet
+                    (_userFlip ? "Flip Display ✓" : "Flip Display", true, null, "\x01FLIP"),
                     ("Shader: None",        false, null, null),   // arrives with the shader splinter
                     ("Overlay: On",         false, null, null),   // bezel/overlay art not ported yet
                     ("Bezel: Off",          false, null, null),
@@ -1112,6 +1113,31 @@ namespace Emutastic.Emulator
                         else if (key == "\x01MANUAL")
                         {
                             EmitHostCommand?.Invoke($"open-manual {CheatGameId}");
+                            cogMenu = null;
+                        }
+                        else if (key == "\x01FLIP")
+                        {
+                            // Upstream's OverlayFlip_Click: toggle the extra 180° and collapse the
+                            // menu. The flip is baked into the next published frame, so no presenter
+                            // or AR poke is needed (180° preserves the aspect).
+                            _userFlip = !_userFlip;
+                            // While paused no new frame is published, so flip the frozen frame NOW
+                            // (upstream's transform applies instantly). Copy-rotate + swap under the
+                            // lock: in-flight presents keep the old (now-immutable) buffer; the seq
+                            // bump makes the present loop upload the flipped one. Toggling flip is
+                            // always exactly 180° of the published frame, whatever the core rotation.
+                            if (_paused)
+                            {
+                                lock (_frameLock)
+                                {
+                                    if (_frame != null && _frameW > 0 && _frameH > 0)
+                                    {
+                                        int fw = _frameW, fh = _frameH;
+                                        _frame = RotateBgra(_frame, ref fw, ref fh, 180);
+                                        _frameSeq++;
+                                    }
+                                }
+                            }
                             cogMenu = null;
                         }
                         else if (key == "\x01RECORD")
@@ -2490,6 +2516,10 @@ namespace Emutastic.Emulator
                     _hwReadbackMs += 0.05 * ((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency - _hwReadbackMs);
                     if (ok && ow > 0 && oh > 0)
                     {
+                        // Cog "Flip Display" (composed with a core-requested 180): reverse the pixel
+                        // array in place BEFORE publish/record, so screen, recording and screenshots
+                        // all agree. 90/270 core rotation stays unsupported on the HW path (as before).
+                        if ((_rotationDeg + (_userFlip ? 180 : 0)) % 360 == 180) Reverse180(back, ow * oh);
                         lock (_frameLock) { _frame = back; _frameW = ow; _frameH = oh; _frameSeq++; }
                         FrameReady?.Invoke();
                         // Recording tap (HW): the readback buffer is packed BGRA top-down — exactly
@@ -2549,25 +2579,41 @@ namespace Emutastic.Emulator
                     }
                 }
             }
-            // Honor a core-requested rotation by rotating the BGRA buffer (and swapping dims for
-            // 90/270) so the displayed Image is upright with the correct aspect — no UI transform.
-            // Rotated games (90/270) get a fresh rotated buffer (rare path; not reused). For the common
-            // un-rotated case bgra IS _convBuf, so the swap below recycles the previous front buffer.
-            if (_rotationDeg != 0) bgra = RotateBgra(bgra, ref w, ref h, _rotationDeg);
+            // Honor core-requested rotation composed with the cog's "Flip Display" 180°, by rotating
+            // the BGRA buffer (and swapping dims for 90/270) so the displayed Image is upright with
+            // the correct aspect — no UI transform. 180° is an in-place pixel reversal (zero-alloc —
+            // the user flip can stay on for a whole session, unlike the rare 90/270 core path, which
+            // still gets a fresh rotated buffer per frame).
+            int effRot = (_rotationDeg + (_userFlip ? 180 : 0)) % 360;
+            if (effRot == 180) Reverse180(bgra, w * h);
+            else if (effRot != 0) bgra = RotateBgra(bgra, ref w, ref h, effRot);
 
             lock (_frameLock)
             {
                 var prev = _frame;
                 _frame = bgra; _frameW = w; _frameH = h; _frameSeq++;
-                // Recycle the previous front buffer as the next working buffer (un-rotated path only,
-                // and only if it's the right size) so we ping-pong two buffers with zero allocation.
-                if (_rotationDeg == 0 && prev != null && prev.Length == need) _convBuf = prev;
+                // Recycle the previous front buffer as the next working buffer (only when bgra IS
+                // _convBuf, i.e. not the 90/270 fresh-buffer path, and only if it's the right size)
+                // so we ping-pong two buffers with zero allocation.
+                if ((effRot == 0 || effRot == 180) && prev != null && prev.Length == need) _convBuf = prev;
             }
             System.Threading.Interlocked.Increment(ref _frameCountSample);   // real produced-frame rate
             FrameReady?.Invoke();                                            // push the frame to the window to present
             // Recording tap (SW): bgra is the finished packed top-down frame (post-rotation,
             // so the video matches what's on screen). Drops itself on mid-record dim changes.
             _recording?.QueueVideoFrame(bgra, w * h * 4);
+        }
+
+        // 180° rotation of a packed BGRA buffer IN PLACE: reverse the pixel array (swap 4-byte
+        // pixels from both ends). Zero-alloc, used by both the SW funnel and the HW readback path.
+        private static unsafe void Reverse180(byte[] buf, int pixels)
+        {
+            fixed (byte* p = buf)
+            {
+                uint* a = (uint*)p;
+                uint* b = a + pixels - 1;
+                while (a < b) { uint t = *a; *a++ = *b; *b-- = t; }
+            }
         }
 
         // Rotate a tightly-packed BGRA buffer counter-clockwise by deg (90/180/270). Returns the
