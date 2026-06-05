@@ -95,6 +95,7 @@ public partial class PreferencesWindow : Window
         WireTheme();
         WireLibrary();
         WireSnaps();
+        WireAchievements();
         this.FindControl<Button>("CoreOptionsResetBtn")!.Click += (_, _) => CoreOptionsReset();
         this.FindControl<Button>("CoreOptionsSaveBtn")!.Click += (_, _) => CoreOptionsSave();
         WireMedia();
@@ -129,6 +130,7 @@ public partial class PreferencesWindow : Window
         if (target == "PanelTheme") LoadThemeSettings();
         if (target == "PanelLibrary") LoadLibrarySettings();
         if (target == "PanelSnaps") LoadSnapsSettings();
+        if (target == "PanelAchievements") LoadAchievementsSettings();
         if (target == "PanelCoreOptions") BuildCoreOptionsTab();
         if (target == "PanelMedia") LoadMediaSettings();
         if (target == "PanelBackups") LoadBackupsSettings();
@@ -712,6 +714,95 @@ public partial class PreferencesWindow : Window
             else
             {
                 label.Text = error;
+                label.Foreground = Brush("AccentBrush");
+            }
+        }
+        catch (Exception ex)
+        {
+            label.Text = $"Login failed: {ex.Message}";
+            label.Foreground = Brush("AccentBrush");
+        }
+        finally { btn.IsEnabled = true; }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  A8b — Achievements panel (RetroAchievements login + hardcore toggle)
+    // ════════════════════════════════════════════════════════════════════════
+
+    private bool _achievementsLoaded;
+    private bool _suppressRaSave;
+
+    private void WireAchievements()
+    {
+        this.FindControl<ToggleSwitch>("RAEnabledToggle")!.IsCheckedChanged += (_, _) => SaveAchievementsSettings();
+        this.FindControl<ToggleSwitch>("RAHardcoreToggle")!.IsCheckedChanged += (_, _) => SaveAchievementsSettings();
+        this.FindControl<TextBox>("RAUsernameBox")!.LostFocus += (_, _) => SaveAchievementsSettings();
+        this.FindControl<TextBox>("RAPasswordBox")!.LostFocus += (_, _) => SaveAchievementsSettings();
+        this.FindControl<TextBox>("RAApiKeyBox")!.LostFocus += (_, _) => SaveAchievementsSettings();
+        this.FindControl<Button>("RATestBtn")!.Click += (_, _) => _ = RaTestLoginAsync();
+    }
+
+    private void LoadAchievementsSettings()
+    {
+        var ra = App.Configuration?.GetRetroAchievementsConfiguration() ?? new Configuration.RetroAchievementsConfiguration();
+        _suppressRaSave = true;
+        this.FindControl<ToggleSwitch>("RAEnabledToggle")!.IsChecked = ra.Enabled;
+        this.FindControl<TextBox>("RAUsernameBox")!.Text = ra.Username;
+        this.FindControl<TextBox>("RAPasswordBox")!.Text = ra.Password;
+        this.FindControl<TextBox>("RAApiKeyBox")!.Text = ra.ApiKey;
+        this.FindControl<ToggleSwitch>("RAHardcoreToggle")!.IsChecked = ra.HardcoreMode;
+        this.FindControl<TextBlock>("RATokenStatus")!.Text = !string.IsNullOrEmpty(ra.Token)
+            ? "Login token saved — password not required for future sessions."
+            : "No login token yet — password required for first login.";
+        _suppressRaSave = false;
+        _achievementsLoaded = true;
+    }
+
+    private void SaveAchievementsSettings()
+    {
+        if (_suppressRaSave || !_achievementsLoaded) return;
+        var ra = App.Configuration?.GetRetroAchievementsConfiguration();
+        if (ra == null) return;
+        ra.Enabled      = this.FindControl<ToggleSwitch>("RAEnabledToggle")!.IsChecked == true;
+        ra.Username     = (this.FindControl<TextBox>("RAUsernameBox")!.Text ?? "").Trim();
+        ra.Password     = this.FindControl<TextBox>("RAPasswordBox")!.Text ?? "";
+        ra.ApiKey       = (this.FindControl<TextBox>("RAApiKeyBox")!.Text ?? "").Trim();
+        ra.HardcoreMode = this.FindControl<ToggleSwitch>("RAHardcoreToggle")!.IsChecked == true;
+        App.Configuration!.SetRetroAchievementsConfiguration(ra);
+        App.Configuration!.ScheduleSave();
+    }
+
+    private async Task RaTestLoginAsync()
+    {
+        var btn = this.FindControl<Button>("RATestBtn")!;
+        var label = this.FindControl<TextBlock>("RAStatusLabel")!;
+        btn.IsEnabled = false;
+        label.Text = "Testing…";
+        label.Foreground = Brush("TextMutedBrush");
+        try
+        {
+            SaveAchievementsSettings();   // commit current fields before the round-trip
+            var svc = new Services.RetroAchievementsService();
+            var (error, token) = await svc.TestLoginAsync(
+                (this.FindControl<TextBox>("RAUsernameBox")!.Text ?? "").Trim(),
+                this.FindControl<TextBox>("RAPasswordBox")!.Text ?? "");
+            if (error == null && !string.IsNullOrEmpty(token))
+            {
+                var ra = App.Configuration?.GetRetroAchievementsConfiguration();
+                if (ra != null)
+                {
+                    ra.Token = token;
+                    App.Configuration!.SetRetroAchievementsConfiguration(ra);
+                    App.Configuration!.ScheduleSave();
+                }
+                this.FindControl<TextBlock>("RATokenStatus")!.Text =
+                    "Login token saved — password not required for future sessions.";
+                label.Text = "Connected";
+                label.Foreground = new SolidColorBrush(Color.Parse("#28C840"));
+            }
+            else
+            {
+                label.Text = error ?? "Login failed";
                 label.Foreground = Brush("AccentBrush");
             }
         }

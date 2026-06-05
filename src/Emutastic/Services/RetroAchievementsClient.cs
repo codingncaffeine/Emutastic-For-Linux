@@ -205,7 +205,9 @@ namespace Emutastic.Services
             }
         }
 
-        public void Initialize(LibretroCore core, bool hardcoreEnabled, string? consoleName = null)
+        /// <summary>Core may be null for login-only clients (the settings page's
+        /// credential test) — memory routing simply stays empty.</summary>
+        public void Initialize(LibretroCore? core, bool hardcoreEnabled, string? consoleName = null)
         {
             // Refuse to run on a misaligned native build — a shifted struct
             // field reads garbage silently (see RcheevosInterop.VerifyAbi).
