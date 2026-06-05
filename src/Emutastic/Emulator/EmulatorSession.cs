@@ -393,14 +393,22 @@ namespace Emutastic.Emulator
                 string saveDir = AppPaths.GetFolder("Saves");
                 _handler.PrepareSaveDirectory(saveDir);   // create any console-specific subdirs (e.g. dc/)
                 // Battery save lives next to the ROM's name in the Saves dir (RetroArch's <rom>.srm scheme).
-                _srmPath = System.IO.Path.Combine(saveDir, System.IO.Path.GetFileNameWithoutExtension(_romPath) + ".srm");
+                // ROM-hack entries share the base ROM file (and thus its stem); disambiguate their
+                // battery save by the entry's (patched) hash so a hack never shares the base game's
+                // .srm (upstream's rule; cloud sync mirrors it in LocalSrmPathFor).
+                string srmStem = System.IO.Path.GetFileNameWithoutExtension(_romPath);
+                if (!string.IsNullOrEmpty(PatchPath) && !string.IsNullOrEmpty(SaveRomHash))
+                    srmStem += "." + SaveRomHash[..Math.Min(8, SaveRomHash.Length)];
+                _srmPath = System.IO.Path.Combine(saveDir, srmStem + ".srm");
                 _systemDirPtr = Marshal.StringToHGlobalAnsi(sysDir);
                 _saveDirPtr = Marshal.StringToHGlobalAnsi(saveDir);
                 _coreAssetsDirPtr = Marshal.StringToHGlobalAnsi(coreDir);
                 _core.SetCallbacks(_envCb, _videoCb, _audioCb, _audioBatchCb, _inputPollCb, _inputStateCb);
                 _core.Init();
 
-                if (!_core.LoadGame(_romPath))
+                // ROM-hack soft patch (IPS/BPS/UPS): LoadGame applies it to the in-memory buffer;
+                // the base ROM file on disk is never modified.
+                if (!_core.LoadGame(_romPath, PatchPath))
                 {
                     error = _core.LastError ?? "retro_load_game failed (the core rejected the ROM).";
                     return false;
@@ -1981,6 +1989,9 @@ namespace Emutastic.Emulator
         public string SaveStateDir { get; set; } = "";
         public string SaveGameTitle { get; set; } = "";
         public string SaveRomHash { get; set; } = "";
+        /// <summary>ROM-hack patch (IPS/BPS/UPS) applied in memory at load; also keys the
+        /// hack's own .srm (stem + first 8 hash chars) so it never shares the base game's.</summary>
+        public string? PatchPath { get; set; }
 
         private volatile bool _saveStatePending;
         private volatile bool _loadStatePending;

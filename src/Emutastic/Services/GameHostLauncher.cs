@@ -140,6 +140,12 @@ namespace Emutastic.Services
                 psi.ArgumentList.Add("--game-title"); psi.ArgumentList.Add(game.Title ?? "");
                 psi.ArgumentList.Add("--rom-hash");   psi.ArgumentList.Add(game.RomHash ?? "");
                 psi.ArgumentList.Add("--game-id");    psi.ArgumentList.Add(game.Id.ToString());
+                // ROM-hack entry: hand the host the stored patch so it soft-patches at load.
+                if (game.HasPatch && File.Exists(game.PatchPath))
+                {
+                    psi.ArgumentList.Add("--patch");
+                    psi.ArgumentList.Add(game.PatchPath);
+                }
                 if (!string.IsNullOrEmpty(loadStatePath))
                 {
                     psi.ArgumentList.Add("--load-state");

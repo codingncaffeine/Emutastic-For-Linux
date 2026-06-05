@@ -594,6 +594,17 @@ namespace Emutastic.Services
             => Path.Combine(AppPaths.GetFolder("Saves"),
                 Path.GetFileNameWithoutExtension(romPath) + ".srm");
 
+        /// <summary>ROM-hack-aware variant: hacked entries share the base ROM file, so the
+        /// session keys their .srm by stem + first 8 hash chars (EmulatorSession's rule) —
+        /// mirror it here or sync would read/write the BASE game's save for a hack entry.</summary>
+        public static string LocalSrmPathFor(string romPath, bool hasPatch, string? romHash)
+        {
+            string stem = Path.GetFileNameWithoutExtension(romPath);
+            if (hasPatch && !string.IsNullOrEmpty(romHash))
+                stem += "." + romHash[..Math.Min(8, romHash.Length)];
+            return Path.Combine(AppPaths.GetFolder("Saves"), stem + ".srm");
+        }
+
         public static string RepoPathFor(string console, string romHash)
             => $"BatterySaves/{console}/{romHash}.srm";
 
@@ -603,7 +614,7 @@ namespace Emutastic.Services
             foreach (var g in db.GetGamesSyncMap())
             {
                 if (string.IsNullOrEmpty(g.RomHash) || string.IsNullOrEmpty(g.Console)) continue;
-                string local = LocalSrmPathFor(g.RomPath);
+                string local = LocalSrmPathFor(g.RomPath, g.HasPatch, g.RomHash);
                 if (!File.Exists(local)) continue;
                 var fi = new FileInfo(local);
                 result.Add(new LocalSave(RepoPathFor(g.Console, g.RomHash), local, fi.LastWriteTimeUtc, fi.Length));
@@ -690,7 +701,7 @@ namespace Emutastic.Services
                 foreach (var g in db.GetGamesSyncMap())
                 {
                     if (string.IsNullOrEmpty(g.RomHash) || string.IsNullOrEmpty(g.Console)) continue;
-                    repoToLocalPath[RepoPathFor(g.Console, g.RomHash) + encSuffix] = LocalSrmPathFor(g.RomPath);
+                    repoToLocalPath[RepoPathFor(g.Console, g.RomHash) + encSuffix] = LocalSrmPathFor(g.RomPath, g.HasPatch, g.RomHash);
                 }
 
                 foreach (var (repoPath, entry) in _manifestCache.Files)
@@ -890,7 +901,7 @@ namespace Emutastic.Services
             {
                 bool encrypted = cfg.EncryptionEnabled && !string.IsNullOrEmpty(cfg.PassphraseProtected);
                 string repoPath = RepoPathFor(game.Console!, game.RomHash) + (encrypted ? ".enc" : "");
-                string localPath = LocalSrmPathFor(AppPaths.FromStoragePath(game.RomPath));
+                string localPath = LocalSrmPathFor(AppPaths.FromStoragePath(game.RomPath), game.HasPatch, game.RomHash);
 
                 DateTime remoteMtime = default;
                 bool hasRemoteMtime = _manifestCache.Files.TryGetValue(repoPath, out var mEntry)
@@ -932,7 +943,7 @@ namespace Emutastic.Services
             if (cfg.SyncTiming == "manual") return;
             if (string.IsNullOrEmpty(game.RomHash) || string.IsNullOrEmpty(game.Console)) return;
 
-            string localPath = LocalSrmPathFor(AppPaths.FromStoragePath(game.RomPath));
+            string localPath = LocalSrmPathFor(AppPaths.FromStoragePath(game.RomPath), game.HasPatch, game.RomHash);
             if (!File.Exists(localPath)) return;
 
             try

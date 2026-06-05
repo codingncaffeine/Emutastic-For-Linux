@@ -39,7 +39,7 @@ namespace Emutastic
             string? core = args.Length > 1 ? args[1] : null;
             string? rom  = args.Length > 2 ? args[2] : null;
             string console = "", resultsPath = "";
-            string saveDir = "", gameTitle = "", romHash = "", loadStatePath = "";
+            string saveDir = "", gameTitle = "", romHash = "", loadStatePath = "", patchPath = "";
             int gameId = -1;
             bool fullscreen = false, parentStdin = false;
             int prewarmSeconds = 0;   // >0 = shader pre-warm pass: run the attract/boot loop, then auto-quit
@@ -56,6 +56,8 @@ namespace Emutastic
                     case "--game-title":   if (i + 1 < args.Length) gameTitle = args[++i]; break;
                     case "--rom-hash":     if (i + 1 < args.Length) romHash = args[++i]; break;
                     case "--load-state":   if (i + 1 < args.Length) loadStatePath = args[++i]; break;
+                    // ROM-hack patch (IPS/BPS/UPS) — applied to the ROM buffer in memory at load.
+                    case "--patch":        if (i + 1 < args.Length) patchPath = args[++i]; break;
                     // Library row id — names the per-game cheat file (Cheats/{Console}/{id}.json).
                     case "--game-id":      if (i + 1 < args.Length && int.TryParse(args[i + 1], out int gid)) { i++; gameId = gid; } break;
                     case "--prewarm":
@@ -110,6 +112,7 @@ namespace Emutastic
                 SaveGameTitle = gameTitle,
                 SaveRomHash   = romHash,
                 CheatGameId   = gameId,
+                PatchPath     = string.IsNullOrEmpty(patchPath) ? null : patchPath,
             };
             // Host→parent command channel: one prefixed line on stdout per request (the launcher
             // redirects and parses our stdout; everything else written there is ignored).

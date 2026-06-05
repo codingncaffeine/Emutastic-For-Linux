@@ -1269,8 +1269,9 @@ public partial class MainWindow : Window
         if (CoreManager.ConsoleCoreMap.TryGetValue(game.Console ?? "", out var cheatCores) && cheatCores.Length > 0
             && CheatSupport.Lookup(cheatCores[0]).Level != CheatSupportLevel.NotSupported)
             items.Add(MenuAction("🎮  Cheats…", () => RunGuarded(() => new CheatsManagerWindow(game).ShowDialog(this))));
+        // Apply ROM Hack (cartridge systems only; base ROMs, not already-hacked entries).
         if (!game.HasPatch && RomPatcher.SupportedConsoles.Contains(game.Console ?? ""))
-            items.Add(new MenuItem { Header = "🧩  Apply ROM Hack…", IsEnabled = false }); // later
+            items.Add(MenuAction("🧩  Apply ROM Hack…", () => RunGuarded(() => ApplyRomHackAsync(game))));
 
         items.Add(MenuAction("📁  Show in Files", () =>
         {
@@ -1369,6 +1370,114 @@ public partial class MainWindow : Window
     {
         try { await action(); }
         catch (Exception ex) { _vm?.SetStatus($"Action failed: {ex.Message}", autoClear: true); }
+    }
+
+    /// <summary>
+    /// "Apply ROM Hack…" (port of upstream): pick an IPS/BPS/UPS patch, validate it against the
+    /// base ROM off the UI thread (BPS/UPS verify the source checksum), name the hack, copy the
+    /// patch into RomPatches/{Console}/, and add the result as its own library entry. The base
+    /// ROM file is never modified — the patch is applied in memory at launch (LoadGame).
+    /// </summary>
+    private async Task ApplyRomHackAsync(Game baseGame)
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Select a ROM hack patch",
+            AllowMultiple = false,
+            FileTypeFilter = new[]
+            {
+                new FilePickerFileType("ROM hack patches") { Patterns = new[] { "*.ips", "*.bps", "*.ups" } },
+                new FilePickerFileType("All files") { Patterns = new[] { "*" } },
+            },
+        });
+        string? patchPicked = files.Count > 0 ? files[0].TryGetLocalPath() : null;
+        if (string.IsNullOrEmpty(patchPicked)) return;
+
+        if (!RomPatcher.IsPatchExtension(patchPicked))
+        {
+            await new ConfirmDialog("ROM Hack", "That file isn't an IPS, BPS, or UPS patch.",
+                "OK", infoOnly: true).ShowDialog<bool>(this);
+            return;
+        }
+
+        _vm!.SetStatus($"Validating ROM hack for {baseGame.Title}…");
+
+        string baseRomPath = AppPaths.FromStoragePath(baseGame.RomPath);
+        string console     = baseGame.Console ?? "";
+
+        // Resolve the raw base bytes (extracting if archived), apply + validate the patch,
+        // and hash the patched output — all off the UI thread.
+        var (pr, patchedHash) = await Task.Run<(PatchResult pr, string? hash)>(() =>
+        {
+            try
+            {
+                string raw = baseRomPath;
+                string ext = System.IO.Path.GetExtension(raw);
+                if (ZipRomExtractor.IsArchiveExtension(ext) && ZipRomExtractor.ConsoleNeedsExtraction(console))
+                {
+                    string? extracted = ZipRomExtractor.ExtractSync(raw, console);
+                    if (!string.IsNullOrEmpty(extracted) && System.IO.File.Exists(extracted)) raw = extracted;
+                }
+                if (!System.IO.File.Exists(raw))
+                    return (PatchResult.Fail("The base ROM file couldn't be found."), null);
+
+                var result = RomPatcher.Apply(System.IO.File.ReadAllBytes(raw), System.IO.File.ReadAllBytes(patchPicked));
+                string? hash = result.Ok && result.Patched != null
+                    ? Convert.ToHexString(System.Security.Cryptography.MD5.HashData(result.Patched))
+                    : null;
+                return (result, hash);
+            }
+            catch (Exception ex) { return (PatchResult.Fail(ex.Message), null); }
+        });
+
+        if (!pr.Ok || patchedHash == null)
+        {
+            _vm.SetStatus("ROM hack not applied", autoClear: true);
+            await new ConfirmDialog("ROM Hack", $"Couldn't apply this patch:\n\n{pr.Error}",
+                "OK", infoOnly: true).ShowDialog<bool>(this);
+            return;
+        }
+
+        // Name the hack (default to the patch's file name).
+        string defaultTitle = System.IO.Path.GetFileNameWithoutExtension(patchPicked);
+        string? newTitle = await new RenameWindow(defaultTitle).ShowDialog<string?>(this);
+        if (newTitle == null) { _vm.SetStatus("ROM hack not applied", autoClear: true); return; }
+        string hackTitle = string.IsNullOrWhiteSpace(newTitle) ? defaultTitle : newTitle;
+
+        // Copy the patch into managed storage (hash-suffixed so two hacks can't collide).
+        string patchDir = AppPaths.GetFolder("RomPatches", console);
+        string safeStem = string.Join("_", defaultTitle.Split(System.IO.Path.GetInvalidFileNameChars()));
+        string storedPatch = System.IO.Path.Combine(patchDir,
+            $"{safeStem} [{patchedHash[..8]}]{System.IO.Path.GetExtension(patchPicked)}");
+        try { System.IO.File.Copy(patchPicked, storedPatch, overwrite: true); }
+        catch (Exception ex) { _vm.SetStatus($"Couldn't save the patch: {ex.Message}", autoClear: true); return; }
+
+        // Create the hacked entry — distinct RomHash so it gets its own saves/art, never
+        // the base game's. RomPath stays the base ROM; the patch is applied in memory at launch.
+        var hacked = new Game
+        {
+            Title           = hackTitle,
+            Console         = console,
+            Manufacturer    = baseGame.Manufacturer,
+            Year            = baseGame.Year,
+            RomPath         = baseGame.RomPath,
+            RomHash         = patchedHash,
+            Developer       = baseGame.Developer,
+            Publisher       = baseGame.Publisher,
+            Genre           = baseGame.Genre,
+            Description     = baseGame.Description,
+            BackgroundColor = baseGame.BackgroundColor,
+            AccentColor     = baseGame.AccentColor,
+        };
+        _db!.InsertGame(hacked);                 // assigns hacked.Id
+        _db.UpdatePatchPath(hacked.Id, storedPatch);
+
+        // Reload from the DB + re-filter the current view — the same path import uses to
+        // surface new games. (RefreshGame alone leaves the filter cache marked clean, so a
+        // freshly created entry wouldn't appear until a manual console switch/refresh.)
+        await Task.Run(() => _vm.Reload());
+        await _vm.FilterGamesAsync();
+        _vm.SetStatus($"Added ROM hack: {hackTitle}", autoClear: true);
     }
 
     private void WireImportEvents()

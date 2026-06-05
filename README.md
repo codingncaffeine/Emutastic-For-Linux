@@ -15,8 +15,8 @@ XInput → SDL3 gamepad, Win32 core loading → `dlopen`).
 > import, hardware-rendered cores, save states, cheats, recording, manuals/notes, the full
 > RetroAchievements suite (unlocks, hardcore, Achievements tab, friends, leaderboard toasts),
 > GitHub cloud sync (shared or per-PC repositories, optional encryption — interoperates with the
-> Windows app), and in-app updates. Still in progress: GameCube & Dreamcast (performance work),
-> ROM-hack patching, and slang shaders.
+> Windows app), ROM hacks (IPS/BPS/UPS soft-patching), and in-app updates. Still in progress:
+> GameCube & Dreamcast (performance work) and slang shaders.
 
 > **Legal notice:** This project is a frontend only. It does not include, distribute, or facilitate the
 > acquisition of any copyrighted software, ROM images, BIOS files, or other proprietary system files.
@@ -131,9 +131,10 @@ libretro thumbnails, optional ScreenScraper) · **SDL3** controller support with
 with trophy case + activity heatmap, friends with unlock feeds + leaderboard toasts, CHD support) ·
 screenshots & **gameplay recording** (x264) · **GitHub cloud sync** (below) · disc swapping
 (L3 + Start) · per-game notes · game manuals (auto-download) · cheats (+ cheat database import) ·
-core options · save states with screenshots · play-time tracking · **in-app updates**.
+core options · save states with screenshots · play-time tracking · **ROM hacks**
+(IPS/BPS/UPS soft-patching — original ROM untouched) · **in-app updates**.
 
-Not yet ported from upstream: ROM-hack patching (IPS/BPS/UPS) and slang shader presets.
+Not yet ported from upstream: slang shader presets.
 
 (See the upstream [Emutastic wiki](https://github.com/codingncaffeine/Emutastic/wiki) for per-feature
 detail — behavior is intended to match. Diagnostic logs live in the `Logs/` folder of the data

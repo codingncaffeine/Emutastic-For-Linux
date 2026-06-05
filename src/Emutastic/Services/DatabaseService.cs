@@ -1990,7 +1990,7 @@ namespace Emutastic.Services
             return games;
         }
 
-        public record GameSyncInfo(string RomHash, string Console, string RomPath);
+        public record GameSyncInfo(string RomHash, string Console, string RomPath, bool HasPatch);
 
         public List<GameSyncInfo> GetGamesSyncMap()
         {
@@ -1998,14 +1998,15 @@ namespace Emutastic.Services
             using var connection = new SqliteConnection(_connectionString);
             connection.Open();
             var cmd = connection.CreateCommand();
-            cmd.CommandText = "SELECT RomHash, Console, RomPath FROM Games WHERE RomHash IS NOT NULL AND RomHash != '';";
+            cmd.CommandText = "SELECT RomHash, Console, RomPath, PatchPath FROM Games WHERE RomHash IS NOT NULL AND RomHash != '';";
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
                 result.Add(new GameSyncInfo(
                     reader.GetString(0),
                     reader.GetString(1),
-                    AppPaths.FromStoragePath(reader.GetString(2))));
+                    AppPaths.FromStoragePath(reader.GetString(2)),
+                    !reader.IsDBNull(3) && reader.GetString(3).Length > 0));
             }
             return result;
         }
