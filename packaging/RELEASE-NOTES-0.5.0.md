@@ -22,7 +22,9 @@ RetroArch-style game host, ported feature-for-feature from the Windows app.
 |---|---|
 | `emutastic_0.5.0_amd64.deb` | Debian/Ubuntu system install (`emutastic` on PATH + desktop entry) |
 | `Emutastic-0.5.0-linux-x64.tar.gz` | Self-contained — extract anywhere and run `./Emutastic` |
-| `Emutastic-0.5.0-linux-x64-portable.tar.gz` | Fully portable — everything lives beside the executable |
+
+**Portable setup:** extract the tarball, `touch portable.txt` beside the executable, launch —
+everything then lives in `PortableData/` next to the app. Full details in the bundled `README.txt`.
 
 Needs: `ffmpeg` and SDL3 (`libsdl3-0`); `libvlc` recommended for video snaps.
 The .deb declares all of it.

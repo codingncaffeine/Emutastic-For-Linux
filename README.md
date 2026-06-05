@@ -154,14 +154,14 @@ Follows the XDG Base Directory spec:
 ```
 
 ### Installing & updating
-Three release artifacts per version (built by `packaging/build-release.sh`):
+Two release artifacts per version (built by `packaging/build-release.sh`), each bundling
+a quick-start `README.txt`:
 - `emutastic_<ver>_amd64.deb` — system install (`/usr/lib/emutastic`, `emutastic` on PATH,
   desktop entry). **Portable mode is not available on a .deb install** (the install dir is
   root-owned); data lives in `~/.local/share/Emutastic`.
 - `Emutastic-<ver>-linux-x64.tar.gz` — self-contained; extract anywhere writable and run
-  `./Emutastic`. Data in `~/.local/share/Emutastic` unless you opt into portable mode.
-- `Emutastic-<ver>-linux-x64-portable.tar.gz` — same, with `portable.txt` pre-dropped:
-  fully self-contained out of the box.
+  `./Emutastic`. For a fully portable setup, `touch portable.txt` beside the executable
+  (details in the bundled README).
 
 **In-app updates** (Preferences → About): the app checks the latest GitHub release and,
 when newer, offers **Update Now** — tarball installs self-replace and relaunch (your

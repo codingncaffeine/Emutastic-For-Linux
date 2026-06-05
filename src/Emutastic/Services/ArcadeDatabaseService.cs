@@ -43,7 +43,7 @@ namespace Emutastic.Services
             {
                 Timeout = TimeSpan.FromSeconds(15),
             };
-            c.DefaultRequestHeaders.Add("User-Agent", "Emutastic/1.x (+https://github.com/codingncaffeine/Emutastic)");
+            c.DefaultRequestHeaders.Add("User-Agent", "Emutastic/0.x (+https://github.com/codingncaffeine/Emutastic-For-Linux)");
             return c;
         }
 

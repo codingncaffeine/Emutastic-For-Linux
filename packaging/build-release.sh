@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Builds the three Linux release artifacts the in-app updater consumes:
-#   Emutastic-<ver>-linux-x64.tar.gz            self-contained, extract anywhere
-#   Emutastic-<ver>-linux-x64-portable.tar.gz   same + portable.txt pre-dropped
-#   emutastic_<ver>_amd64.deb                   system install (/usr/lib/emutastic)
+# Builds the two Linux release artifacts the in-app updater consumes:
+#   Emutastic-<ver>-linux-x64.tar.gz   self-contained, extract anywhere (portable
+#                                      mode = `touch portable.txt`, see README.txt)
+#   emutastic_<ver>_amd64.deb          system install (/usr/lib/emutastic)
 # Asset names are a CONTRACT with Services/UpdateService.cs — change both together.
+# README.txt (the bundled quick-start guide) ships in the tarball root and the
+# deb's /usr/share/doc/emutastic/.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -24,18 +26,20 @@ mkdir -p "$PUB/Assets/Sounds"
 cp -f src/Emutastic/Assets/Sounds/Notification1.mp3 "$PUB/Assets/Sounds/"
 cp -f "src/Emutastic/Assets/buttons/powerbutton.png" "$PUB/" 2>/dev/null || true
 
-echo "── tarballs"
+cp packaging/README.txt "$PUB/README.txt"
+
+echo "── tarball"
 tar -C "$PUB" -czf "$OUT/Emutastic-$VER-linux-x64.tar.gz" .
-touch "$PUB/portable.txt"
-tar -C "$PUB" -czf "$OUT/Emutastic-$VER-linux-x64-portable.tar.gz" .
-rm "$PUB/portable.txt"
 
 echo "── deb"
 DEB=$OUT/debroot
 rm -rf "$DEB"
 mkdir -p "$DEB/DEBIAN" "$DEB/usr/lib/emutastic" "$DEB/usr/bin" \
-         "$DEB/usr/share/applications" "$DEB/usr/share/icons/hicolor/512x512/apps"
+         "$DEB/usr/share/applications" "$DEB/usr/share/icons/hicolor/512x512/apps" \
+         "$DEB/usr/share/doc/emutastic"
 cp -a "$PUB/." "$DEB/usr/lib/emutastic/"
+rm -f "$DEB/usr/lib/emutastic/README.txt"
+cp packaging/README.txt "$DEB/usr/share/doc/emutastic/README.txt"
 cat > "$DEB/usr/bin/emutastic" <<'WRAP'
 #!/bin/sh
 exec /usr/lib/emutastic/Emutastic "$@"
