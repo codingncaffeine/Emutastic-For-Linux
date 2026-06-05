@@ -281,9 +281,8 @@ public partial class MainWindow : Window
                 break;
             case "SaveStates":  PopulateSaveStatesView();  break;
             case "Screenshots": PopulateScreenshotsView(); break;
-            case "Achievements":
-                _vm?.SetStatus("Achievements dashboard is coming soon.", autoClear: true);
-                break;
+            // Achievements: the dashboard partial (MainWindow.RaTab) owns its own activation —
+            // nothing to do here (a stale "coming soon" status used to flash on every switch).
         }
     }
 
