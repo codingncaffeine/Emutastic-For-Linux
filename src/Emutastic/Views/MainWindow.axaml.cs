@@ -543,6 +543,22 @@ public partial class MainWindow : Window
             _ = Services.GitHubSyncService.Instance.UploadSaveAfterSessionAsync(g);
         };
         // RetroAchievements session results: the host writes neither DB nor config, so the
+        // Play stats (upstream's UpdatePlayCount at launch + play-time accrual): recorded at
+        // session end — DB row + the in-memory Game object, so open views (detail card stat
+        // pills, Recently Played) reflect the session without a library reload. Off-UI thread;
+        // DB writes are thread-safe and the Game property setters are plain fields.
+        Services.GameHostLauncher.OnPlayStats = (g, seconds) =>
+        {
+            try
+            {
+                _db?.UpdatePlayCount(g.Id);
+                if (seconds > 0) _db?.UpdatePlayTime(g.Id, seconds);
+                g.PlayCount++;
+                g.LastPlayed = DateTime.Now;
+                g.TotalPlayTimeSeconds += seconds;
+            }
+            catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"[PlayStats] record failed: {ex.Message}"); }
+        };
         // identification outcome, live-progress snapshot, and any refreshed login token are
         // ingested here (off-UI thread — DB + config only, no controls touched).
         Services.GameHostLauncher.OnRaSessionResults = (g, res) =>

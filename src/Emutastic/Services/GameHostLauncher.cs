@@ -27,6 +27,11 @@ namespace Emutastic.Services
         public static Action<Models.Game>? OnGameSessionEnded;
         /// <summary>RA session results ingest (DB + config writes live in the parent).</summary>
         public static Action<Models.Game, GameHostResult>? OnRaSessionResults;
+
+        /// <summary>Set once by MainWindow: records play stats when a session ends — (game,
+        /// playSeconds). Feeds PlayCount/LastPlayed/TotalPlayTimeSeconds (Recently Played view,
+        /// detail-card stat pills). The parent owns the DB.</summary>
+        public static Action<Models.Game, int>? OnPlayStats;
         /// <summary>Fired when a host spawns with a known Game — MainWindow uses it to
         /// pre-fetch friend leaderboard ranks for the LB-toast decision.</summary>
         public static Action<Models.Game>? OnGameLaunching;
@@ -239,9 +244,15 @@ namespace Emutastic.Services
                     if (Interlocked.Decrement(ref _active) == 0) EmulatorSession.ExternalGameActive = false;
                 }
 
-                // Phase 1.5 hook: persist play-stats here (parent owns the DB + Game.Id). Today the app
-                // records none (UpdatePlayCount/UpdatePlayTime have no callers), so we only log for now.
                 Trace.WriteLine($"[Launcher] game host exited: code={result?.ExitCode}, playSeconds={result?.PlaySeconds}");
+
+                // Play stats: count the session + add its seconds (a crashed host — null result —
+                // still counts the play; its seconds are simply unknown). Off-UI thread.
+                if (game != null && OnPlayStats != null)
+                {
+                    try { OnPlayStats(game, result?.PlaySeconds ?? 0); }
+                    catch (Exception ex) { Trace.WriteLine($"[Launcher] play-stats record failed: {ex.Message}"); }
+                }
 
                 // Ingest any save states the host wrote this session (host has no DB). Off-UI thread;
                 // DiscoverSaveStates fires SaveStatesChanged so open views refresh themselves.
