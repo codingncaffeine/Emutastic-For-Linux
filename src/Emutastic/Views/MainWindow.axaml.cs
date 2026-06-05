@@ -587,6 +587,18 @@ public partial class MainWindow : Window
         Services.GameHostLauncher.OnHostCommand = (verb, arg) =>
         {
             if (verb == "open-controls") PreferencesWindow.OpenOrFocus(this, arg);
+            // In-game cog → turbo toggle: "save-turbo <gameId> <port> [csv]". Persist per game here
+            // (save-on-click, like upstream's dialog — the host's config copy is read-only).
+            else if (verb == "save-turbo" && App.Configuration != null)
+            {
+                var t = (arg ?? "").Split(' ', 3);
+                if (t.Length >= 2 && int.TryParse(t[0], out int turboGameId)
+                    && int.TryParse(t[1], out int turboPort) && turboPort is >= 0 and < 4)
+                {
+                    App.Configuration.SetValue($"turbo_p{turboPort}_{turboGameId}", t.Length == 3 ? t[2] : "");
+                    App.Configuration.ScheduleSave();
+                }
+            }
             // Paused right-click cycled the pause effect in the host — persist the pick here
             // (the host's config copy is read-only by convention; one writer avoids clashes).
             else if (verb == "set-pause-effect" && App.Configuration != null)

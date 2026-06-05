@@ -151,6 +151,14 @@ namespace Emutastic.Services
                     psi.ArgumentList.Add("--load-state");
                     psi.ArgumentList.Add(loadStatePath);
                 }
+                // Per-game turbo sets (upstream's turbo_p{port}_{gameId} keys): handed down as one
+                // arg — the host reads no config. Live toggles come back as "save-turbo" commands.
+                if (App.Configuration != null)
+                {
+                    string turbo = string.Join(";", Enumerable.Range(0, 4)
+                        .Select(p => App.Configuration.GetValue($"turbo_p{p}_{game.Id}", "")));
+                    if (turbo != ";;;") { psi.ArgumentList.Add("--turbo"); psi.ArgumentList.Add(turbo); }
+                }
             }
 
             // Native Wayland for the game window (RetroArch's backend — the smooth path). The parent Avalonia

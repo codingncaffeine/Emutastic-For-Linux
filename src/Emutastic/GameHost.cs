@@ -39,7 +39,7 @@ namespace Emutastic
             string? core = args.Length > 1 ? args[1] : null;
             string? rom  = args.Length > 2 ? args[2] : null;
             string console = "", resultsPath = "";
-            string saveDir = "", gameTitle = "", romHash = "", loadStatePath = "", patchPath = "";
+            string saveDir = "", gameTitle = "", romHash = "", loadStatePath = "", patchPath = "", turboSpec = "";
             int gameId = -1;
             bool fullscreen = false, parentStdin = false;
             int prewarmSeconds = 0;   // >0 = shader pre-warm pass: run the attract/boot loop, then auto-quit
@@ -58,6 +58,8 @@ namespace Emutastic
                     case "--load-state":   if (i + 1 < args.Length) loadStatePath = args[++i]; break;
                     // ROM-hack patch (IPS/BPS/UPS) — applied to the ROM buffer in memory at load.
                     case "--patch":        if (i + 1 < args.Length) patchPath = args[++i]; break;
+                    // Per-game turbo sets ("p0csv;p1csv;p2csv;p3csv") — this process reads no config.
+                    case "--turbo":        if (i + 1 < args.Length) turboSpec = args[++i]; break;
                     // Library row id — names the per-game cheat file (Cheats/{Console}/{id}.json).
                     case "--game-id":      if (i + 1 < args.Length && int.TryParse(args[i + 1], out int gid)) { i++; gameId = gid; } break;
                     case "--prewarm":
@@ -124,6 +126,8 @@ namespace Emutastic
             // Launch-into-state (mirrors upstream's pendingLoadStatePath ctor param): queued now,
             // executed on the emu thread after warmup once the loop starts.
             if (!string.IsNullOrEmpty(loadStatePath)) session.QueuePendingLoad(loadStatePath);
+            // Saved per-game turbo sets (upstream's LoadTurboConfig, handed down by the parent).
+            if (!string.IsNullOrEmpty(turboSpec)) session.SetTurboConfig(turboSpec);
 
             // Quit signals → ask the loop to stop cleanly (flushes SRAM), distinct from a hard kill:
             //  • SIGTERM/SIGINT (incl. the PR_SET_PDEATHSIG signal when the parent dies),

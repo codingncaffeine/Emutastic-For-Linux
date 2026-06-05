@@ -27,6 +27,7 @@ namespace Emutastic.Emulator
         const uint ENV_GET_OVERSCAN = 2;
         const uint ENV_GET_CAN_DUPE = 3;
         const uint ENV_SET_PERFORMANCE_LEVEL = 8;
+        const uint ENV_SET_INPUT_DESCRIPTORS = 11; // per-port button labels (feeds the turbo menu)
         const uint ENV_GET_SYSTEM_DIRECTORY = 9;
         const uint ENV_SET_PIXEL_FORMAT = 10;
         const uint ENV_GET_VARIABLE = 15;
@@ -130,6 +131,27 @@ namespace Emutastic.Emulator
         private int _frameW, _frameH;
         private volatile int _rotationDeg;   // 0/90/180/270, set by ENV_SET_ROTATION
         private volatile bool _userFlip;     // cog "Flip Display": extra 180° composed with the core rotation (session-local, like upstream)
+
+        // ── Turbo / autofire (upstream parity): per-port set of JOYPAD ids modulated at RetroArch's
+        // defaults — period 6 frames, duty 3 (~10Hz at 60fps), clocked once per emu frame. The cog
+        // toggle swaps a FRESH set into the slot (reference assignment is atomic), so the emu thread's
+        // per-read snapshot never sees a mid-mutation set.
+        private readonly HashSet<uint>[] _turboButtons = { new(), new(), new(), new() };
+        private long _turboFrames;           // emu-frame counter driving the duty cycle (emu thread only)
+        private const long TurboPeriodFrames = 6;
+        private const long TurboDutyFrames = 3;
+        // Buttons that are never turbo-able regardless of user choice (upstream blacklist).
+        private static readonly HashSet<uint> TurboBlacklist = new()
+        {
+            LibretroInput.JOYPAD_SELECT, LibretroInput.JOYPAD_START,
+            LibretroInput.JOYPAD_UP, LibretroInput.JOYPAD_DOWN,
+            LibretroInput.JOYPAD_LEFT, LibretroInput.JOYPAD_RIGHT,
+            LibretroInput.JOYPAD_L3, LibretroInput.JOYPAD_R3,
+        };
+        // Per-port JOYPAD id → label from SET_INPUT_DESCRIPTORS, so the turbo menu lists only the
+        // buttons the current core actually uses (e.g. NES = just B and A).
+        private readonly Dictionary<uint, string>[] _joypadDescriptors = { new(), new(), new(), new() };
+        private volatile bool _descriptorsReceived;
         private long _frameSeq;
         private int _frameCountSample;            // frames produced since the last SampleStats (real fps)
         private long _coreRunTicks, _coreRunCalls; // accumulated retro_run time + call count for avg ms
@@ -1000,7 +1022,7 @@ namespace Emutastic.Emulator
                     // Asks the MAIN APP to open Preferences → Controls for this console (the panel
                     // lives there; the request crosses processes via the stdout command channel).
                     ("Edit Game Controls…", EmitHostCommand != null, null, "\x01CONTROLS"),
-                    ("Turbo Buttons…",      false, null, null),   // not ported yet
+                    ("Turbo Buttons…",      true, "›", "\x01TURBO"),
                     (_userFlip ? "Flip Display ✓" : "Flip Display", true, null, "\x01FLIP"),
                     ("Shader: None",        false, null, null),   // arrives with the shader splinter
                     ("Overlay: On",         false, null, null),   // bezel/overlay art not ported yet
@@ -1035,6 +1057,36 @@ namespace Emutastic.Emulator
                     // Unannounced this session (core didn't expose it) → greyed with n/a.
                     m.Add(cur.Length > 0 ? (label, true, cur, key) : (label, false, "n/a", null));
                 }
+                return m;
+            };
+            // Turbo level (upstream's TurboButtonsDialog as a cog submenu): one pill-toggle row per
+            // turbo-able button. With descriptors, they are authoritative for EVERY port (a single-port
+            // NES must not render phantom P2-P4 rows); without them, fall back to the canonical 8 for
+            // port 0. Row keys "\x03<port>:<id>" toggle + save through the parent.
+            Func<List<(string, bool, string?, string?)>> buildCogTurbo = () =>
+            {
+                var m = new List<(string, bool, string?, string?)> { ("‹ Back", true, null, "\x01BACK") };
+                var fallback = new Dictionary<uint, string>
+                {
+                    { 0, "B" }, { 1, "Y" }, { 8, "A" }, { 9, "X" },
+                    { 10, "L" }, { 11, "R" }, { 12, "L2" }, { 13, "R2" },
+                };
+                // Prefix rows with the player number only when more than one port has buttons.
+                int portsWithButtons = _descriptorsReceived
+                    ? _joypadDescriptors.Count(d => d.Keys.Any(k => !TurboBlacklist.Contains(k))) : 1;
+                for (int p = 0; p < 4; p++)
+                {
+                    var btns = _descriptorsReceived ? _joypadDescriptors[p] : (p == 0 ? fallback : null);
+                    if (btns == null) continue;
+                    var set = _turboButtons[p];
+                    foreach (var (id, label) in btns.OrderBy(kv => kv.Key))
+                    {
+                        if (TurboBlacklist.Contains(id)) continue;
+                        string row = portsWithButtons > 1 ? $"P{p + 1} · {label}" : label;
+                        m.Add((row, true, set.Contains(id) ? "\x01ON" : "\x01OFF", $"\x03{p}:{id}"));
+                    }
+                }
+                if (m.Count == 1) m.Add(("No turbo-able buttons", false, null, null));
                 return m;
             };
             // Cheats level (upstream's CheatsMenu): Add/Import actions + one toggle row per cheat.
@@ -1158,10 +1210,26 @@ namespace Emutastic.Emulator
                                 : $"Added {added} cheat{(added == 1 ? "" : "s")} (off by default)", 4);
                             cogMenu = buildCogCheats();
                         }
+                        else if (key == "\x01TURBO") cogMenu = buildCogTurbo();
                         else if (key.Length > 1 && key[0] == '\x02' && int.TryParse(key.AsSpan(1), out int cheatIdx))
                         {
                             ToggleCheat(cheatIdx);                 // persists + queues live re-apply
                             cogMenu = buildCogCheats();
+                        }
+                        else if (key.Length > 1 && key[0] == '\x03')
+                        {
+                            // Turbo toggle: "\x03<port>:<id>". Applies live; persisted per game by the
+                            // PARENT (save-on-click, like upstream's dialog — the host writes no config).
+                            var spec = key.AsSpan(1);
+                            int colon = spec.IndexOf(':');
+                            if (colon > 0 && int.TryParse(spec[..colon], out int tPort)
+                                && uint.TryParse(spec[(colon + 1)..], out uint tId) && tPort is >= 0 and < 4)
+                            {
+                                string csv = ToggleTurbo(tPort, tId);
+                                if (CheatGameId >= 0)
+                                    EmitHostCommand?.Invoke($"save-turbo {CheatGameId} {tPort} {csv}");
+                            }
+                            cogMenu = buildCogTurbo();
                         }
                         else
                         {
@@ -1430,6 +1498,9 @@ namespace Emutastic.Emulator
                 case ENV_SET_ROTATION:
                     // value 0..3 → 0/90/180/270° counter-clockwise (vertical arcade games etc.)
                     if (data != IntPtr.Zero) _rotationDeg = (Marshal.ReadInt32(data) & 3) * 90;
+                    return true;
+                case ENV_SET_INPUT_DESCRIPTORS:
+                    ParseInputDescriptors(data);
                     return true;
                 case ENV_GET_SYSTEM_DIRECTORY:
                     if (data != IntPtr.Zero) Marshal.WriteIntPtr(data, _systemDirPtr);
@@ -1704,6 +1775,73 @@ namespace Emutastic.Emulator
             try { _hwContextReset?.Invoke(); } catch (Exception ex) { Trace.WriteLine($"[Emu] context_reset threw: {ex}"); }
         }
 
+        // ── Turbo / autofire ─────────────────────────────────────────────────────────────────────────
+        // SET_INPUT_DESCRIPTORS: per-port JOYPAD id → human label (upstream's ParseInputDescriptors).
+        // Cores re-send wholesale on device-type changes (e.g. Saturn 3D pad → digital shrinks the
+        // set), so clear before re-populating.
+        private void ParseInputDescriptors(IntPtr data)
+        {
+            if (data == IntPtr.Zero) return;
+            try
+            {
+                for (int i = 0; i < _joypadDescriptors.Length; i++)
+                    _joypadDescriptors[i].Clear();
+                // struct retro_input_descriptor { uint port; uint device; uint index;
+                //                                 uint id; const char *description; }
+                // Terminated by an entry whose description pointer is NULL.
+                int stride = (4 * 4) + IntPtr.Size;
+                IntPtr p = data;
+                int safety = 0;
+                while (safety++ < 4096)
+                {
+                    IntPtr descPtr = Marshal.ReadIntPtr(p, 16);
+                    if (descPtr == IntPtr.Zero) break;
+                    uint port = (uint)Marshal.ReadInt32(p, 0);
+                    uint device = (uint)Marshal.ReadInt32(p, 4);
+                    // index at +8 — not used for joypad digital buttons
+                    uint id = (uint)Marshal.ReadInt32(p, 12);
+                    if (port < 4 && device == SdlInput.RETRO_DEVICE_JOYPAD && id < 16)
+                    {
+                        string label = Marshal.PtrToStringAnsi(descPtr) ?? "";
+                        if (!string.IsNullOrWhiteSpace(label))
+                            _joypadDescriptors[port][id] = label;
+                    }
+                    p = IntPtr.Add(p, stride);
+                }
+                _descriptorsReceived = true;
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine("[Emu] ParseInputDescriptors: " + ex.Message);
+            }
+        }
+
+        /// <summary>"--turbo" launch payload: the four per-port id CSVs joined with ';' (e.g. "0,8;;;").
+        /// Call before Start; the saved per-game sets come from the parent (the host reads no config).</summary>
+        public void SetTurboConfig(string spec)
+        {
+            string[] ports = spec.Split(';');
+            for (int p = 0; p < _turboButtons.Length && p < ports.Length; p++)
+            {
+                var set = new HashSet<uint>();
+                foreach (var part in ports[p].Split(',', StringSplitOptions.RemoveEmptyEntries))
+                    if (uint.TryParse(part.Trim(), out uint id) && id < 16 && !TurboBlacklist.Contains(id))
+                        set.Add(id);
+                _turboButtons[p] = set;
+            }
+        }
+
+        // Toggle one button's turbo membership by swapping a fresh set into the slot (atomic ref
+        // assignment — the emu thread snapshots the reference per read). Returns the new CSV for
+        // the save-turbo host command.
+        private string ToggleTurbo(int port, uint id)
+        {
+            var next = new HashSet<uint>(_turboButtons[port]);
+            if (!next.Remove(id)) next.Add(id);
+            _turboButtons[port] = next;
+            return string.Join(",", next);
+        }
+
         // ── In-game disc switching (L3 + Start chord) ───────────────────────────────────────────────
         // Wraps SdlInput.GetInputState so we can inject a JOYPAD_L press on port 0 for FDS "disk side
         // change" (FDS cores don't expose the disk-control interface — they read an L press instead).
@@ -1712,13 +1850,24 @@ namespace Emutastic.Emulator
             if (port == 0 && device == SdlInput.RETRO_DEVICE_JOYPAD
                 && id == LibretroInput.JOYPAD_L && _fdsSideChangeFrames > 0)
                 return 1;
-            return _input.GetInputState(port, device, index, id);
+            int v = _input.GetInputState(port, device, index, id);
+            // Turbo gate (upstream's TurboGate): a held turbo button reports pressed only during the
+            // duty window of each period, auto-releasing for the rest (~10Hz at 60fps). Snapshot the
+            // set reference once — toggles swap in a fresh set, so this read is tear-free.
+            if (v != 0 && device == SdlInput.RETRO_DEVICE_JOYPAD && port < 4 && id < 16)
+            {
+                var set = _turboButtons[port];
+                if (set.Count != 0 && set.Contains(id) && (_turboFrames % TurboPeriodFrames) >= TurboDutyFrames)
+                    return 0;
+            }
+            return v;
         }
 
         // Called once per emu frame (after input poll). Detects the disc-swap chord (rising edge) and
         // ticks the FDS-injection + deferred-reinsert countdowns.
         private void ServiceDiskSwap()
         {
+            _turboFrames++;   // turbo duty-cycle clock: once per emu frame, both loop variants
             if (_fdsSideChangeFrames > 0) _fdsSideChangeFrames--;
             if (_diskInsertPendingFrames > 0 && --_diskInsertPendingFrames == 0)
             {
