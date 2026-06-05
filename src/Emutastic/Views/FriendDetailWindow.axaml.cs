@@ -69,7 +69,7 @@ namespace Emutastic.Views
             // Stay in sync with the brief card popup — both write through
             // FriendService.SetToastsEnabledAsync which fires FriendListChanged.
             _friends.FriendListChanged += OnFriendListChanged;
-            Closed += (_, __) => _friends.FriendListChanged -= OnFriendListChanged;
+            Closed += (_, __) => { _friends.FriendListChanged -= OnFriendListChanged; _bellTimer?.Stop(); };
 
             Loaded += async (_, __) =>
             {
@@ -301,7 +301,7 @@ namespace Emutastic.Views
 
         private void ApplyToastsIcon()
         {
-            HeaderToastsIcon.Text = _toastsEnabled ? "🔔" : "🔕";
+            HeaderToastsIcon.Data = _toastsEnabled ? BellIcon.On : BellIcon.Off;
             HeaderToastsLabel.Text = _toastsEnabled
                 ? "Notifications on — click to mute this friend"
                 : "Notifications off — click to enable notifications";
@@ -313,18 +313,36 @@ namespace Emutastic.Views
         private static readonly Avalonia.Media.Color BellHoverColor =
             Avalonia.Media.Color.FromRgb(0xE0, 0xB5, 0x4B);
 
+        // Ring animation (upstream's DoubleAnimation: ±18° at the crown, 140ms each way,
+        // sine-eased, autoreversing forever) — a DispatcherTimer driving a sine with a 280ms
+        // period reproduces that motion exactly.
+        private Avalonia.Media.RotateTransform? _bellRotate;
+        private Avalonia.Threading.DispatcherTimer? _bellTimer;
+        private readonly System.Diagnostics.Stopwatch _bellClock = new();
+
         private void StartBellHover()
         {
-            // Foreground swap: hold a reference to the original brush so we
-            // can restore it exactly (preserves whatever theme it resolved to).
-            HeaderToastsIcon.Foreground = new Avalonia.Media.SolidColorBrush(BellHoverColor);
-            // (Upstream rang the bell with a WPF rotate animation; the glyph
-            // stand-in keeps the hover tint only.)
+            HeaderToastsIcon.Fill = new Avalonia.Media.SolidColorBrush(BellHoverColor);
+            if (_bellRotate == null)
+            {
+                _bellRotate = new Avalonia.Media.RotateTransform();
+                HeaderToastsIcon.RenderTransform = _bellRotate;
+            }
+            if (_bellTimer == null)
+            {
+                _bellTimer = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(15) };
+                _bellTimer.Tick += (_, _) =>
+                    _bellRotate!.Angle = 18.0 * Math.Sin(_bellClock.Elapsed.TotalMilliseconds * (2 * Math.PI / 280.0));
+            }
+            _bellClock.Restart();
+            _bellTimer.Start();
         }
 
         private void StopBellHover()
         {
-            HeaderToastsIcon.Foreground = (Avalonia.Media.IBrush)RaResW("TextSecondaryBrush");
+            _bellTimer?.Stop();
+            if (_bellRotate != null) _bellRotate.Angle = 0;
+            HeaderToastsIcon.Fill = (Avalonia.Media.IBrush)RaResW("TextSecondaryBrush");
         }
 
         private static string FormatTimeAgo(string? iso)

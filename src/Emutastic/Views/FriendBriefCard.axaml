@@ -34,11 +34,12 @@
                                FontStyle="Italic" Foreground="{DynamicResource TextMutedBrush}"
                                TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
                 </StackPanel>
-                <!-- Per-friend notification bell (glyph stand-in for upstream's
-                     MaterialDesign PackIcon — no icon package on the Linux side). -->
+                <!-- Per-friend notification bell — tintable vector (BellIcon geometries, same as
+                     the detail window; emoji glyphs ignore Foreground tinting on Linux). -->
                 <Button Name="BriefToastsToggle" Grid.Column="2" Background="Transparent" BorderThickness="0"
                         Padding="4" VerticalAlignment="Top" Cursor="Hand">
-                    <TextBlock Name="BriefToastsIcon" Text="🔔" FontSize="13"/>
+                    <Path Name="BriefToastsIcon" Width="13" Height="13" Stretch="Uniform"
+                          Fill="{DynamicResource TextSecondaryBrush}"/>
                 </Button>
             </Grid>
 

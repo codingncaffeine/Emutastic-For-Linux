@@ -111,8 +111,12 @@
                             Cursor="Hand"
                             Click="HeaderToastsToggle_Click">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Name="HeaderToastsIcon" Text="🔔" FontSize="13" VerticalAlignment="Center"
-                                       Foreground="{DynamicResource TextSecondaryBrush}"/>
+                            <!-- Tintable vector bell (upstream's PackIcon Bell/BellOff) — geometry set
+                                 in code-behind; pivot near the crown for the hover ring animation. -->
+                            <Path Name="HeaderToastsIcon" Width="14" Height="14" Stretch="Uniform"
+                                  VerticalAlignment="Center"
+                                  Fill="{DynamicResource TextSecondaryBrush}"
+                                  RenderTransformOrigin="50%,15%"/>
                             <TextBlock Name="HeaderToastsLabel"
                                        Text="Get notifications about this user"
                                        FontFamily="{DynamicResource PrimaryFont}"

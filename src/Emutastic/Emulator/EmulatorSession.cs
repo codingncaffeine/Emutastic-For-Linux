@@ -1154,6 +1154,10 @@ namespace Emutastic.Emulator
                     foreach (var (id, label) in btns.OrderBy(kv => kv.Key))
                     {
                         if (TurboBlacklist.Contains(id)) continue;
+                        // Cores with native autofire declare separate "Turbo A"/"Turbo B" buttons
+                        // (FCEUmm etc.) — adding OUR turbo to a turbo button is meaningless and
+                        // made the list read as duplicates, so hide those entries.
+                        if (label.Contains("turbo", StringComparison.OrdinalIgnoreCase)) continue;
                         string row = portsWithButtons > 1 ? $"P{p + 1} · {label}" : label;
                         rows.Add((row, true, set.Contains(id) ? "\x01ON" : "\x01OFF", $"\x03{p}:{id}"));
                     }

@@ -42,10 +42,10 @@ public partial class FriendBriefCard : Window
         var toggle = this.FindControl<Button>("BriefToastsToggle")!;
         toggle.Click += BriefToastsToggle_Click;
         toggle.PointerEntered += (_, _) =>
-            this.FindControl<TextBlock>("BriefToastsIcon")!.Foreground =
+            this.FindControl<Avalonia.Controls.Shapes.Path>("BriefToastsIcon")!.Fill =
                 new SolidColorBrush(Color.FromRgb(0xE0, 0xB5, 0x4B));
         toggle.PointerExited += (_, _) =>
-            this.FindControl<TextBlock>("BriefToastsIcon")!.Foreground =
+            this.FindControl<Avalonia.Controls.Shapes.Path>("BriefToastsIcon")!.Fill =
                 this.TryFindResource("TextSecondaryBrush", ActualThemeVariant, out var b) && b is IBrush br
                     ? br : Brushes.Gray;
 
@@ -135,8 +135,8 @@ public partial class FriendBriefCard : Window
 
     private void ApplyToastsIcon()
     {
-        var icon = this.FindControl<TextBlock>("BriefToastsIcon")!;
-        icon.Text = _toastsEnabled ? "🔔" : "🔕";
+        var icon = this.FindControl<Avalonia.Controls.Shapes.Path>("BriefToastsIcon")!;
+        icon.Data = _toastsEnabled ? BellIcon.On : BellIcon.Off;
         string tip = _toastsEnabled
             ? "Notifications on — click to mute this friend's toasts"
             : "Notifications off — click to enable this friend's toasts";
