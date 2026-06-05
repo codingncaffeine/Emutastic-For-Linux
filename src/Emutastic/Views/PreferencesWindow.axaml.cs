@@ -2002,19 +2002,46 @@ public partial class PreferencesWindow : Window
             row.Children.Add(info); row.Children.Add(bar); row.Children.Add(dlBtn); row.Children.Add(toggleBtn);
             panel.Children.Add(row);
 
-            // Vectrex overlays: folder-driven (drop PNGs in; matched to ROMs by name at launch).
+            // Vectrex overlays (upstream's "Vectrex Overlays" Extras row): ~38 game-specific screen
+            // overlays from libretro/overlay-borders, enabled by default when present. Custom PNGs
+            // can also be dropped into the folder (matched to ROMs by filename).
             int ovCount = 0;
             try { if (System.IO.Directory.Exists(Services.VectrexOverlayService.OverlayDir)) ovCount = System.IO.Directory.GetFiles(Services.VectrexOverlayService.OverlayDir, "*.png").Length; } catch { }
-            var vrow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(0, 0, 0, 16) };
+            bool ovPresent = ovCount >= 30;   // expect ~38, like upstream
+            var vrow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto"), Margin = new Thickness(0, 0, 0, 16) };
             var vinfo = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
             vinfo.Children.Add(new TextBlock { Text = "Vectrex overlays", FontSize = 12, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextPrimaryBrush") });
-            vinfo.Children.Add(new TextBlock { Text = ovCount > 0 ? $"{ovCount} overlay PNGs installed — matched to ROMs by filename" : "Drop overlay PNGs into the folder; they're matched to ROMs by filename",
-                FontSize = 10, FontFamily = Font("PrimaryFont"), Foreground = new SolidColorBrush(Color.Parse(ovCount > 0 ? "#30D158" : "#888888")) });
+            var vstatus = new TextBlock { FontSize = 10, FontFamily = Font("PrimaryFont"),
+                Text = ovCount > 0 ? $"{ovCount} overlays installed — enabled by default, matched to ROMs by filename" : "Game-specific screen overlays — enabled by default when present",
+                Foreground = new SolidColorBrush(Color.Parse(ovCount > 0 ? "#30D158" : "#888888")) };
+            vinfo.Children.Add(vstatus);
             Grid.SetColumn(vinfo, 0);
+            var vbar = new ProgressBar { Height = 3, Width = 80, Minimum = 0, Maximum = 100, IsVisible = false, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
+            Grid.SetColumn(vbar, 1);
+            var vdlBtn = new Button { Content = ovPresent ? "Re-download" : "Download", Theme = (Avalonia.Styling.ControlTheme?)(this.TryFindResource("PrefSecondaryBtn", out var tb6) ? tb6 : null), Padding = new Thickness(10, 4), FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
+            Grid.SetColumn(vdlBtn, 2);
             var openBtn = new Button { Content = "Open folder", Theme = (Avalonia.Styling.ControlTheme?)(this.TryFindResource("PrefSecondaryBtn", out var tb5) ? tb5 : null), Padding = new Thickness(10, 4), FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
-            Grid.SetColumn(openBtn, 1);
+            Grid.SetColumn(openBtn, 3);
             openBtn.Click += (_, _) => Services.ShellOpen.Open(Services.VectrexOverlayService.OverlayDir);
-            vrow.Children.Add(vinfo); vrow.Children.Add(openBtn);
+            vdlBtn.Click += async (_, _) =>
+            {
+                vdlBtn.IsEnabled = false; vbar.IsVisible = true; vbar.Value = 0;
+                vstatus.Text = "Fetching overlay list…"; vstatus.Foreground = Brush("TextMutedBrush");
+                try
+                {
+                    var progress = new Progress<(int done, int total)>(p =>
+                    {
+                        if (p.total > 0) { vbar.Value = (double)p.done * 100 / p.total; vstatus.Text = $"Downloading overlays… {p.done}/{p.total}"; }
+                    });
+                    var (done, _) = await Services.VectrexOverlayService.DownloadAllAsync(progress);
+                    vstatus.Text = $"Downloaded {done} overlays successfully.";
+                    vstatus.Foreground = new SolidColorBrush(Color.Parse("#30D158"));
+                    vdlBtn.Content = "Re-download";
+                }
+                catch (Exception ex) { vstatus.Text = $"Failed: {ex.Message}"; vstatus.Foreground = Brush("AccentBrush"); }
+                finally { vbar.IsVisible = false; vdlBtn.IsEnabled = true; }
+            };
+            vrow.Children.Add(vinfo); vrow.Children.Add(vbar); vrow.Children.Add(vdlBtn); vrow.Children.Add(openBtn);
             panel.Children.Add(vrow);
         }
 

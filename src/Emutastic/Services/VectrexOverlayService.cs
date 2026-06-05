@@ -93,6 +93,45 @@ namespace Emutastic.Services
             SaveSettings(settings);
         }
 
+        /// <summary>
+        /// Downloads the full overlay set (~38 PNGs) from libretro's overlay-borders repo into
+        /// <see cref="OverlayDir"/>. Upstream runs this inline in the Preferences Extras row; the
+        /// logic is identical (GitHub contents API listing → fetch each download_url), hoisted here
+        /// to mirror <see cref="BezelService.DownloadAllAsync"/>. Safe to call off the UI thread.
+        /// </summary>
+        public static async System.Threading.Tasks.Task<(int downloaded, int total)> DownloadAllAsync(
+            IProgress<(int done, int total)>? progress, System.Threading.CancellationToken ct = default)
+        {
+            using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(100) };
+            http.DefaultRequestHeaders.Add("User-Agent", "Emutastic");
+
+            const string apiUrl =
+                "https://api.github.com/repos/libretro/overlay-borders/contents/1080%20GCE%20Vectrex/Game%20Overlay";
+            string json = await http.GetStringAsync(apiUrl, ct).ConfigureAwait(false);
+            var files = JsonDocument.Parse(json).RootElement.EnumerateArray()
+                .Where(e => e.GetProperty("name").GetString()?.EndsWith(".png", StringComparison.OrdinalIgnoreCase) == true)
+                .Select(e => (Name: e.GetProperty("name").GetString()!,
+                              Url: e.GetProperty("download_url").GetString()!))
+                .ToList();
+            if (files.Count == 0) throw new Exception("No overlay PNGs found in repository.");
+
+            string dir = OverlayDir;
+            int done = 0;
+            foreach (var (name, url) in files)
+            {
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    byte[] bytes = await http.GetByteArrayAsync(url, ct).ConfigureAwait(false);
+                    if (bytes.Length >= 8 && bytes[0] == 0x89 && bytes[1] == 0x50)
+                        await File.WriteAllBytesAsync(Path.Combine(dir, name), bytes, ct).ConfigureAwait(false);
+                }
+                catch { /* skip individual failures, like the bezel bulk fetch */ }
+                progress?.Report((++done, files.Count));
+            }
+            return (done, files.Count);
+        }
+
         private static Dictionary<string, bool> LoadSettings()
         {
             if (_settings != null) return _settings;
