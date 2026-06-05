@@ -3299,6 +3299,8 @@ namespace Emutastic.Emulator
             }
         }
 
+        private DateTime _lastRaSoundUtc = DateTime.MinValue;
+
         private void SetRaToast(string header, string title, string desc, string points, string? badgeUrl)
         {
             SkiaSharp.SKBitmap? badge = null;
@@ -3309,6 +3311,21 @@ namespace Emutastic.Emulator
                 else if (badgeUrl != null) needFetch = true;
                 _raToast = (header, title, desc, points, badge, DateTime.UtcNow);
             }
+            // Toast sound (upstream plays FriendNotificationSound for both the unlock toast and
+            // the parent-routed LB toast, gated by the Friends sound toggle + cooldown). The
+            // service shells out to ffplay/pw-play, so it works from the host process too —
+            // Notification1.mp3 ships beside the binary.
+            try
+            {
+                var fcfg = App.Configuration?.GetFriendsConfiguration();
+                if (fcfg is { LbToastSoundEnabled: true }
+                    && (DateTime.UtcNow - _lastRaSoundUtc).TotalSeconds >= fcfg.LbToastCooldownSec)
+                {
+                    Services.FriendNotificationSound.Play(App.Configuration);
+                    _lastRaSoundUtc = DateTime.UtcNow;
+                }
+            }
+            catch (Exception ex) { Trace.WriteLine($"[RA] toast sound failed: {ex.Message}"); }
             if (!needFetch || badgeUrl == null) return;
             _ = System.Threading.Tasks.Task.Run(async () =>
             {
