@@ -179,6 +179,19 @@ public partial class App : Application
             }
             Services.StartupTrace.Stop("App.CreateMainWindow", swWin);
 
+            // Cloud sync: restore the saved GitHub session, then validate + load the
+            // remote manifest AFTER a 10s grace so first-launch rendering and artwork
+            // aren't competing with network calls (upstream's timing).
+            Services.GitHubSyncService.Instance.LoadFromConfig();
+            if (Services.GitHubSyncService.Instance.IsAuthenticated)
+                _ = System.Threading.Tasks.Task.Run(async () =>
+                {
+                    await System.Threading.Tasks.Task.Delay(System.TimeSpan.FromSeconds(10));
+                    await Services.GitHubSyncService.Instance.ValidateTokenAsync();
+                    if (Services.GitHubSyncService.Instance.IsAuthenticated)
+                        await Services.GitHubSyncService.Instance.LoadManifestAsync();
+                });
+
             // Finish any recording encode that a crash or hard power-off interrupted — the raw
             // frames + .meta.json sidecar are still on disk. Library launches only (the game-host
             // direct-launch path must not race a concurrently running library instance over the

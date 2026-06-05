@@ -385,6 +385,21 @@ namespace Emutastic.Configuration
         public List<string> PendingUploads { get; set; } = new();
     }
 
+    /// <summary>Cloud-sync remote-state manifest (stored IN the sync repo as
+    /// manifest.json[.enc]) — tracks each synced file's mtime + size for the
+    /// last-write-wins comparisons.</summary>
+    public class SyncManifest
+    {
+        public System.Collections.Concurrent.ConcurrentDictionary<string, SyncFileEntry> Files { get; set; } = new();
+        public int SchemaVersion { get; set; } = 1;
+    }
+
+    public class SyncFileEntry
+    {
+        public string LastModifiedUtc { get; set; } = "";
+        public long SizeBytes { get; set; }
+    }
+
     // Video snap provider configuration
     public class SnapConfiguration : ConfigurationBase
     {

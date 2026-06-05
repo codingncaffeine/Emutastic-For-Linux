@@ -737,6 +737,76 @@
                             <TextBlock TextWrapping="Wrap" FontSize="12" FontFamily="{DynamicResource PrimaryFont}"
                                        Foreground="{DynamicResource TextMutedBrush}"
                                        Text="Sync saves + database across machines via a private GitHub repo — coming in a future update."/>
+                        
+                            <!-- ── Cloud Sync (GitHub) — A9 port of upstream's Backups section ── -->
+                            <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,24,0,16"/>
+                            <TextBlock Text="CLOUD SYNC (GITHUB)" Theme="{StaticResource PrefLabel}"/>
+                            <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,0,0,12"/>
+                            <TextBlock Text="Sync battery saves and your database file across PCs using a private GitHub repository. Sign in with your GitHub account — a private repo is created automatically."
+                                       TextWrapping="Wrap" FontSize="12" FontFamily="{DynamicResource PrimaryFont}"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,12"/>
+
+                            <!-- Sign in / status -->
+                            <Border Background="{DynamicResource BgTertiaryBrush}" BorderBrush="{DynamicResource BorderNormalBrush}"
+                                    BorderThickness="1" CornerRadius="6" Padding="14,10" Margin="0,0,0,12">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Name="CloudSyncStatusText" Text="Not signed in" FontFamily="{DynamicResource PrimaryFont}"
+                                               Foreground="{DynamicResource TextSecondaryBrush}" FontSize="13" VerticalAlignment="Center"/>
+                                    <Button Name="CloudSyncSignInBtn" Content="Sign in with GitHub" Grid.Column="1"
+                                            Theme="{StaticResource PrefActionBtn}" Padding="14,8"/>
+                                </Grid>
+                            </Border>
+
+                            <!-- Device flow code display (hidden until auth starts) -->
+                            <Border Name="DeviceFlowPanel" IsVisible="False" Background="{DynamicResource BgTertiaryBrush}"
+                                    BorderBrush="{DynamicResource BorderNormalBrush}" BorderThickness="1"
+                                    CornerRadius="6" Padding="14,14" Margin="0,0,0,12">
+                                <StackPanel HorizontalAlignment="Center">
+                                    <TextBlock Text="Enter this code on GitHub:" FontFamily="{DynamicResource PrimaryFont}"
+                                               Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" HorizontalAlignment="Center"/>
+                                    <TextBlock Name="DeviceFlowCodeText" FontSize="28" FontWeight="Bold" FontFamily="monospace"
+                                               Foreground="{DynamicResource TextPrimaryBrush}" HorizontalAlignment="Center" Margin="0,8,0,8"/>
+                                    <TextBlock Text="Waiting for authorization…" FontFamily="{DynamicResource PrimaryFont}"
+                                               Foreground="{DynamicResource TextMutedBrush}" FontSize="11" HorizontalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Sync settings (visible only when signed in) -->
+                            <StackPanel Name="CloudSyncSettingsPanel" IsVisible="False">
+                                <TextBlock Text="SYNC TIMING" Theme="{StaticResource PrefLabel}" Margin="0,4,0,8"/>
+                                <RadioButton Name="SyncOnClose" Content="On game close (recommended)" GroupName="SyncTiming"
+                                             FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextPrimaryBrush}"
+                                             FontSize="13" IsChecked="True" Margin="0,0,0,6"/>
+                                <RadioButton Name="SyncPeriodic" Content="Every 15 minutes during play" GroupName="SyncTiming"
+                                             FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextPrimaryBrush}"
+                                             FontSize="13" Margin="0,0,0,6"/>
+                                <RadioButton Name="SyncManual" Content="Manual only" GroupName="SyncTiming"
+                                             FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextPrimaryBrush}"
+                                             FontSize="13" Margin="0,0,0,12"/>
+
+                                <TextBlock Text="ENCRYPTION" Theme="{StaticResource PrefLabel}" Margin="0,4,0,8"/>
+                                <CheckBox Name="SyncEncryptionEnabled" Content="Encrypt saves before upload"
+                                          FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextPrimaryBrush}"
+                                          FontSize="13" Margin="0,0,0,8"/>
+                                <StackPanel Name="PassphrasePanel" IsVisible="False" Orientation="Horizontal" Margin="22,0,0,4">
+                                    <TextBox Name="SyncPassphraseBox" PasswordChar="●" Width="200" FontSize="13" Padding="8,6"
+                                             Background="{DynamicResource BgTertiaryBrush}" Foreground="{DynamicResource TextPrimaryBrush}"
+                                             BorderBrush="{DynamicResource BorderNormalBrush}"/>
+                                    <Button Name="SyncPassphraseSaveBtn" Content="Save" Theme="{StaticResource PrefSecondaryBtn}"
+                                            Margin="8,0,0,0" Padding="14,6"/>
+                                </StackPanel>
+                                <TextBlock Name="PassphraseHint" Text="Same passphrase required on all PCs" IsVisible="False"
+                                           FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextMutedBrush}"
+                                           FontSize="11" Margin="22,0,0,12"/>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                                    <Button Name="SyncNowBtn" Content="Sync Now" Theme="{StaticResource PrefActionBtn}" Padding="14,8"/>
+                                    <TextBlock Name="SyncStatusText" FontFamily="{DynamicResource PrimaryFont}"
+                                               Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12"
+                                               VerticalAlignment="Center" Margin="12,0,0,0"/>
+                                </StackPanel>
+                            </StackPanel>
+
                         </StackPanel>
                     </ScrollViewer>
                 </Grid>

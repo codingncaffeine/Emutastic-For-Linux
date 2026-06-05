@@ -498,7 +498,13 @@ public partial class MainWindow : Window
         _importer = new ImportService(_db, _coreManager, App.Configuration);
         // Any game session ending (whichever window launched it) ingests states the host wrote;
         // DiscoverSaveStates matches .json sidecars by RomHash and fires SaveStatesChanged.
-        Services.GameHostLauncher.OnGameSessionEnded = g => _importer?.DiscoverSaveStates(g);
+        Services.GameHostLauncher.OnGameSessionEnded = g =>
+        {
+            _importer?.DiscoverSaveStates(g);
+            // Cloud sync: upload the battery save the session just wrote (fire-and-
+            // forget, like upstream's game-close hook; no-op when manual timing).
+            _ = Services.GitHubSyncService.Instance.UploadSaveAfterSessionAsync(g);
+        };
         // RetroAchievements session results: the host writes neither DB nor config, so the
         // identification outcome, live-progress snapshot, and any refreshed login token are
         // ingested here (off-UI thread — DB + config only, no controls touched).

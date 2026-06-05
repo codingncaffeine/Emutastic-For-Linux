@@ -1130,8 +1130,167 @@ public partial class PreferencesWindow : Window
         this.FindControl<Button>("RestoreBackupBtn")!.Click   += (_, _) => _ = RestoreBackupAsync();
     }
 
+    private bool _cloudSyncWired;
+    private bool _suppressCloudSave;
+
     private void LoadBackupsSettings()
-        => SetBackupFolderText(App.Configuration?.GetUserPreferences().BackupFolder ?? "");
+    {
+        SetBackupFolderText(App.Configuration?.GetUserPreferences().BackupFolder ?? "");
+        WireCloudSync();
+        _suppressCloudSave = true;
+        try
+        {
+            var svc = Services.GitHubSyncService.Instance;
+            var cfg = App.Configuration?.GetCloudSyncConfiguration();
+            var status = this.FindControl<TextBlock>("CloudSyncStatusText")!;
+            var signIn = this.FindControl<Button>("CloudSyncSignInBtn")!;
+            var settings = this.FindControl<StackPanel>("CloudSyncSettingsPanel")!;
+
+            if (!svc.IsConfigured)
+            {
+                // No OAuth client id baked into this build — surface it honestly
+                // instead of a sign-in that can't work.
+                status.Text = "Cloud sync isn't configured in this build (missing OAuth app id).";
+                signIn.IsEnabled = false;
+            }
+            else if (svc.IsAuthenticated && !string.IsNullOrEmpty(svc.Username))
+            {
+                status.Text = $"Signed in as {svc.Username}";
+                signIn.Content = "Sign Out";
+                settings.IsVisible = true;
+            }
+
+            if (cfg != null)
+            {
+                this.FindControl<RadioButton>("SyncOnClose")!.IsChecked = cfg.SyncTiming == "on_close";
+                this.FindControl<RadioButton>("SyncPeriodic")!.IsChecked = cfg.SyncTiming == "periodic";
+                this.FindControl<RadioButton>("SyncManual")!.IsChecked = cfg.SyncTiming == "manual";
+                this.FindControl<CheckBox>("SyncEncryptionEnabled")!.IsChecked = cfg.EncryptionEnabled;
+                this.FindControl<StackPanel>("PassphrasePanel")!.IsVisible = cfg.EncryptionEnabled;
+                this.FindControl<TextBlock>("PassphraseHint")!.IsVisible = cfg.EncryptionEnabled;
+            }
+        }
+        finally { _suppressCloudSave = false; }
+    }
+
+    private void WireCloudSync()
+    {
+        if (_cloudSyncWired) return;
+        _cloudSyncWired = true;
+        this.FindControl<Button>("CloudSyncSignInBtn")!.Click += (_, _) => _ = CloudSyncSignInAsync();
+        this.FindControl<Button>("SyncNowBtn")!.Click += (_, _) => _ = SyncNowAsync();
+        this.FindControl<Button>("SyncPassphraseSaveBtn")!.Click += (_, _) => SyncPassphraseSave();
+        foreach (var name in new[] { "SyncOnClose", "SyncPeriodic", "SyncManual" })
+            this.FindControl<RadioButton>(name)!.IsCheckedChanged += (_, _) => SyncTimingChanged();
+        this.FindControl<CheckBox>("SyncEncryptionEnabled")!.IsCheckedChanged += (_, _) => SyncEncryptionChanged();
+    }
+
+    private async Task CloudSyncSignInAsync()
+    {
+        var svc = Services.GitHubSyncService.Instance;
+        var status = this.FindControl<TextBlock>("CloudSyncStatusText")!;
+        var signIn = this.FindControl<Button>("CloudSyncSignInBtn")!;
+        var settings = this.FindControl<StackPanel>("CloudSyncSettingsPanel")!;
+        var flowPanel = this.FindControl<Border>("DeviceFlowPanel")!;
+
+        if (svc.IsAuthenticated)
+        {
+            svc.SignOut();
+            status.Text = "Not signed in";
+            signIn.Content = "Sign in with GitHub";
+            settings.IsVisible = false;
+            flowPanel.IsVisible = false;
+            return;
+        }
+
+        try
+        {
+            signIn.IsEnabled = false;
+            var flow = await svc.BeginDeviceFlowAsync();
+            this.FindControl<TextBlock>("DeviceFlowCodeText")!.Text = flow.UserCode;
+            flowPanel.IsVisible = true;
+            Services.ShellOpen.Open(flow.VerificationUri);
+
+            bool success = await svc.PollForTokenAsync(flow.DeviceCode, flow.Interval, flow.ExpiresIn);
+            flowPanel.IsVisible = false;
+
+            if (success)
+            {
+                await svc.EnsureRepoExistsAsync();
+                await svc.RefreshShaCacheAsync();
+                status.Text = $"Signed in as {svc.Username}";
+                signIn.Content = "Sign Out";
+                settings.IsVisible = true;
+            }
+            else
+            {
+                status.Text = "Authorization failed or timed out";
+            }
+        }
+        catch (Exception ex)
+        {
+            flowPanel.IsVisible = false;
+            status.Text = $"Error: {ex.Message}";
+        }
+        finally { signIn.IsEnabled = true; }
+    }
+
+    private void SyncTimingChanged()
+    {
+        if (_suppressCloudSave) return;
+        var cfg = App.Configuration?.GetCloudSyncConfiguration();
+        if (cfg == null) return;
+        if (this.FindControl<RadioButton>("SyncOnClose")!.IsChecked == true) cfg.SyncTiming = "on_close";
+        else if (this.FindControl<RadioButton>("SyncPeriodic")!.IsChecked == true) cfg.SyncTiming = "periodic";
+        else if (this.FindControl<RadioButton>("SyncManual")!.IsChecked == true) cfg.SyncTiming = "manual";
+        App.Configuration!.SetCloudSyncConfiguration(cfg);
+        App.Configuration!.ScheduleSave();
+    }
+
+    private void SyncEncryptionChanged()
+    {
+        if (_suppressCloudSave) return;
+        var cfg = App.Configuration?.GetCloudSyncConfiguration();
+        if (cfg == null) return;
+        cfg.EncryptionEnabled = this.FindControl<CheckBox>("SyncEncryptionEnabled")!.IsChecked == true;
+        this.FindControl<StackPanel>("PassphrasePanel")!.IsVisible = cfg.EncryptionEnabled;
+        this.FindControl<TextBlock>("PassphraseHint")!.IsVisible = cfg.EncryptionEnabled;
+        App.Configuration!.SetCloudSyncConfiguration(cfg);
+        App.Configuration!.ScheduleSave();
+    }
+
+    private void SyncPassphraseSave()
+    {
+        var cfg = App.Configuration?.GetCloudSyncConfiguration();
+        if (cfg == null) return;
+        var box = this.FindControl<TextBox>("SyncPassphraseBox")!;
+        string passphrase = box.Text ?? "";
+        if (string.IsNullOrEmpty(passphrase)) return;
+        cfg.PassphraseProtected = Services.GitHubSyncService.ProtectString(passphrase);
+        App.Configuration!.SetCloudSyncConfiguration(cfg);
+        App.Configuration!.ScheduleSave();
+        box.Text = "";
+        this.FindControl<TextBlock>("SyncStatusText")!.Text = "Passphrase saved";
+    }
+
+    private async Task SyncNowAsync()
+    {
+        var svc = Services.GitHubSyncService.Instance;
+        if (!svc.IsAuthenticated) return;
+        var btn = this.FindControl<Button>("SyncNowBtn")!;
+        var status = this.FindControl<TextBlock>("SyncStatusText")!;
+        btn.IsEnabled = false;
+        status.Text = "Syncing…";
+        try
+        {
+            var db = new Services.DatabaseService();
+            var result = await Task.Run(() => svc.FullSyncAsync(db));
+            status.Text = $"Synced at {DateTime.Now:h:mm tt} — {result.Uploaded} up, {result.Downloaded} down"
+                + (result.Errors > 0 ? $", {result.Errors} errors" : "");
+        }
+        catch (Exception ex) { status.Text = $"Sync failed: {ex.Message}"; }
+        finally { btn.IsEnabled = true; }
+    }
 
     private void SetBackupFolderText(string path)
     {
@@ -1164,8 +1323,10 @@ public partial class PreferencesWindow : Window
             await Task.Run(() =>
             {
                 string root = AppPaths.DataRoot;
-                string battery = System.IO.Path.Combine(root, "BatterySaves");
-                if (System.IO.Directory.Exists(battery)) CopyDirectoryRecursive(battery, System.IO.Path.Combine(dest, "BatterySaves"));
+                // Battery saves live in Saves/ (the session's RetroArch-style scheme),
+                // not upstream's BatterySaves/ — the old name silently backed up nothing.
+                string battery = System.IO.Path.Combine(root, "Saves");
+                if (System.IO.Directory.Exists(battery)) CopyDirectoryRecursive(battery, System.IO.Path.Combine(dest, "Saves"));
                 string states = System.IO.Path.Combine(root, "Save States");
                 if (System.IO.Directory.Exists(states)) CopyDirectoryRecursive(states, System.IO.Path.Combine(dest, "Save States"));
                 string db = System.IO.Path.Combine(root, "library.db");
@@ -1185,7 +1346,8 @@ public partial class PreferencesWindow : Window
         // Stat the (possibly removable/network) backup path off the UI thread.
         var (hasDb, hasSaves, hasStates) = await Task.Run(() => (
             System.IO.File.Exists(System.IO.Path.Combine(src, "library.db")),
-            System.IO.Directory.Exists(System.IO.Path.Combine(src, "BatterySaves")),
+            System.IO.Directory.Exists(System.IO.Path.Combine(src, "Saves"))
+                || System.IO.Directory.Exists(System.IO.Path.Combine(src, "BatterySaves")),   // old backups
             System.IO.Directory.Exists(System.IO.Path.Combine(src, "Save States"))));
         if (!hasDb && !hasSaves && !hasStates) { status.Text = "No backup data found in that folder."; return; }
 
@@ -1205,7 +1367,15 @@ public partial class PreferencesWindow : Window
             await Task.Run(() =>
             {
                 string root = AppPaths.DataRoot;
-                if (hasSaves)  CopyDirectoryRecursive(System.IO.Path.Combine(src, "BatterySaves"), System.IO.Path.Combine(root, "BatterySaves"));
+                if (hasSaves)
+                {
+                    string newSrc = System.IO.Path.Combine(src, "Saves");
+                    string oldSrc = System.IO.Path.Combine(src, "BatterySaves");
+                    // New backups restore Saves/→Saves/; backups made before the
+                    // folder-name fix restore BatterySaves/→Saves/ (same payload).
+                    if (System.IO.Directory.Exists(newSrc)) CopyDirectoryRecursive(newSrc, System.IO.Path.Combine(root, "Saves"));
+                    else if (System.IO.Directory.Exists(oldSrc)) CopyDirectoryRecursive(oldSrc, System.IO.Path.Combine(root, "Saves"));
+                }
                 if (hasStates) CopyDirectoryRecursive(System.IO.Path.Combine(src, "Save States"), System.IO.Path.Combine(root, "Save States"));
                 if (hasDb)     System.IO.File.Copy(System.IO.Path.Combine(src, "library.db"), System.IO.Path.Combine(root, "library.db"), overwrite: true);
             });

@@ -36,6 +36,13 @@ sealed class Program
             Environment.Exit(Emutastic.GameHost.Run(args));
             return;
         }
+        // Dev-only: cloud-sync engine selftest against the real GitHub API with an
+        // injected token (EMUTASTIC_SYNC_TOKEN); bypasses the OAuth device flow.
+        if (args.Length >= 1 && args[0] == "--selftest-cloudsync")
+        {
+            Environment.Exit(Emutastic.Services.CloudSyncSelfTest.Run());
+            return;
+        }
         // Dev-only: in-app-update selftest — `Emutastic --selftest-update` runs the
         // full check→pick→download→apply pipeline headlessly against EMUTASTIC_UPDATE_API
         // (a local mock in tests). On success the process hands off to the relaunch

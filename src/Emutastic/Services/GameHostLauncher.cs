@@ -82,6 +82,21 @@ namespace Emutastic.Services
                 win.Show();
                 return;
             }
+            // Cloud sync: pull a newer remote battery save BEFORE the host opens the
+            // .srm (upstream blocked launch on this with the same per-game lock + 5s
+            // bound). Off the UI thread; spawn resumes on the dispatcher.
+            var syncSvc = GitHubSyncService.Instance;
+            var syncCfg = App.Configuration?.GetCloudSyncConfiguration();
+            if (game != null && syncSvc.IsAuthenticated && syncCfg is { Enabled: true })
+            {
+                _ = Task.Run(async () =>
+                {
+                    try { await syncSvc.PullSaveBeforeLaunchAsync(game).ConfigureAwait(false); }
+                    catch (Exception ex) { Trace.WriteLine($"[CloudSync] pre-launch pull failed: {ex.Message}"); }
+                    Dispatcher.UIThread.Post(() => SpawnHost(corePath, romPath, console, game, loadStatePath, onExit));
+                });
+                return;
+            }
             SpawnHost(corePath, romPath, console, game, loadStatePath, onExit);
         }
 
