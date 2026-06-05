@@ -2634,6 +2634,11 @@ namespace Emutastic.Emulator
         private readonly Dictionary<string, SkiaSharp.SKBitmap?> _raBadgeCache = new();
         private static readonly System.Net.Http.HttpClient _raBadgeHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
 
+        /// <summary>Library-decided leaderboard toast (stdin "show-ra-toast"):
+        /// header-less two-liner, mirroring upstream's ShowAchievementToast(headline, subline, 0).</summary>
+        public void ShowRaToastFromParent(string headline, string subline)
+            => SetRaToast("", headline, subline, "", null);
+
         private void RaDoFrame()
         {
             if (!_raReady) return;
@@ -2754,6 +2759,25 @@ namespace Emutastic.Emulator
                     info.Points > 0 ? $"{info.Points} points" : "", info.BadgeUrl);
                 client.GameCompleted += () => SetRaToast(
                     "GAME COMPLETE", "Mastery!", "All achievements earned!", "", null);
+                // Leaderboard SCOREBOARD: the triumph/proximity decision needs the
+                // friend-rank cache, which lives in the LIBRARY (host has no DB and
+                // never writes config). Ship the event up; the library decides and
+                // sends a "show-ra-toast" line back down stdin for in-game display.
+                client.LeaderboardScoreboardReceived += info =>
+                {
+                    try
+                    {
+                        string json = System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            lb = info.LeaderboardId, rank = info.NewRank,
+                            submitted = info.SubmittedScore, best = info.BestScore,
+                            title = info.LbTitle, lib = info.LowerIsBetter,
+                            hc = RaHardcoreActive,
+                        });
+                        EmitHostCommand?.Invoke($"lb-scoreboard {json}");
+                    }
+                    catch (Exception ex) { Trace.WriteLine($"[RA] lb-scoreboard emit failed: {ex.Message}"); }
+                };
                 client.ResetRequested += () =>
                 {
                     Trace.WriteLine("[RA] Reset requested by rcheevos.");

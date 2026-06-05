@@ -27,6 +27,12 @@ namespace Emutastic.Services
         public static Action<Models.Game>? OnGameSessionEnded;
         /// <summary>RA session results ingest (DB + config writes live in the parent).</summary>
         public static Action<Models.Game, GameHostResult>? OnRaSessionResults;
+        /// <summary>Fired when a host spawns with a known Game — MainWindow uses it to
+        /// pre-fetch friend leaderboard ranks for the LB-toast decision.</summary>
+        public static Action<Models.Game>? OnGameLaunching;
+        /// <summary>Game-aware variant of OnHostCommand (same verbs, plus the emitting
+        /// game) for commands whose reply must route back to that host's stdin.</summary>
+        public static Action<Models.Game, string, string>? OnHostCommandForGame;
 
         /// <summary>Set once by MainWindow: handles "EMUTASTIC-CMD &lt;verb&gt; &lt;arg&gt;" requests the
         /// host writes to stdout (e.g. cog → "Edit Game Controls…" = ("open-controls", console)).
@@ -152,6 +158,7 @@ namespace Emutastic.Services
             Interlocked.Increment(ref _active);
             EmulatorSession.ExternalGameActive = true;
             if (game != null) _liveHosts[game.Id] = proc;
+            if (game != null) { try { OnGameLaunching?.Invoke(game); } catch { } }
             Trace.WriteLine($"[Launcher] game host pid={proc.Id} core={corePath} rom={romPath}");
 
             // Drain the child's stdout continuously (a full pipe would block the child) and act on
@@ -168,7 +175,11 @@ namespace Emutastic.Services
                         string[] parts = line.Substring("EMUTASTIC-CMD ".Length).Split(' ', 2);
                         string verb = parts[0], arg = parts.Length > 1 ? parts[1] : "";
                         Trace.WriteLine($"[Launcher] host command: {verb} {arg}");
-                        Dispatcher.UIThread.Post(() => OnHostCommand?.Invoke(verb, arg));
+                        Dispatcher.UIThread.Post(() =>
+                        {
+                            OnHostCommand?.Invoke(verb, arg);
+                            if (game != null) OnHostCommandForGame?.Invoke(game, verb, arg);
+                        });
                     }
                 }
                 catch (Exception ex) { Trace.WriteLine($"[Launcher] stdout reader ended: {ex.Message}"); }

@@ -147,6 +147,17 @@ namespace Emutastic
                                     Trace.WriteLine("[Host] parent requested cheat reload");
                                     session.ReloadCheats();
                                     break;
+                                case string l when l.StartsWith("show-ra-toast ", StringComparison.Ordinal):
+                                    // Library-decided LB toast: JSON {h, s} → in-game GlOsd toast.
+                                    try
+                                    {
+                                        var doc = System.Text.Json.JsonDocument.Parse(l.Substring("show-ra-toast ".Length));
+                                        session.ShowRaToastFromParent(
+                                            doc.RootElement.GetProperty("h").GetString() ?? "",
+                                            doc.RootElement.GetProperty("s").GetString() ?? "");
+                                    }
+                                    catch (Exception ex) { Trace.WriteLine($"[Host] show-ra-toast parse failed: {ex.Message}"); }
+                                    break;
                                 // unknown lines ignored (forward compat)
                             }
                         }
