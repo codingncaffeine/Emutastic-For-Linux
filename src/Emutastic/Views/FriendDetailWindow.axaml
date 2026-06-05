@@ -4,7 +4,7 @@
         Title="Friend Profile"
         Width="900" Height="700"
         MinWidth="640" MinHeight="480"
-        SystemDecorations="None"
+        WindowDecorations="None"
         TransparencyLevelHint="Transparent"
         CanResize="True"
         WindowStartupLocation="CenterOwner"

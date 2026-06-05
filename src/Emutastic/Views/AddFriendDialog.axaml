@@ -2,7 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="Emutastic.Views.AddFriendDialog"
         Title="Add Friend"
-        SystemDecorations="None" TransparencyLevelHint="Transparent" Background="Transparent"
+        WindowDecorations="None" TransparencyLevelHint="Transparent" Background="Transparent"
         CanResize="False" ShowInTaskbar="False"
         Width="420" SizeToContent="Height"
         WindowStartupLocation="CenterOwner">

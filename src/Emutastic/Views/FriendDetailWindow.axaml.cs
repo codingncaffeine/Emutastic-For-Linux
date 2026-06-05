@@ -45,6 +45,10 @@ namespace Emutastic.Views
         // game's ID without parsing display text.
         private readonly List<int> _lbGameIds = new();
 
+        // Parameterless ctor for the XAML runtime loader/designer only — fields
+        // are null-forgiven; this instance never renders real data.
+        public FriendDetailWindow() { InitializeComponent(); _friends = null!; _api = null!; _db = null!; _entry = null!; }
+
         public FriendDetailWindow(FriendEntry entry, FriendService friends, RetroAchievementsService api, DatabaseService db)
         {
             InitializeComponent();

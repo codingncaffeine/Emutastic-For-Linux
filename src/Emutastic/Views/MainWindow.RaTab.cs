@@ -69,7 +69,7 @@ public partial class MainWindow
                 || string.IsNullOrWhiteSpace(ra.ApiKey))
                 return;
 
-            var api = new Services.RetroAchievementsService(App.Configuration, _db);
+            var api = new Services.RetroAchievementsService(App.Configuration!, _db!);
             var followed = await Task.Run(() => api.GetUsersIFollowAsync()).ConfigureAwait(false);
             if (followed == null || followed.Count == 0) return;
 
@@ -83,7 +83,7 @@ public partial class MainWindow
                 if (result.Added         > 0) parts.Add($"{result.Added} new follow(s)");
                 if (result.MutualCleared > 0) parts.Add($"{result.MutualCleared} mutual flag(s) cleared");
                 string msg = "RA follow sync: " + string.Join(" · ", parts);
-                await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => _vm.SetStatus(msg, autoClear: true));
+                await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => _vm?.SetStatus(msg, autoClear: true));
             }
         }
         catch (Exception ex)
@@ -291,7 +291,7 @@ public partial class MainWindow
 
         private RaDataService GetOrCreateRaDataService()
         {
-            if (_raData == null && App.Configuration != null)
+            if (_raData == null && App.Configuration != null && _db != null)
             {
                 _raData = new RaDataService(App.Configuration, _db, new RetroAchievementsService(App.Configuration, _db));
             }
@@ -303,7 +303,7 @@ public partial class MainWindow
         // the DispatcherTimer poll here.
         private FriendService GetOrCreateFriendService()
         {
-            if (_friendService == null && App.Configuration != null)
+            if (_friendService == null && App.Configuration != null && _db != null)
             {
                 _friendService = new FriendService(
                     App.Configuration, _db,
@@ -407,7 +407,7 @@ public partial class MainWindow
             {
                 var endUtc = DateTime.UtcNow.Date;
                 var startUtc = endUtc.AddDays(-89);
-                var persistedHeatmap = _db.GetRaHeatmapRange(user, startUtc.ToString("yyyy-MM-dd"), endUtc.ToString("yyyy-MM-dd"));
+                var persistedHeatmap = _db!.GetRaHeatmapRange(user, startUtc.ToString("yyyy-MM-dd"), endUtc.ToString("yyyy-MM-dd"));
                 RenderHeatmap(persistedHeatmap);
             }
             catch { /* empty grid until refresh lands */ }
@@ -1333,7 +1333,7 @@ public partial class MainWindow
         {
             try
             {
-                var game = _db.GetGameById(localGameId);
+                var game = _db?.GetGameById(localGameId);
                 if (game == null) return;
                 // Mirror the Library grid tile-click pattern (line ~1537):
                 // modeless Show() + _openDetailWindow tracking so the
@@ -1410,7 +1410,7 @@ public partial class MainWindow
                 int gid = aotw.Game?.Id ?? 0;
                 if (gid > 0)
                 {
-                    int? localId = _db.GetLocalGameIdByRAGameId(gid);
+                    int? localId = _db?.GetLocalGameIdByRAGameId(gid);
                     if (localId.HasValue && localId.Value > 0)
                     {
                         RAOfTheWeekPlay.Tag = localId.Value;
@@ -1421,7 +1421,7 @@ public partial class MainWindow
             catch { }
         }
 
-        private void RAOfTheWeekPlay_Click(object sender, Avalonia.Interactivity.RoutedEventArgs e)
+        private void RAOfTheWeekPlay_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         {
             // Opens the game's detail card (where the user can hit Play Now
             // with the existing core-routing logic). Doesn't launch the
@@ -1526,7 +1526,7 @@ public partial class MainWindow
                 }
                 if (myRankByLb == null)
                 {
-                    var raSvc = new Services.RetroAchievementsService(App.Configuration!, _db);
+                    var raSvc = new Services.RetroAchievementsService(App.Configuration!, _db!);
                     try
                     {
                         var myBoards = await raSvc.GetUserGameLeaderboardsAsync(myUser, ev.GameId).ConfigureAwait(true);
@@ -1615,7 +1615,7 @@ public partial class MainWindow
                 Foreground = (Brush)RaRes("TextPrimaryBrush"),
                 TextWrapping = Avalonia.Media.TextWrapping.Wrap,
             };
-            headline.Inlines.Add(new Avalonia.Controls.Documents.Run(friendName) { FontWeight = Avalonia.Media.FontWeight.Bold });
+            headline.Inlines!.Add(new Avalonia.Controls.Documents.Run(friendName) { FontWeight = Avalonia.Media.FontWeight.Bold });
             headline.Inlines.Add($" just beat your score on {lbTitle}");
             stack.Children.Add(headline);
             if (passCount > 1)
@@ -1739,7 +1739,7 @@ public partial class MainWindow
             // Action-oriented framing: "FriendX unlocked <Achievement>"
             // — name leads, achievement after. Hardcore marker prefixed.
             string hardcore = entry.Unlock.HardcoreMode != 0 ? "[HC] " : "";
-            line.Inlines.Add(new Avalonia.Controls.Documents.Run(entry.FriendUsername)
+            line.Inlines!.Add(new Avalonia.Controls.Documents.Run(entry.FriendUsername)
             {
                 FontWeight = Avalonia.Media.FontWeight.SemiBold,
             });
@@ -1988,8 +1988,8 @@ public partial class MainWindow
             var window = new Views.FriendDetailWindow(
                 entry,
                 svc,
-                new RetroAchievementsService(App.Configuration!, _db),
-                _db);
+                new RetroAchievementsService(App.Configuration!, _db!),
+                _db!);
             window.Closed += (_, __) =>
             {
                 _friendDetailWindows.Remove(userId);
@@ -1998,7 +1998,7 @@ public partial class MainWindow
             window.Show();
         }
 
-        private async void FriendRowRemove_Click(object sender, Avalonia.Interactivity.RoutedEventArgs e)
+        private async void FriendRowRemove_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         {
             // Button's default template consumes MouseLeftButtonUp via its
             // own ClickMode=Release routing; e.Handled here is
@@ -2023,7 +2023,7 @@ public partial class MainWindow
             }
         }
 
-        private void FriendsAddButton_Click(object sender, Avalonia.Interactivity.RoutedEventArgs e)
+        private void FriendsAddButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         {
             var dialog = new Views.AddFriendDialog
             {
@@ -2052,7 +2052,7 @@ public partial class MainWindow
         /// Existing friends gain MutualFollow + Ulid backfill without
         /// losing their notification preference.
         /// </summary>
-        private async void FriendsImportButton_Click(object sender, Avalonia.Interactivity.RoutedEventArgs e)
+        private async void FriendsImportButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         {
             if (FriendsImportButton == null) return;
             if (App.Configuration == null) return; // RA never initializes without config
@@ -2061,8 +2061,8 @@ public partial class MainWindow
             FriendsImportButton.IsEnabled = false;
             try
             {
-                _vm.SetStatus("Importing follows from RetroAchievements…");
-                var api = new Services.RetroAchievementsService(App.Configuration, _db);
+                _vm?.SetStatus("Importing follows from RetroAchievements…");
+                var api = new Services.RetroAchievementsService(App.Configuration!, _db!);
                 var followed = await Task.Run(() => api.GetUsersIFollowAsync())
                                          .ConfigureAwait(true);
                 if (followed == null || followed.Count == 0)
@@ -2073,7 +2073,7 @@ public partial class MainWindow
                     string msg = (string.IsNullOrWhiteSpace(ra.CurrentUser()) || !ra.HasApiKey())
                         ? "RetroAchievements isn't configured — add credentials in Preferences."
                         : "RetroAchievements returned no follows.";
-                    _vm.SetStatus(msg, autoClear: true);
+                    _vm?.SetStatus(msg, autoClear: true);
                     return;
                 }
 
@@ -2090,12 +2090,12 @@ public partial class MainWindow
                     ? "Already in sync with RetroAchievements."
                     : "Import complete — " + string.Join(" · ", parts) +
                       (result.Added > 0 ? "  (new entries are muted — tap the bell to enable toasts)" : "");
-                _vm.SetStatus(summary, autoClear: true);
+                _vm?.SetStatus(summary, autoClear: true);
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Trace.WriteLine($"[FriendsImport] failed: {ex.Message}");
-                _vm.SetStatus("Import failed — see logs.", autoClear: true);
+                _vm?.SetStatus("Import failed — see logs.", autoClear: true);
             }
             finally
             {
@@ -2111,7 +2111,7 @@ public partial class MainWindow
         /// session); subsequent expands re-render from cache without
         /// re-hitting the network.
         /// </summary>
-        private async void FollowersHeader_Click(object sender, Avalonia.Input.PointerPressedEventArgs e)
+        private async void FollowersHeader_Click(object? sender, Avalonia.Input.PointerPressedEventArgs e)
         {
             _followersExpanded = !_followersExpanded;
             FollowersContent.IsVisible = _followersExpanded ? true : false;
@@ -2134,7 +2134,7 @@ public partial class MainWindow
             FollowersListItems.Items.Clear();
             try
             {
-                var api = new Services.RetroAchievementsService(App.Configuration, _db);
+                var api = new Services.RetroAchievementsService(App.Configuration!, _db!);
                 var followers = await Task.Run(() => api.GetUsersFollowingMeAsync())
                                           .ConfigureAwait(true);
 
@@ -2245,7 +2245,7 @@ public partial class MainWindow
             return border;
         }
 
-        private async void FollowerAddBtn_Click(object sender, Avalonia.Interactivity.RoutedEventArgs e)
+        private async void FollowerAddBtn_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         {
             if (sender is not Button btn) return;
             if (btn.Tag is not string username || string.IsNullOrWhiteSpace(username)) return;
@@ -2332,7 +2332,7 @@ public partial class MainWindow
                 TextTrimming = Avalonia.Media.TextTrimming.CharacterEllipsis,
                 VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
             };
-            line.Inlines.Add(new Avalonia.Controls.Documents.Run(a.User) { FontWeight = Avalonia.Media.FontWeight.SemiBold });
+            line.Inlines!.Add(new Avalonia.Controls.Documents.Run(a.User) { FontWeight = Avalonia.Media.FontWeight.SemiBold });
             line.Inlines.Add($" {AwardKindLabel(a.AwardKind)} ");
             line.Inlines.Add(new Avalonia.Controls.Documents.Run(a.GameTitle) { FontWeight = Avalonia.Media.FontWeight.SemiBold });
             Grid.SetColumn(line, 1);

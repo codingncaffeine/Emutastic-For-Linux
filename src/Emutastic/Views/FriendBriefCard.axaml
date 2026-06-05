@@ -1,7 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="Emutastic.Views.FriendBriefCard"
-        SystemDecorations="None" TransparencyLevelHint="Transparent" Background="Transparent"
+        WindowDecorations="None" TransparencyLevelHint="Transparent" Background="Transparent"
         CanResize="False" ShowInTaskbar="False"
         Width="340" SizeToContent="Height" Topmost="True">
     <Border Background="{DynamicResource BgSecondaryBrush}" BorderBrush="{DynamicResource BorderNormalBrush}"
