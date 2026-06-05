@@ -308,6 +308,7 @@ namespace Emutastic.Emulator
             { 40, 3 }, { 229, 2 }, { 20, 10 }, { 26, 11 }, // Enter=START, RShift=SELECT, Q=L, W=R
         };
         const int SC_ESCAPE = 41, SC_F11 = 68, SC_P = 19, SC_F5 = 62, SC_F7 = 64, SC_F9 = 66;
+        const int SC_F12 = 69, SC_PRINTSCREEN = 70;
 
         // Emu-thread handler for the GL window's keyboard. Game buttons feed SdlInput's player-1 fallback;
         // a few non-game scancodes drive the session (quit / fullscreen / pause).
@@ -323,6 +324,13 @@ namespace Emutastic.Emulator
                 case SC_F5:     RequestSaveState("Quick Save"); break;   // upstream's F5 quick save
                 case SC_F7:     RequestQuickLoad(); break;               // upstream's F7 quick load
                 case SC_F9:     ToggleRecording(); break;                // upstream's F9 record toggle
+                // Screenshot (upstream's hotkey rules): PrintScreen always fires as the
+                // hardware-baked fallback; the configured key (Preferences → Media, default
+                // F12) takes the other slot.
+                case SC_PRINTSCREEN: TakeScreenshot(); break;
+                default:
+                    if (scancode == (_screenshotScancode ??= ResolveScreenshotScancode())) TakeScreenshot();
+                    break;
             }
         }
 
@@ -1889,6 +1897,60 @@ namespace Emutastic.Emulator
             {
                 Trace.WriteLine("[Emu] ParseInputDescriptors: " + ex.Message);
             }
+        }
+
+        // ── Screenshots (upstream's TakeScreenshot + ScreenshotService.Save) ─────────────────────────
+        private int? _screenshotScancode;
+
+        // The config stores an Avalonia key NAME (captured in Preferences → Media); the host sees
+        // SDL scancodes, so resolve function keys by name and fall back to upstream's F12 default
+        // for anything we can't map (the capture box is effectively always an F-key).
+        private static int ResolveScreenshotScancode()
+        {
+            string k = App.Configuration?.GetUserPreferences()?.ScreenshotKey ?? "";
+            if ((k.Length == 2 || k.Length == 3) && (k[0] == 'F' || k[0] == 'f')
+                && int.TryParse(k.AsSpan(1), out int fn) && fn >= 1 && fn <= 12)
+                return 58 + fn - 1;   // SDL scancodes F1..F12 = 58..69
+            return SC_F12;
+        }
+
+        /// <summary>F12 / PrintScreen / configured key: save the displayed frame into the Screenshots
+        /// library using upstream's filename convention ("{yyyyMMdd_HHmmss} {title} ({console}).png"
+        /// under Screenshots/{console}/), which the Screenshots tab's parser picks up. _frame is the
+        /// published post-rotation/flip BGRA — WYSIWYG, like upstream's capture chain.</summary>
+        private void TakeScreenshot()
+        {
+            byte[]? shot = null; int sw = 0, sh = 0;
+            lock (_frameLock)
+            {
+                if (_frame != null && _frameW > 0 && _frameH > 0)
+                {
+                    sw = _frameW; sh = _frameH;
+                    shot = new byte[sw * sh * 4];
+                    Array.Copy(_frame, shot, shot.Length);
+                }
+            }
+            if (shot == null) { ShowDiskMessage("Screenshot not available", 3); return; }
+            string title = string.IsNullOrWhiteSpace(SaveGameTitle)
+                ? Path.GetFileNameWithoutExtension(_romPath) : SaveGameTitle;
+            string console = HandlerConsoleName;
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    string safeTitle = FileNameHelper.SanitizeFileName(title);
+                    string safeConsole = FileNameHelper.SanitizeFileName(console);
+                    string fileName = $"{DateTime.Now:yyyyMMdd_HHmmss} {safeTitle} ({safeConsole}).png";
+                    string path = Path.Combine(AppPaths.GetFolder("Screenshots", safeConsole), fileName);
+                    Services.PngEncoder.WriteBgra(path, shot, sw, sh);
+                    ShowDiskMessage("Screenshot saved", 3);
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[Screenshot] save failed: {ex.Message}");
+                    ShowDiskMessage("Screenshot failed", 3);
+                }
+            });
         }
 
         // ── Bezel + Vectrex overlay init (called on the present thread; heavy work goes to a task) ──

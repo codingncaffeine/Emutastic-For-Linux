@@ -79,6 +79,11 @@ namespace Emutastic.Platform
             {44,29},{45,27},{30,4},{31,22},          // Z/X/A/S
             {28,40},{54,229},{16,20},{17,26},        // Enter/RShift/Q/W
             {1,41},{87,68},{25,19},                  // Esc/F11/P
+            // Function row + PrintScreen — hotkeys (F5 quick-save, F7 quick-load, F9 record,
+            // F12/PrintScreen screenshot, any configured F-key). evdev F1-F10 = 59-68, F12 = 88,
+            // SYSRQ(PrtSc) = 99 → SDL 58-67 / 69 / 70.
+            {59,58},{60,59},{61,60},{62,61},{63,62},{64,63},{65,64},{66,65},{67,66},{68,67},
+            {88,69},{99,70},
         };
 
         public static WlToplevelPresenter? TryCreate(int w, int h, out string? error)
