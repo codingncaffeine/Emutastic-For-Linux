@@ -39,6 +39,10 @@ namespace Emutastic.Platform
         [DllImport(LIB)] static extern int wlp_poll(IntPtr h);
         [DllImport(LIB)] static extern int wlp_poll_event(IntPtr h, out int type, out int a, out int b);
         [DllImport(LIB)] static extern void wlp_set_overlay(IntPtr h, IntPtr rgba, int w, int hh);
+        [DllImport(LIB)] static extern void wlp_set_gameoverlay(IntPtr h, IntPtr rgba, int w, int hh);
+        [DllImport(LIB)] static extern void wlp_show_gameoverlay(IntPtr h, int on);
+        [DllImport(LIB)] static extern void wlp_set_bezel(IntPtr h, IntPtr rgba, int w, int hh);
+        [DllImport(LIB)] static extern void wlp_show_bezel(IntPtr h, int on);
         [DllImport(LIB)] static extern void wlp_set_insets(IntPtr h, int top, int bottom);
         [DllImport(LIB)] static extern void wlp_set_aspect(IntPtr h, double dar);
         [DllImport(LIB)] static extern void wlp_minimize(IntPtr h);
@@ -128,6 +132,24 @@ namespace Emutastic.Platform
         {
             if (_h != IntPtr.Zero) wlp_set_overlay(_h, rgba, w, h);
         }
+
+        /// <summary>Upload the Vectrex game overlay (straight-alpha RGBA8, stretched over the game rect),
+        /// then show/hide via <see cref="ShowGameOverlay"/>. Present thread only (GL context).</summary>
+        public unsafe void SetGameOverlay(byte[] rgba, int w, int h)
+        {
+            if (_h == IntPtr.Zero) return;
+            fixed (byte* p = rgba) wlp_set_gameoverlay(_h, (IntPtr)p, w, h);
+        }
+        public void ShowGameOverlay(bool on) { if (_h != IntPtr.Zero) wlp_show_gameoverlay(_h, on ? 1 : 0); }
+
+        /// <summary>Upload the bezel frame (straight-alpha RGBA8, aspect-fit in the content area),
+        /// then show/hide via <see cref="ShowBezel"/>. Present thread only (GL context).</summary>
+        public unsafe void SetBezel(byte[] rgba, int w, int h)
+        {
+            if (_h == IntPtr.Zero) return;
+            fixed (byte* p = rgba) wlp_set_bezel(_h, (IntPtr)p, w, h);
+        }
+        public void ShowBezel(bool on) { if (_h != IntPtr.Zero) wlp_show_bezel(_h, on ? 1 : 0); }
 
         public void GetSize(out int w, out int h)
         {

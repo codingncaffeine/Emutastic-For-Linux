@@ -1949,9 +1949,78 @@ public partial class PreferencesWindow : Window
             panel.Children.Add(row);
         }
 
+        // ── Overlays & bezels (upstream's Bezels row; Vectrex overlays are folder-driven) ──
+        panel.Children.Add(new TextBlock { Text = "OVERLAYS & BEZELS", Theme = (Avalonia.Styling.ControlTheme?)(this.TryFindResource("PrefLabel", out var tob) ? tob : null), Margin = new Thickness(0, 8, 0, 4) });
+        panel.Children.Add(new Border { Height = 1, Background = Brush("BorderNormalBrush"), Margin = new Thickness(0, 0, 0, 8) });
+        {
+            // Arcade / Neo Geo bezels (The Bezel Project). "Enable" turns on per-game on-demand
+            // fetch (each ~1-4 MB bezel downloads at first launch + caches); "Download all"
+            // pre-fetches the whole ~1.5 GB set for offline use. Toggled per game from the in-game cog.
+            bool bezelsOn = Services.BezelService.FeatureEnabled;
+            int cached = Services.BezelService.CachedCount();
+            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto"), Margin = new Thickness(0, 0, 0, 6) };
+            var info = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            info.Children.Add(new TextBlock { Text = "Arcade / Neo Geo bezels (The Bezel Project)", FontSize = 12, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextPrimaryBrush") });
+            var status = new TextBlock { FontSize = 10, FontFamily = Font("PrimaryFont"),
+                Text = bezelsOn ? (cached > 0 ? $"On — {cached} bezels cached" : "On — fetched per game on first launch") : "Off",
+                Foreground = new SolidColorBrush(Color.Parse(bezelsOn ? "#30D158" : "#888888")) };
+            info.Children.Add(status);
+            Grid.SetColumn(info, 0);
+            var bar = new ProgressBar { Height = 3, Width = 80, Minimum = 0, Maximum = 100, IsVisible = false, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
+            Grid.SetColumn(bar, 1);
+            var dlBtn = new Button { Content = "Download all", Theme = (Avalonia.Styling.ControlTheme?)(this.TryFindResource("PrefSecondaryBtn", out var tb3) ? tb3 : null), Padding = new Thickness(10, 4), FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
+            Grid.SetColumn(dlBtn, 2);
+            var toggleBtn = new Button { Content = bezelsOn ? "Disable" : "Enable", Theme = (Avalonia.Styling.ControlTheme?)(this.TryFindResource("PrefSecondaryBtn", out var tb4) ? tb4 : null), Padding = new Thickness(10, 4), FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+            Grid.SetColumn(toggleBtn, 3);
+            toggleBtn.Click += (_, _) =>
+            {
+                bool now = !Services.BezelService.FeatureEnabled;
+                Services.BezelService.FeatureEnabled = now;
+                toggleBtn.Content = now ? "Disable" : "Enable";
+                int c = Services.BezelService.CachedCount();
+                status.Text = now ? (c > 0 ? $"On — {c} bezels cached" : "On — fetched per game on first launch") : "Off";
+                status.Foreground = new SolidColorBrush(Color.Parse(now ? "#30D158" : "#888888"));
+            };
+            dlBtn.Click += async (_, _) =>
+            {
+                dlBtn.IsEnabled = false; toggleBtn.IsEnabled = false; bar.IsVisible = true; bar.Value = 0;
+                status.Text = "Listing bezels…"; status.Foreground = Brush("TextMutedBrush");
+                try
+                {
+                    var progress = new Progress<(int done, int total)>(p =>
+                    {
+                        if (p.total > 0) { bar.Value = (double)p.done * 100 / p.total; status.Text = $"Downloading bezels… {p.done}/{p.total}"; }
+                    });
+                    var (_, total) = await Services.BezelService.DownloadAllAsync(progress);
+                    status.Text = total > 0 ? $"On — {Services.BezelService.CachedCount()} bezels cached" : "No bezels found.";
+                    status.Foreground = new SolidColorBrush(Color.Parse("#30D158"));
+                    toggleBtn.Content = "Disable";   // downloading the set implies the feature is on
+                }
+                catch (Exception ex) { status.Text = $"Failed: {ex.Message}"; status.Foreground = Brush("AccentBrush"); }
+                finally { bar.IsVisible = false; dlBtn.IsEnabled = true; toggleBtn.IsEnabled = true; }
+            };
+            row.Children.Add(info); row.Children.Add(bar); row.Children.Add(dlBtn); row.Children.Add(toggleBtn);
+            panel.Children.Add(row);
+
+            // Vectrex overlays: folder-driven (drop PNGs in; matched to ROMs by name at launch).
+            int ovCount = 0;
+            try { if (System.IO.Directory.Exists(Services.VectrexOverlayService.OverlayDir)) ovCount = System.IO.Directory.GetFiles(Services.VectrexOverlayService.OverlayDir, "*.png").Length; } catch { }
+            var vrow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(0, 0, 0, 16) };
+            var vinfo = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            vinfo.Children.Add(new TextBlock { Text = "Vectrex overlays", FontSize = 12, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextPrimaryBrush") });
+            vinfo.Children.Add(new TextBlock { Text = ovCount > 0 ? $"{ovCount} overlay PNGs installed — matched to ROMs by filename" : "Drop overlay PNGs into the folder; they're matched to ROMs by filename",
+                FontSize = 10, FontFamily = Font("PrimaryFont"), Foreground = new SolidColorBrush(Color.Parse(ovCount > 0 ? "#30D158" : "#888888")) });
+            Grid.SetColumn(vinfo, 0);
+            var openBtn = new Button { Content = "Open folder", Theme = (Avalonia.Styling.ControlTheme?)(this.TryFindResource("PrefSecondaryBtn", out var tb5) ? tb5 : null), Padding = new Thickness(10, 4), FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+            Grid.SetColumn(openBtn, 1);
+            openBtn.Click += (_, _) => Services.ShellOpen.Open(Services.VectrexOverlayService.OverlayDir);
+            vrow.Children.Add(vinfo); vrow.Children.Add(openBtn);
+            panel.Children.Add(vrow);
+        }
+
         panel.Children.Add(new TextBlock { Text = "DAT FILES (ROM IDENTIFICATION)", Theme = (Avalonia.Styling.ControlTheme?)(this.TryFindResource("PrefLabel", out var t) ? t : null), Margin = new Thickness(0, 8, 0, 4) });
         panel.Children.Add(new Border { Height = 1, Background = Brush("BorderNormalBrush"), Margin = new Thickness(0, 0, 0, 8) });
-        panel.Children.Add(new TextBlock { Text = "Reference DAT files improve ROM identification for disc/arcade systems. Native libraries (SDL3, ffmpeg) are provided by your system packages on Linux; shader packs and overlays arrive with the shader splinter.",
+        panel.Children.Add(new TextBlock { Text = "Reference DAT files improve ROM identification for disc/arcade systems. Native libraries (SDL3, ffmpeg) are provided by your system packages on Linux; shader packs arrive with the shader splinter.",
             FontSize = 11, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextMutedBrush"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10) });
 
         foreach (var (tag, label, slug, directUrl) in KnownDats)

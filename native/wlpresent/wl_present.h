@@ -33,6 +33,15 @@ int wlp_poll_event(void* h, int* type, int* a, int* b);
 // (the GL context lives there). Composited each present until changed.
 void wlp_set_overlay(void* h, const void* rgba, int w, int hh);
 
+// Static decoration layers (uploaded once per game; drawn every present until hidden).
+// Both take straight-alpha RGBA8 (row 0 = top) and MUST be called on the present (GL) thread.
+// Game overlay (Vectrex art): stretched over the game rect, alpha-blended. NULL clears.
+void wlp_set_gameoverlay(void* h, const void* rgba, int w, int hh);
+void wlp_show_gameoverlay(void* h, int on);   // toggle visibility without re-uploading
+// Bezel frame (transparent-center art): aspect-fit at its own ratio in the content area. NULL clears.
+void wlp_set_bezel(void* h, const void* rgba, int w, int hh);
+void wlp_show_bezel(void* h, int on);         // toggle visibility without re-uploading
+
 // Reserve chrome space (title-bar height on top, status-bar height on bottom, window pixels). The game
 // is aspect-fit BETWEEN them instead of being covered by the OSD bars. Call once after create / on resize.
 void wlp_set_insets(void* h, int top, int bottom);

@@ -59,6 +59,8 @@ typedef struct {
     int configured, closed;
     GLuint tex; int texw, texh;
     GLuint ov_tex; int ov_w, ov_h, ov_on;   // RGBA OSD overlay (FPS + HUD), composited over the game quad
+    GLuint gov_tex; int gov_w, gov_h, gov_on;  // RGBA game overlay (Vectrex art) — stretched over the GAME rect
+    GLuint bez_tex; int bez_w, bez_h, bez_on;  // RGBA bezel frame (The Bezel Project) — aspect-fit in the content area
     GLuint corner_tex;                       // quarter-circle alpha mask for rounding the 4 window corners
     // input event ring
     struct { int type, a, b; } evq[256];
@@ -354,6 +356,43 @@ int wlp_present(void *h, const void *bgra, int fw, int fh) {
         glTexCoord2f(0, 1); glVertex2f(-1, -1);
     glEnd();
 
+    // Game overlay (Vectrex translucent art): stretched over the GAME rect exactly (upstream's
+    // Stretch=Fill over GameLayer), alpha-blended. Static texture — uploaded once per game.
+    if (s->gov_on && s->gov_tex) {
+        glBindTexture(GL_TEXTURE_2D, s->gov_tex);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glBegin(GL_QUADS);
+            glTexCoord2f(0, 0); glVertex2f(-1,  1);
+            glTexCoord2f(1, 0); glVertex2f( 1,  1);
+            glTexCoord2f(1, 1); glVertex2f( 1, -1);
+            glTexCoord2f(0, 1); glVertex2f(-1, -1);
+        glEnd();
+        glDisable(GL_BLEND);
+    }
+
+    // Bezel frame (The Bezel Project): aspect-fit at the BEZEL's own ratio in the content area
+    // between the chrome insets, alpha-blended over the game (its transparent center is the game
+    // window). C# forces the render DAR to the bezel AR while active, so the game lands in the
+    // cutout. Static texture — uploaded once per game.
+    if (s->bez_on && s->bez_tex && s->bez_w > 0 && s->bez_h > 0) {
+        double bar = (double)s->bez_w / s->bez_h;
+        int bw, bh;
+        if ((double)s->w / availH > bar) { bh = availH; bw = (int)(availH * bar + 0.5); }
+        else { bw = s->w; bh = (int)(s->w / bar + 0.5); }
+        glViewport((s->w - bw) / 2, s->ins_bottom + (availH - bh) / 2, bw, bh);
+        glBindTexture(GL_TEXTURE_2D, s->bez_tex);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glBegin(GL_QUADS);
+            glTexCoord2f(0, 0); glVertex2f(-1,  1);
+            glTexCoord2f(1, 0); glVertex2f( 1,  1);
+            glTexCoord2f(1, 1); glVertex2f( 1, -1);
+            glTexCoord2f(0, 1); glVertex2f(-1, -1);
+        glEnd();
+        glDisable(GL_BLEND);
+    }
+
     // OSD overlay (FPS + HUD): full-window RGBA quad, alpha-blended over the game.
     if (s->ov_on && s->ov_tex) {
         glViewport(0, 0, s->w, s->h);
@@ -399,6 +438,53 @@ void wlp_set_overlay(void *h, const void *rgba, int w, int hh) {
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, hh, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
     }
     s->ov_on = 1;
+}
+
+// Shared upload for the two static decoration layers (game overlay / bezel). LINEAR filtering —
+// these are photographic art scaled to the window, unlike the game's NEAREST pixels.
+static void deco_upload(GLuint *tex, int *tw, int *th, int *on, const void *rgba, int w, int hh) {
+    if (!rgba || w <= 0 || hh <= 0) { *on = 0; return; }
+    if (!*tex) {
+        glGenTextures(1, tex);
+        glBindTexture(GL_TEXTURE_2D, *tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+    glBindTexture(GL_TEXTURE_2D, *tex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    if (w != *tw || hh != *th) {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, hh, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+        *tw = w; *th = hh;
+    } else {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, hh, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    }
+    *on = 1;
+}
+
+// Upload (or clear with NULL) the Vectrex game overlay: straight-alpha RGBA8, stretched over the
+// game rect each present. MUST be called on the present (GL) thread. Static — upload once per game.
+void wlp_set_gameoverlay(void *h, const void *rgba, int w, int hh) {
+    wlp *s = h; if (!s) return;
+    deco_upload(&s->gov_tex, &s->gov_w, &s->gov_h, &s->gov_on, rgba, w, hh);
+}
+
+// Show/hide the already-uploaded game overlay without touching the texture (cog toggle).
+void wlp_show_gameoverlay(void *h, int on) {
+    wlp *s = h; if (s) s->gov_on = on && s->gov_tex ? 1 : 0;
+}
+
+// Upload (or clear with NULL) the bezel frame: straight-alpha RGBA8, aspect-fit in the content
+// area each present. MUST be called on the present (GL) thread. Static — upload once per game.
+void wlp_set_bezel(void *h, const void *rgba, int w, int hh) {
+    wlp *s = h; if (!s) return;
+    deco_upload(&s->bez_tex, &s->bez_w, &s->bez_h, &s->bez_on, rgba, w, hh);
+}
+
+// Show/hide the already-uploaded bezel without touching the texture (cog toggle).
+void wlp_show_bezel(void *h, int on) {
+    wlp *s = h; if (s) s->bez_on = on && s->bez_tex ? 1 : 0;
 }
 
 // Reserve chrome space (title bar / status bar heights, window pixels). The game is fit between them.

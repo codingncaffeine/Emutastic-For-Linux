@@ -152,6 +152,16 @@ namespace Emutastic.Emulator
         // buttons the current core actually uses (e.g. NES = just B and A).
         private readonly Dictionary<uint, string>[] _joypadDescriptors = { new(), new(), new(), new() };
         private volatile bool _descriptorsReceived;
+
+        // ── Bezels (The Bezel Project) + Vectrex overlays: static deco layers in the wlpresent shim.
+        // Art is fetched/decoded on a background task; the decoded RGBA lands in a pending slot that
+        // the PRESENT thread uploads (the GL context lives there), then the show flags rule. The
+        // bezel forces the render DAR to its own AR while active so the game lands in its cutout.
+        private volatile byte[]? _pendingBezelRgba; private int _pendingBezelW, _pendingBezelH;
+        private volatile byte[]? _pendingGovRgba; private int _pendingGovW, _pendingGovH;
+        private volatile bool _bezelRowVisible, _bezelActive, _bezelLoaded, _bezelFetching;
+        private double _bezelAr;
+        private volatile bool _govRowVisible, _govActive;                           // Vectrex overlay state
         private long _frameSeq;
         private int _frameCountSample;            // frames produced since the last SampleStats (real fps)
         private long _coreRunTicks, _coreRunCalls; // accumulated retro_run time + call count for avg ms
@@ -1000,6 +1010,7 @@ namespace Emutastic.Emulator
             string title = $"Emutastic — {CoreName}";
             _wlTop.SetInsets((int)GlOsd.TitleBarHeight, (int)GlOsd.StatusBarHeight);
             _wlTop.SetAspect(DisplayAspectRatio);   // render at the display aspect (0 → frame pixel ratio)
+            InitDecorations();                       // bezel + Vectrex overlay (art loads off-thread)
 
             // Save-state load picker (upstream's inline LoadPickerPanel): null = closed.
             List<(string Name, string RelTime, string Path)>? statePicker = null;
@@ -1025,9 +1036,13 @@ namespace Emutastic.Emulator
                     ("Turbo Buttons…",      true, "›", "\x01TURBO"),
                     (_userFlip ? "Flip Display ✓" : "Flip Display", true, null, "\x01FLIP"),
                     ("Shader: None",        false, null, null),   // arrives with the shader splinter
-                    ("Overlay: On",         false, null, null),   // bezel/overlay art not ported yet
-                    ("Bezel: Off",          false, null, null),
                 };
+                // Vectrex overlay / bezel rows appear only when their art exists for this game
+                // (upstream keeps OverlayToggleBtn/BezelToggleBtn Collapsed the same way).
+                if (_govRowVisible)
+                    m.Add((_govActive ? "Overlay: On" : "Overlay: Off", true, null, "\x01OVERLAY"));
+                if (_bezelRowVisible)
+                    m.Add((_bezelActive ? "Bezel: On" : "Bezel: Off", true, null, "\x01BEZEL"));
                 if (HandlerConsoleName == "N64" && CoreOptionValue("mupen64plus-pak1").Length > 0)
                     m.Add(("Pak", true, CoreOptionValue("mupen64plus-pak1"), "mupen64plus-pak1"));
                 m.Add((IsRecording ? "Stop Recording" : "Record", true, null, "\x01RECORD"));
@@ -1191,6 +1206,49 @@ namespace Emutastic.Emulator
                                 }
                             }
                             cogMenu = null;
+                        }
+                        else if (key == "\x01OVERLAY")
+                        {
+                            // Vectrex overlay toggle (upstream's OverlayToggle_Click). Texture is
+                            // decoded/uploaded at init, so this is just a show flag + persistence.
+                            _govActive = !_govActive;
+                            _wlTop!.ShowGameOverlay(_govActive);
+                            if (CheatGameId >= 0)
+                                Services.VectrexOverlayService.SetOverlayEnabled(CheatGameId, _govActive);
+                            cogMenu = buildCogMain();   // refresh the On/Off label
+                        }
+                        else if (key == "\x01BEZEL")
+                        {
+                            // Bezel toggle (upstream's BezelToggle_Click). First enable fetches the
+                            // art (network) + decodes off-thread; it shows when the upload lands.
+                            if (!_bezelLoaded && !_bezelFetching)
+                            {
+                                _bezelFetching = true; _bezelActive = true;
+                                ShowDiskMessage("Fetching bezel…", 3);
+                                string bezRom = _romPath, bezConsole = HandlerConsoleName;
+                                _ = System.Threading.Tasks.Task.Run(async () =>
+                                {
+                                    string? png = await Services.BezelService
+                                        .EnsureBezelAsync(bezRom, bezConsole).ConfigureAwait(false);
+                                    if (png == null || !QueueDecoPng(png, bezel: true))
+                                    {
+                                        _bezelActive = false;
+                                        ShowDiskMessage("No bezel available for this game", 4);
+                                    }
+                                    _bezelFetching = false;
+                                });
+                            }
+                            else
+                            {
+                                _bezelActive = !_bezelActive;
+                                _wlTop!.ShowBezel(_bezelActive);
+                                // The game renders at the bezel's AR while active so it lands in
+                                // the transparent cutout (upstream's WindowAr override).
+                                _wlTop.SetAspect(_bezelActive && _bezelAr > 0.01 ? _bezelAr : DisplayAspectRatio);
+                            }
+                            if (CheatGameId >= 0)
+                                Services.BezelService.SetEnabledForGame(CheatGameId, _bezelActive);
+                            cogMenu = buildCogMain();   // refresh the On/Off label
                         }
                         else if (key == "\x01RECORD")
                         {
@@ -1387,6 +1445,23 @@ namespace Emutastic.Emulator
                 pickerHover = statePicker != null && _wlTop.MouseInside
                     ? GlOsd.PickerHitTest(ww, wh, statePicker.Count, _wlTop.MouseX, _wlTop.MouseY) : -1;
                 int statusHover = _wlTop.MouseInside ? GlOsd.StatusHitTest(ww, wh, _wlTop.MouseX, _wlTop.MouseY) : -1;
+                // Static deco layers decoded off-thread land here (the GL context lives on this
+                // thread): upload once; afterwards the show flags + cog toggles rule.
+                if (_pendingBezelRgba is byte[] bezRgba)
+                {
+                    _pendingBezelRgba = null;
+                    _wlTop.SetBezel(bezRgba, _pendingBezelW, _pendingBezelH);
+                    _bezelLoaded = true;
+                    _wlTop.ShowBezel(_bezelActive);
+                    if (_bezelActive && _bezelAr > 0.01) _wlTop.SetAspect(_bezelAr);
+                }
+                if (_pendingGovRgba is byte[] govRgba)
+                {
+                    _pendingGovRgba = null;
+                    _wlTop.SetGameOverlay(govRgba, _pendingGovW, _pendingGovH);
+                    _wlTop.ShowGameOverlay(_govActive);
+                }
+
                 cogHover = cogMenu != null && _wlTop.MouseInside
                     ? GlOsd.MenuHitTest(ww, wh, cogMenu.Count, _wlTop.MouseX, _wlTop.MouseY) : -1;
                 var pickerItems = statePicker?.Select(p => (p.Name, p.RelTime)).ToList();
@@ -1813,6 +1888,81 @@ namespace Emutastic.Emulator
             catch (Exception ex)
             {
                 Trace.WriteLine("[Emu] ParseInputDescriptors: " + ex.Message);
+            }
+        }
+
+        // ── Bezel + Vectrex overlay init (called on the present thread; heavy work goes to a task) ──
+        private void InitDecorations()
+        {
+            string console = HandlerConsoleName;
+            // Bezels: arcade family only, feature-gated (Preferences → Extras). The cog row shows
+            // whenever the feature applies; art is fetched on demand (auto when enabled for this
+            // game, else on first toggle). Mirrors upstream's InitBezelOverlay + LoadBezelAsync.
+            if (Services.BezelService.AppliesTo(console) && Services.BezelService.FeatureEnabled)
+            {
+                _bezelRowVisible = true;
+                if (CheatGameId >= 0 && Services.BezelService.IsEnabledForGame(CheatGameId))
+                {
+                    _bezelActive = true; _bezelFetching = true;
+                    string rom = _romPath;
+                    _ = System.Threading.Tasks.Task.Run(async () =>
+                    {
+                        string? png = await Services.BezelService.EnsureBezelAsync(rom, console).ConfigureAwait(false);
+                        if (png == null || !QueueDecoPng(png, bezel: true)) _bezelActive = false;
+                        _bezelFetching = false;
+                    });
+                }
+            }
+            // Vectrex overlays: folder-driven (Overlays/Vectrex), fuzzy filename match. Decoded up
+            // front even when disabled so the cog toggle is instant; default-enabled per upstream.
+            if (console == "Vectrex")
+            {
+                string? ov = Services.VectrexOverlayService.FindOverlay(_romPath);
+                if (ov != null)
+                {
+                    _govRowVisible = true;
+                    _govActive = CheatGameId < 0 || Services.VectrexOverlayService.IsOverlayEnabled(CheatGameId);
+                    _ = System.Threading.Tasks.Task.Run(() => QueueDecoPng(ov, bezel: false));
+                }
+            }
+        }
+
+        // Decode a PNG to straight-alpha RGBA8 and queue it for the present thread to upload.
+        private bool QueueDecoPng(string path, bool bezel)
+        {
+            try
+            {
+                using var bmp = SkiaSharp.SKBitmap.Decode(path);
+                if (bmp == null || bmp.Width <= 0 || bmp.Height <= 0) return false;
+                var info = new SkiaSharp.SKImageInfo(bmp.Width, bmp.Height,
+                    SkiaSharp.SKColorType.Rgba8888, SkiaSharp.SKAlphaType.Unpremul);
+                var rgba = new byte[info.BytesSize];
+                var pin = GCHandle.Alloc(rgba, GCHandleType.Pinned);
+                bool ok;
+                try
+                {
+                    using var pix = bmp.PeekPixels();
+                    ok = pix != null && pix.ReadPixels(info, pin.AddrOfPinnedObject(), info.RowBytes);
+                }
+                finally { pin.Free(); }
+                if (!ok) return false;
+                if (bezel)
+                {
+                    _bezelAr = (double)bmp.Width / bmp.Height;
+                    _pendingBezelW = bmp.Width; _pendingBezelH = bmp.Height;
+                    _pendingBezelRgba = rgba;   // volatile publish LAST (dims travel with it)
+                }
+                else
+                {
+                    _pendingGovW = bmp.Width; _pendingGovH = bmp.Height;
+                    _pendingGovRgba = rgba;
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Emu] deco decode failed ({path}): {ex.Message}");
+                return false;
             }
         }
 
