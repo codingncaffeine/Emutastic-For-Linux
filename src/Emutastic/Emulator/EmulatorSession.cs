@@ -162,6 +162,17 @@ namespace Emutastic.Emulator
         private volatile bool _bezelRowVisible, _bezelActive, _bezelLoaded, _bezelFetching;
         private double _bezelAr;
         private volatile bool _govRowVisible, _govActive;                           // Vectrex overlay state
+
+        // ── Built-in shader presets (upstream's ShaderPreset enum, same order/names — the index is
+        // the shim's wlp_set_shader id). Persisted per game as shader_{gameId} = enum name; a saved
+        // "slang:" value (downloaded pack, not yet ported on Linux) degrades gracefully to None.
+        private static readonly (string EnumName, string Display)[] ShaderPresets =
+        {
+            ("None", "None"), ("CrtScanlines", "CRT Scanlines"), ("GameBoyDmg", "Game Boy (DMG)"),
+            ("GameBoyDmgLcd", "Game Boy (DMG LCD)"), ("GameBoyPocket", "Game Boy Pocket"),
+            ("LcdGrid", "LCD Grid"), ("Smooth", "Smooth"),
+        };
+        private int _shaderPreset;   // present-thread state (restored at init, set by the cog)
         private long _frameSeq;
         private int _frameCountSample;            // frames produced since the last SampleStats (real fps)
         private long _coreRunTicks, _coreRunCalls; // accumulated retro_run time + call count for avg ms
@@ -1019,6 +1030,14 @@ namespace Emutastic.Emulator
             _wlTop.SetInsets((int)GlOsd.TitleBarHeight, (int)GlOsd.StatusBarHeight);
             _wlTop.SetAspect(DisplayAspectRatio);   // render at the display aspect (0 → frame pixel ratio)
             InitDecorations();                       // bezel + Vectrex overlay (art loads off-thread)
+            // Restore the per-game shader (upstream's RestoreShaderPreset). "slang:" values (the
+            // downloaded pack) fall back to None until the librashader runtime is ported.
+            if (CheatGameId >= 0)
+            {
+                string saved = App.Configuration?.GetValue($"shader_{CheatGameId}", "None") ?? "None";
+                int idx = Array.FindIndex(ShaderPresets, p => p.EnumName.Equals(saved, StringComparison.OrdinalIgnoreCase));
+                if (idx > 0) { _shaderPreset = idx; _wlTop.SetShader(idx); }
+            }
 
             // Save-state load picker (upstream's inline LoadPickerPanel): null = closed.
             List<(string Name, string RelTime, string Path)>? statePicker = null;
@@ -1043,8 +1062,11 @@ namespace Emutastic.Emulator
                     ("Edit Game Controls…", EmitHostCommand != null, null, "\x01CONTROLS"),
                     ("Turbo Buttons…",      true, "›", "\x01TURBO"),
                     (_userFlip ? "Flip Display ✓" : "Flip Display", true, null, "\x01FLIP"),
-                    ("Shader: None",        false, null, null),   // arrives with the shader splinter
                 };
+                // Shader picker — SW cores only, like upstream (OverlayShaderBtn is collapsed for
+                // HW cores: their frames carry the core's own enhanced rendering).
+                if (!_hwRenderActive)
+                    m.Add(($"Shader: {ShaderPresets[_shaderPreset].Display}", true, "›", "\x01SHADER"));
                 // Vectrex overlay / bezel rows appear only when their art exists for this game
                 // (upstream keeps OverlayToggleBtn/BezelToggleBtn Collapsed the same way).
                 if (_govRowVisible)
@@ -1110,6 +1132,16 @@ namespace Emutastic.Emulator
                     }
                 }
                 if (m.Count == 1) m.Add(("No turbo-able buttons", false, null, null));
+                return m;
+            };
+            // Shader level (upstream's ShaderPanel picker, as a cog submenu): the 7 built-ins with
+            // a check on the active one. Row keys "\x04<index>" select. Downloaded slang presets
+            // join this list when the librashader runtime lands.
+            Func<List<(string, bool, string?, string?)>> buildCogShader = () =>
+            {
+                var m = new List<(string, bool, string?, string?)> { ("‹ Back", true, null, "\x01BACK") };
+                for (int i = 0; i < ShaderPresets.Length; i++)
+                    m.Add((ShaderPresets[i].Display, true, i == _shaderPreset ? "✓" : null, $"\x04{i}"));
                 return m;
             };
             // Cheats level (upstream's CheatsMenu): Add/Import actions + one toggle row per cheat.
@@ -1277,6 +1309,18 @@ namespace Emutastic.Emulator
                             cogMenu = buildCogCheats();
                         }
                         else if (key == "\x01TURBO") cogMenu = buildCogTurbo();
+                        else if (key == "\x01SHADER") cogMenu = buildCogShader();
+                        else if (key.Length > 1 && key[0] == '\x04' && int.TryParse(key.AsSpan(1), out int shaderIdx)
+                                 && shaderIdx >= 0 && shaderIdx < ShaderPresets.Length)
+                        {
+                            // Apply live (we're on the present thread — the GL context is here) and
+                            // persist per game through the parent, like upstream's immediate save.
+                            _shaderPreset = shaderIdx;
+                            _wlTop!.SetShader(shaderIdx);
+                            if (CheatGameId >= 0)
+                                EmitHostCommand?.Invoke($"save-shader {CheatGameId} {ShaderPresets[shaderIdx].EnumName}");
+                            cogMenu = buildCogShader();   // refresh the check mark
+                        }
                         else if (key.Length > 1 && key[0] == '\x02' && int.TryParse(key.AsSpan(1), out int cheatIdx))
                         {
                             ToggleCheat(cheatIdx);                 // persists + queues live re-apply

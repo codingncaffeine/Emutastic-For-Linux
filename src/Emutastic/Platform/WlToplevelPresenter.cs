@@ -43,6 +43,7 @@ namespace Emutastic.Platform
         [DllImport(LIB)] static extern void wlp_show_gameoverlay(IntPtr h, int on);
         [DllImport(LIB)] static extern void wlp_set_bezel(IntPtr h, IntPtr rgba, int w, int hh);
         [DllImport(LIB)] static extern void wlp_show_bezel(IntPtr h, int on);
+        [DllImport(LIB)] static extern void wlp_set_shader(IntPtr h, int preset);
         [DllImport(LIB)] static extern void wlp_request_capture(IntPtr h);
         [DllImport(LIB)] static extern int wlp_take_capture(IntPtr h, IntPtr outBuf, int maxBytes, out int w, out int hh);
         [DllImport(LIB)] static extern void wlp_set_insets(IntPtr h, int top, int bottom);
@@ -157,6 +158,9 @@ namespace Emutastic.Platform
             fixed (byte* p = rgba) wlp_set_bezel(_h, (IntPtr)p, w, h);
         }
         public void ShowBezel(bool on) { if (_h != IntPtr.Zero) wlp_show_bezel(_h, on ? 1 : 0); }
+
+        /// <summary>Built-in shader preset on the game quad (0=None … 6=Smooth). Present thread only.</summary>
+        public void SetShader(int preset) { if (_h != IntPtr.Zero) wlp_set_shader(_h, preset); }
 
         /// <summary>Arm a one-shot displayed-frame capture; the next Present fills it (pre-OSD).</summary>
         public void RequestCapture() { if (_h != IntPtr.Zero) wlp_request_capture(_h); }

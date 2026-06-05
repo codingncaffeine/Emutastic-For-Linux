@@ -66,6 +66,12 @@ typedef struct {
     // WYSIWYG at displayed resolution, without the HUD (matches the Windows capture chain).
     int cap_armed, cap_ready, cap_w, cap_h;
     unsigned char *cap_buf;                    // BGRA top-down, cap_w*cap_h*4
+    // Built-in shader presets (cog "Shader: …"): GLSL ports of the Windows .fx pixel shaders,
+    // applied to the game quad at display resolution (the WPF Effect model). 0=None, 1=CRT,
+    // 2=GB DMG, 3=GB DMG LCD, 4=GB Pocket, 5=LCD Grid, 6=Smooth (linear filtering, no program).
+    int shader_preset;
+    GLuint shd_prog[6]; int shd_tried[6];      // lazily compiled, index 1..5 used
+    GLint shd_u_h[6], shd_u_tex[6];
     GLuint corner_tex;                       // quarter-circle alpha mask for rounding the 4 window corners
     // input event ring
     struct { int type, a, b; } evq[256];
@@ -325,6 +331,157 @@ void* wlp_create(int w, int h, const char *title) {
     return s;
 }
 
+// ── Built-in shader presets — GLSL 1.20 ports of the Windows .fx pixel shaders ──────────────────
+// Fragment-only programs: the fixed-function vertex stage supplies gl_TexCoord[0], so the existing
+// immediate-mode quad needs no vertex shader. GL2 entry points resolved via eglGetProcAddress once.
+static struct {
+    int inited, ok;
+    PFNGLCREATESHADERPROC CreateShader; PFNGLSHADERSOURCEPROC ShaderSource;
+    PFNGLCOMPILESHADERPROC CompileShader; PFNGLGETSHADERIVPROC GetShaderiv;
+    PFNGLGETSHADERINFOLOGPROC GetShaderInfoLog; PFNGLCREATEPROGRAMPROC CreateProgram;
+    PFNGLATTACHSHADERPROC AttachShader; PFNGLLINKPROGRAMPROC LinkProgram;
+    PFNGLGETPROGRAMIVPROC GetProgramiv; PFNGLUSEPROGRAMPROC UseProgram;
+    PFNGLGETUNIFORMLOCATIONPROC GetUniformLocation;
+    PFNGLUNIFORM1FPROC Uniform1f; PFNGLUNIFORM1IPROC Uniform1i;
+    PFNGLDELETESHADERPROC DeleteShader; PFNGLDELETEPROGRAMPROC DeleteProgram;
+} glf;
+
+static int glf_init(void) {
+    if (glf.inited) return glf.ok;
+    glf.inited = 1;
+    #define GLF(field, name) glf.field = (void*)eglGetProcAddress(name); if (!glf.field) return (glf.ok = 0);
+    GLF(CreateShader, "glCreateShader") GLF(ShaderSource, "glShaderSource")
+    GLF(CompileShader, "glCompileShader") GLF(GetShaderiv, "glGetShaderiv")
+    GLF(GetShaderInfoLog, "glGetShaderInfoLog") GLF(CreateProgram, "glCreateProgram")
+    GLF(AttachShader, "glAttachShader") GLF(LinkProgram, "glLinkProgram")
+    GLF(GetProgramiv, "glGetProgramiv") GLF(UseProgram, "glUseProgram")
+    GLF(GetUniformLocation, "glGetUniformLocation")
+    GLF(Uniform1f, "glUniform1f") GLF(Uniform1i, "glUniform1i")
+    GLF(DeleteShader, "glDeleteShader") GLF(DeleteProgram, "glDeleteProgram")
+    #undef GLF
+    return (glf.ok = 1);
+}
+
+// Shared 4-shade quantizer (the .fx files index a const palette by floor(luma*3); GLSL 1.20
+// dynamic indexing of const arrays is shaky on old compilers, so use an equivalent mix chain).
+#define SHD_COMMON \
+    "#version 120\n" \
+    "uniform sampler2D gametex; uniform float screenHeight;\n" \
+    "vec3 quant(float idx, vec3 p0, vec3 p1, vec3 p2, vec3 p3){\n" \
+    "  return idx<1.0 ? mix(p0,p1,idx) : idx<2.0 ? mix(p1,p2,idx-1.0) : mix(p2,p3,idx-2.0);\n" \
+    "}\n" \
+    "float lumaOf(vec3 c){ return dot(c, vec3(0.299,0.587,0.114)); }\n"
+
+static const char *shd_src_crt = SHD_COMMON
+    "void main(){\n"
+    "  vec2 uv = gl_TexCoord[0].xy;\n"
+    "  vec4 c = texture2D(gametex, uv);\n"
+    "  float row = fract(uv.y * screenHeight * 0.5);\n"               // darken every other source row
+    "  float scan = smoothstep(0.35, 0.5, row) * 0.35 + 0.65;\n"
+    "  c.rgb *= scan * 1.1;\n"                                         // brightness compensation
+    "  c.rgb += lumaOf(c.rgb) * 0.04;\n"                               // subtle phosphor bloom
+    "  gl_FragColor = c;\n"
+    "}\n";
+
+#define SHD_DMG_PALETTE \
+    "  vec3 p0 = vec3(0.059,0.220,0.059), p1 = vec3(0.188,0.384,0.188),\n" \
+    "       p2 = vec3(0.545,0.675,0.059), p3 = vec3(0.608,0.737,0.059);\n"
+
+static const char *shd_src_dmg = SHD_COMMON
+    "void main(){\n"
+    "  vec4 c = texture2D(gametex, gl_TexCoord[0].xy);\n"
+    SHD_DMG_PALETTE
+    "  float idx = clamp(lumaOf(c.rgb) * 3.0, 0.0, 3.0);\n"
+    "  gl_FragColor = vec4(quant(idx, p0, p1, p2, p3), c.a);\n"
+    "}\n";
+
+static const char *shd_src_dmg_lcd = SHD_COMMON
+    "void main(){\n"
+    "  vec2 uv = gl_TexCoord[0].xy;\n"
+    "  vec4 c = texture2D(gametex, uv);\n"
+    SHD_DMG_PALETTE
+    "  float idx = clamp(lumaOf(c.rgb) * 3.0, 0.0, 3.0);\n"
+    "  vec3 result = quant(idx, p0, p1, p2, p3);\n"
+    "  float py = fract(uv.y * screenHeight);\n"                       // dot-matrix grid at pixel
+    "  float px = fract(uv.x * screenHeight);\n"                       // edges (GB ~square pixels)
+    "  float gx = smoothstep(0.0, 0.12, px) * smoothstep(1.0, 0.88, px);\n"
+    "  float gy = smoothstep(0.0, 0.12, py) * smoothstep(1.0, 0.88, py);\n"
+    "  result *= mix(0.55, 1.05, gx * gy);\n"
+    "  gl_FragColor = vec4(result, c.a);\n"
+    "}\n";
+
+static const char *shd_src_pocket = SHD_COMMON
+    "void main(){\n"
+    "  vec4 c = texture2D(gametex, gl_TexCoord[0].xy);\n"
+    "  vec3 p0 = vec3(0.200,0.220,0.180), p1 = vec3(0.430,0.475,0.390),\n"
+    "       p2 = vec3(0.690,0.740,0.640), p3 = vec3(0.830,0.870,0.780);\n"
+    "  float idx = clamp(lumaOf(c.rgb) * 3.0, 0.0, 3.0);\n"
+    "  gl_FragColor = vec4(quant(idx, p0, p1, p2, p3), c.a);\n"
+    "}\n";
+
+static const char *shd_src_lcd = SHD_COMMON
+    "void main(){\n"
+    "  vec2 uv = gl_TexCoord[0].xy;\n"
+    "  vec4 c = texture2D(gametex, uv);\n"
+    "  float py = fract(uv.y * screenHeight);\n"
+    "  float px = fract(uv.x * screenHeight);\n"
+    "  float gx = smoothstep(0.0, 0.08, px) * smoothstep(1.0, 0.92, px);\n"
+    "  float gy = smoothstep(0.0, 0.08, py) * smoothstep(1.0, 0.92, py);\n"
+    "  c.rgb *= mix(0.70, 1.0, gx * gy);\n"
+    "  gl_FragColor = c;\n"
+    "}\n";
+
+static GLuint shd_build(const char *src) {
+    if (!glf_init()) return 0;
+    GLuint sh = glf.CreateShader(GL_FRAGMENT_SHADER);
+    if (!sh) return 0;
+    glf.ShaderSource(sh, 1, &src, NULL);
+    glf.CompileShader(sh);
+    GLint ok = 0; glf.GetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        char log[512]; glf.GetShaderInfoLog(sh, sizeof log, NULL, log);
+        fprintf(stderr, "[wlp] shader compile failed: %s\n", log);
+        glf.DeleteShader(sh); return 0;
+    }
+    GLuint prog = glf.CreateProgram();
+    glf.AttachShader(prog, sh);
+    glf.LinkProgram(prog);
+    glf.DeleteShader(sh);
+    glf.GetProgramiv(prog, GL_LINK_STATUS, &ok);
+    if (!ok) { glf.DeleteProgram(prog); return 0; }
+    return prog;
+}
+
+// Lazily compile the preset's program on first use (present thread; context current). A preset
+// whose compile fails stays 0 forever → the game draws unshaded, never retrying per frame.
+static GLuint shd_get(wlp *s, int preset) {
+    if (preset < 1 || preset > 5) return 0;
+    if (!s->shd_tried[preset]) {
+        s->shd_tried[preset] = 1;
+        const char *src = preset == 1 ? shd_src_crt : preset == 2 ? shd_src_dmg
+                        : preset == 3 ? shd_src_dmg_lcd : preset == 4 ? shd_src_pocket : shd_src_lcd;
+        s->shd_prog[preset] = shd_build(src);
+        if (s->shd_prog[preset]) {
+            s->shd_u_tex[preset] = glf.GetUniformLocation(s->shd_prog[preset], "gametex");
+            s->shd_u_h[preset]   = glf.GetUniformLocation(s->shd_prog[preset], "screenHeight");
+        }
+    }
+    return s->shd_prog[preset];
+}
+
+// Select the built-in shader preset (0=None … 6=Smooth). Smooth = linear filtering on the game
+// texture (WPF's HighQuality scaling); every other preset keeps crisp NEAREST pixels, matching
+// upstream's NearestNeighbor. Present-thread only (GL context).
+void wlp_set_shader(void *h, int preset) {
+    wlp *s = h; if (!s) return;
+    if (preset < 0 || preset > 6) preset = 0;
+    s->shader_preset = preset;
+    glBindTexture(GL_TEXTURE_2D, s->tex);
+    GLint f = (preset == 6) ? GL_LINEAR : GL_NEAREST;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, f);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, f);
+}
+
 int wlp_present(void *h, const void *bgra, int fw, int fh) {
     wlp *s = h;
     if (!s || s->closed || fw <= 0 || fh <= 0) return -1;
@@ -354,12 +511,21 @@ int wlp_present(void *h, const void *bgra, int fw, int fh) {
     int qx = (s->w - qw) / 2;
     int qy = s->ins_bottom + (availH - qh) / 2;   // GL y is bottom-up: ins_bottom is the low edge
     glViewport(qx, qy, qw, qh);
+    // Built-in shader preset on the game quad (fragment-only; fixed-function vertex stage feeds
+    // gl_TexCoord[0]). screenHeight = SOURCE frame height, like the Windows .fx shaders' c0.
+    GLuint shd = (s->shader_preset >= 1 && s->shader_preset <= 5) ? shd_get(s, s->shader_preset) : 0;
+    if (shd) {
+        glf.UseProgram(shd);
+        if (s->shd_u_tex[s->shader_preset] >= 0) glf.Uniform1i(s->shd_u_tex[s->shader_preset], 0);
+        if (s->shd_u_h[s->shader_preset] >= 0)   glf.Uniform1f(s->shd_u_h[s->shader_preset], (float)fh);
+    }
     glBegin(GL_QUADS);
         glTexCoord2f(0, 0); glVertex2f(-1,  1);
         glTexCoord2f(1, 0); glVertex2f( 1,  1);
         glTexCoord2f(1, 1); glVertex2f( 1, -1);
         glTexCoord2f(0, 1); glVertex2f(-1, -1);
     glEnd();
+    if (shd) glf.UseProgram(0);
 
     // Game overlay (Vectrex translucent art): stretched over the GAME rect exactly (upstream's
     // Stretch=Fill over GameLayer), alpha-blended. Static texture — uploaded once per game.

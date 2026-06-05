@@ -599,6 +599,16 @@ public partial class MainWindow : Window
                     App.Configuration.ScheduleSave();
                 }
             }
+            // In-game cog → shader pick: persist per game (upstream's shader_{gameId} key).
+            else if (verb == "save-shader" && App.Configuration != null)
+            {
+                var sh = (arg ?? "").Split(' ', 2);
+                if (sh.Length == 2 && int.TryParse(sh[0], out int shaderGameId))
+                {
+                    App.Configuration.SetValue($"shader_{shaderGameId}", sh[1]);
+                    App.Configuration.ScheduleSave();
+                }
+            }
             // Paused right-click cycled the pause effect in the host — persist the pick here
             // (the host's config copy is read-only by convention; one writer avoids clashes).
             else if (verb == "set-pause-effect" && App.Configuration != null)
