@@ -488,6 +488,10 @@ namespace Emutastic.Emulator
             for (int guard = 0; _running && _audio != null && _audio.IsOpen && _audio.QueuedMs < prefillMs && guard < 60; guard++)
                 try { _core!.Run(); } catch (Exception ex) { Trace.WriteLine($"[Emu] retro_run threw (prefill): {ex}"); break; }
 
+            // RetroAchievements (A8c): login + identify on a worker thread so a slow RA
+            // server can never delay first frame. RaDoFrame() no-ops until the game loads.
+            new Thread(InitRetroAchievements) { IsBackground = true, Name = "RaInit" }.Start();
+
             // DECOUPLED mode: present runs on its own thread, emu thread is paced by audio. Branch out
             // entirely (it owns the GL window + its own loop + cleanup) and return.
             if (_present == "gl" && _presentThreadMode)
@@ -527,7 +531,7 @@ namespace Emutastic.Emulator
                 if (_resetRequested) { _resetRequested = false; try { _core!.Reset(); } catch (Exception ex) { Trace.WriteLine($"[Emu] reset threw: {ex}"); } }
 
                 // Paused: stop advancing the core (frame stays frozen) but keep the thread responsive.
-                if (_paused) { Thread.Sleep(16); frameTimer.Restart(); continue; }
+                if (_paused) { RaIdle(); Thread.Sleep(16); frameTimer.Restart(); continue; }
 
                 if (!_noInputPoll) _input.Poll();
                 ServiceDiskSwap();   // disc-swap chord (L3+Start) + FDS/deferred-insert ticks
@@ -551,7 +555,7 @@ namespace Emutastic.Emulator
                     long runT0 = frameTimer.ElapsedTicks;
                     try { _core!.Run(); } catch (Exception ex) { Trace.WriteLine($"[Emu] retro_run threw: {ex}"); break; }
                     System.Threading.Interlocked.Add(ref _coreRunTicks, frameTimer.ElapsedTicks - runT0);
-                    System.Threading.Interlocked.Increment(ref _coreRunCalls);
+                    System.Threading.Interlocked.Increment(ref _coreRunCalls); RaDoFrame();
                 }
                 else
                 {
@@ -566,7 +570,7 @@ namespace Emutastic.Emulator
                         long runT0 = frameTimer.ElapsedTicks;
                         try { _core!.Run(); } catch (Exception ex) { Trace.WriteLine($"[Emu] retro_run threw: {ex}"); break; }
                         System.Threading.Interlocked.Add(ref _coreRunTicks, frameTimer.ElapsedTicks - runT0);
-                        System.Threading.Interlocked.Increment(ref _coreRunCalls);
+                        System.Threading.Interlocked.Increment(ref _coreRunCalls); RaDoFrame();
 
                         // Low-watermark catch-up: buffer dipped below the cushion → run one extra frame so
                         // audio refills instead of underrunning (the latest video frame still wins). Counted
@@ -577,7 +581,7 @@ namespace Emutastic.Emulator
                             long t2 = frameTimer.ElapsedTicks;
                             try { _core!.Run(); } catch (Exception ex) { Trace.WriteLine($"[Emu] retro_run threw: {ex}"); break; }
                             System.Threading.Interlocked.Add(ref _coreRunTicks, frameTimer.ElapsedTicks - t2);
-                            System.Threading.Interlocked.Increment(ref _coreRunCalls);
+                            System.Threading.Interlocked.Increment(ref _coreRunCalls); RaDoFrame();
                         }
                     }
                 }
@@ -744,7 +748,7 @@ namespace Emutastic.Emulator
             while (_running)
             {
                 if (_resetRequested) { _resetRequested = false; try { _core!.Reset(); } catch (Exception ex) { Trace.WriteLine($"[Emu] reset threw: {ex}"); } }
-                if (_paused) { Thread.Sleep(16); frameTimer.Restart(); continue; }
+                if (_paused) { RaIdle(); Thread.Sleep(16); frameTimer.Restart(); continue; }
                 if (!_noInputPoll) _input.Poll();
                 ServiceDiskSwap();   // disc-swap chord (L3+Start) + FDS/deferred-insert ticks
                 if (_saveStatePending) ExecuteSaveOnEmuThread();   // between retro_run calls, like upstream
@@ -757,7 +761,7 @@ namespace Emutastic.Emulator
                 ApplyFrontendArToRam();   // hold AR-cheat values every frame (post-run, like upstream)
                 long runTicks = frameTimer.ElapsedTicks - runT0;
                 System.Threading.Interlocked.Add(ref _coreRunTicks, runTicks);
-                System.Threading.Interlocked.Increment(ref _coreRunCalls);
+                System.Threading.Interlocked.Increment(ref _coreRunCalls); RaDoFrame();
                 double coreRunMs = runTicks * 1000.0 / Stopwatch.Frequency;
                 _coreRunMsEma = _coreRunMsEma <= 0 ? coreRunMs : _coreRunMsEma + 0.05 * (coreRunMs - _coreRunMsEma);
 
@@ -999,7 +1003,7 @@ namespace Emutastic.Emulator
                 m.Add(("View Recordings", true, null, "\x01VIEWREC"));
                 // Cheats: live when the core supports them (or legacy cheats exist for this game) and
                 // we know which game this is (--game-id; absent on bare CLI launches).
-                bool cheatable = CheatGameId >= 0
+                bool cheatable = CheatGameId >= 0 && !RaHardcoreActive
                     && (Services.CheatSupport.Lookup(_corePath).Level != Services.CheatSupportLevel.NotSupported
                         || CheatsSnapshot().Count > 0);
                 m.Add(("Cheats", cheatable, "›", cheatable ? "\x01CHEATS" : null));
@@ -1179,6 +1183,11 @@ namespace Emutastic.Emulator
                         return;
                     case GlOsd.StatusBtnLoad:
                         cogMenu = null;
+                        if (RaHardcoreActive)   // hidden in hardcore, but gate the hit-test too
+                        {
+                            ShowDiskMessage("Save state loading is disabled in hardcore mode", 4);
+                            return;
+                        }
                         statePicker = statePicker == null ? RecentSaveStates() : null;
                         return;
                 }
@@ -1280,9 +1289,11 @@ namespace Emutastic.Emulator
                     ? GlOsd.MenuHitTest(ww, wh, cogMenu.Count, _wlTop.MouseX, _wlTop.MouseY) : -1;
                 var pickerItems = statePicker?.Select(p => (p.Name, p.RelTime)).ToList();
                 var cogItems = cogMenu?.Select(m => (m.Label, m.Enabled, m.Value)).ToList();
+                var (raToast, raToastAlpha) = RaToastForPresent();
                 if (osd.Build(ww, wh, shownStatus, title, winStyle, _wlTop.IsMaximized, titleHover, hudAlpha, hover, IsPaused,
                               pickerItems, pickerHover, statusHover,
-                              cogItems, cogHover, cogMenu != null ? CoreName : "", fxFrame, IsRecording))
+                              cogItems, cogHover, cogMenu != null ? CoreName : "", fxFrame, IsRecording,
+                              raToast, raToastAlpha, RaHardcoreActive))
                     _wlTop.SetOverlay(osd.Pixels, osd.Width, osd.Height);
 
                 // Present the latest frame every iteration; the shim's FIFO swap is the pace (re-presenting a
@@ -1430,6 +1441,38 @@ namespace Emutastic.Emulator
                     return HandleSetHwRender(data);
                 case ENV_GET_VARIABLE:
                     return HandleGetVariable(data);
+                case 36: // RETRO_ENVIRONMENT_SET_MEMORY_MAPS (const retro_memory_map*)
+                {
+                    // Captured for rcheevos's descriptor-aware memory reads. Stored even before
+                    // the RA client exists (it's created async on RaInit) and replayed at init;
+                    // cores that publish during the first retro_run trigger the client's
+                    // re-validate reload (see RetroAchievementsClient.SetMemoryDescriptors).
+                    if (data == IntPtr.Zero) return false;
+                    try
+                    {
+                        IntPtr descs = Marshal.ReadIntPtr(data);
+                        int num = Marshal.ReadInt32(data, IntPtr.Size);
+                        // retro_memory_descriptor: u64 flags; void* ptr; size_t offset, start,
+                        // select, disconnect, len; const char* addrspace  (64 bytes on x86-64)
+                        int stride = 8 + IntPtr.Size * 7;
+                        var regions = new Services.RetroAchievementsClient.MemoryRegion[Math.Max(0, num)];
+                        for (int i = 0; i < num; i++)
+                        {
+                            IntPtr d = descs + i * stride;
+                            ulong flags  = (ulong)Marshal.ReadInt64(d, 0);
+                            IntPtr ptr   = Marshal.ReadIntPtr(d, 8);
+                            ulong offset = (ulong)Marshal.ReadInt64(d, 8 + IntPtr.Size);
+                            ulong start  = (ulong)Marshal.ReadInt64(d, 8 + IntPtr.Size * 2);
+                            ulong len    = (ulong)Marshal.ReadInt64(d, 8 + IntPtr.Size * 6);
+                            regions[i] = new Services.RetroAchievementsClient.MemoryRegion(flags, ptr, offset, start, len);
+                        }
+                        _raPendingMemoryRegions = regions;
+                        _raClient?.SetMemoryDescriptors(regions);
+                        Trace.WriteLine($"[RA] SET_MEMORY_MAPS captured: {num} descriptor(s)");
+                    }
+                    catch (Exception ex) { Trace.WriteLine($"[RA] SET_MEMORY_MAPS parse failed: {ex.Message}"); }
+                    return true;
+                }
                 case 44: // RETRO_ENVIRONMENT_SET_SERIALIZATION_QUIRKS (uint64* in/out)
                 {
                     // Track SINGLE_SESSION (bit 4 — Kronos/Saturn: states invalid across launches; the
@@ -1770,8 +1813,8 @@ namespace Emutastic.Emulator
         // pending-flag pattern as save states). CheatService.Sort splits codes: core-format codes
         // (Game Genie / GameShark / raw) go to retro_cheat_set; Action-Replay "addr:value" codes
         // are written by US into system RAM every frame (many cores stub retro_cheat_set for AR).
-        // No hardcore-mode guard yet — RetroAchievements isn't ported (upstream blocks all cheats
-        // in hardcore; restore that chokepoint in ApplyAllCheats when RA lands).
+        // Hardcore-mode cheat blocking lives in ApplyAllCheats — the single chokepoint every
+        // entry path (toggle, import, live re-apply, session start) funnels through.
 
         /// <summary>Library row id for this game — names Cheats/{Console}/{id}.json (host has no DB).</summary>
         public int CheatGameId { get; set; } = -1;
@@ -1859,7 +1902,13 @@ namespace Emutastic.Emulator
         private void ApplyAllCheats(IList<Models.Cheat> cheats)
         {
             if (_core == null) return;
-            // (Upstream's hardcore-mode early-return lives here once RA is ported.)
+            // RA hardcore-compliance: cheats are an auto-fail blocker. Single chokepoint —
+            // every entry path (toggle, import, live re-apply, session start) funnels here.
+            if (RaHardcoreActive)
+            {
+                ShowDiskMessage("Cheats are disabled in hardcore mode", 4);
+                return;
+            }
             var (coreHandled, frontendAr) = Services.CheatService.Sort(cheats, _handler.ConsoleName);
             _frontendArCheats = frontendAr.ToArray();
             if (_systemRamPtr == IntPtr.Zero && _frontendArCheats.Length > 0)
@@ -1971,6 +2020,14 @@ namespace Emutastic.Emulator
         /// <summary>Request a load from a .state file path (any thread).</summary>
         public void RequestLoadState(string statePath, string name)
         {
+            // RA hardcore-compliance: loading save states is an auto-fail blocker
+            // (docs.retroachievements.org hardcore requirements). Saving stays allowed —
+            // only loading is blocked. Single gate: every load path funnels through here.
+            if (RaHardcoreActive)
+            {
+                ShowDiskMessage("Save state loading is disabled in hardcore mode", 4);
+                return;
+            }
             if (IsSaveStateUnreliable())
             {
                 ShowDiskMessage("Save states are disabled for MAME 2003-Plus (unreliable per-game)", 5);
@@ -2148,6 +2205,16 @@ namespace Emutastic.Emulator
         /// <summary>Called on the emu thread between retro_run calls.</summary>
         private void ExecuteLoadOnEmuThread()
         {
+            // RA hardcore-compliance belt: a boot-time pending load (--load-state) is queued
+            // before the async RA login lands, so the RequestLoadState gate can't see it.
+            // Re-check here at execution time — mirrors upstream's pending-load refusal.
+            if (RaHardcoreActive)
+            {
+                _loadStatePending = false;
+                _pendingLoadData = null;
+                ShowDiskMessage("Save state loading is disabled in hardcore mode", 4);
+                return;
+            }
             byte[]? data = _pendingLoadData;
             string name = _pendingLoadName;
 
@@ -2542,10 +2609,239 @@ namespace Emutastic.Emulator
         /// process exit so closing the game mid-recording still produces the final .mp4.</summary>
         public System.Threading.Tasks.Task? PendingRecordingEncode => _recording?.EncodeTask;
 
+        // ── RetroAchievements runtime (A8c) — lives HERE in the host process where the
+        //    core's memory is. Login/identify run on the RaInit worker; rc_client_do_frame
+        //    runs on the emu thread after every retro_run; the unlock toast renders in
+        //    GlOsd (Skia). The host never writes config/DB — results ride GameHostResult. ──
+        private Services.RetroAchievementsClient? _raClient;
+        private volatile bool _raReady;            // game identified → DoFrame is live
+        private bool _raHardcoreActive;            // snapshot at launch (upstream semantics)
+        private Services.RetroAchievementsClient.MemoryRegion[]? _raPendingMemoryRegions;
+
+        /// <summary>True while a hardcore RA session is active — gates cheats + state loads.</summary>
+        public bool RaHardcoreActive => _raHardcoreActive && _raClient != null;
+
+        // Session results for the parent's DB/config ingest (host writes neither).
+        public int RaGameIdResult { get; private set; }
+        public string RaOutcomeResult { get; private set; } = "";
+        public string? RaNewTokenResult { get; private set; }
+        public string? RaLiveProgressJsonResult { get; private set; }
+
+        // Unlock toast state — written by RA events (emu thread) + the badge fetch task,
+        // read by the present thread. Guarded by _raToastLock.
+        private readonly object _raToastLock = new();
+        private (string Header, string Title, string Desc, string Points, SkiaSharp.SKBitmap? Badge, DateTime ShownAt)? _raToast;
+        private readonly Dictionary<string, SkiaSharp.SKBitmap?> _raBadgeCache = new();
+        private static readonly System.Net.Http.HttpClient _raBadgeHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
+
+        private void RaDoFrame()
+        {
+            if (!_raReady) return;
+            try { _raClient?.DoFrame(); }
+            catch (Exception ex) { Trace.WriteLine($"[RA] DoFrame error: {ex.Message}"); }
+        }
+
+        private void RaIdle()
+        {
+            if (!_raReady) return;
+            try { _raClient?.Idle(); }
+            catch (Exception ex) { Trace.WriteLine($"[RA] Idle error: {ex.Message}"); }
+        }
+
+        // Toast envelope: 250ms fade-in → 4s hold → 400ms fade-out (upstream's timings,
+        // default style duration). Returns null once expired (and clears the state).
+        private ((string, string, string, string, SkiaSharp.SKBitmap?)? toast, float alpha) RaToastForPresent()
+        {
+            lock (_raToastLock)
+            {
+                if (_raToast == null) return (null, 0f);
+                var t = _raToast.Value;
+                double el = (DateTime.UtcNow - t.ShownAt).TotalSeconds;
+                float a;
+                if (el < 0.25) a = (float)(el / 0.25);
+                else if (el < 4.25) a = 1f;
+                else if (el < 4.65) a = (float)((4.65 - el) / 0.40);
+                else { _raToast = null; return (null, 0f); }
+                return ((t.Header, t.Title, t.Desc, t.Points, t.Badge), a);
+            }
+        }
+
+        private void SetRaToast(string header, string title, string desc, string points, string? badgeUrl)
+        {
+            SkiaSharp.SKBitmap? badge = null;
+            bool needFetch = false;
+            lock (_raToastLock)
+            {
+                if (badgeUrl != null && _raBadgeCache.TryGetValue(badgeUrl, out var cached)) badge = cached;
+                else if (badgeUrl != null) needFetch = true;
+                _raToast = (header, title, desc, points, badge, DateTime.UtcNow);
+            }
+            if (!needFetch || badgeUrl == null) return;
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                SkiaSharp.SKBitmap? bmp = null;
+                try
+                {
+                    byte[] png = await _raBadgeHttp.GetByteArrayAsync(badgeUrl);
+                    bmp = SkiaSharp.SKBitmap.Decode(png);
+                }
+                catch (Exception ex) { Trace.WriteLine($"[RA] badge fetch failed ({badgeUrl}): {ex.Message}"); }
+                lock (_raToastLock)
+                {
+                    _raBadgeCache[badgeUrl] = bmp;
+                    // Late badge joins the toast mid-display if it's still the same unlock.
+                    if (_raToast is { } cur && cur.Title == title && cur.Badge == null)
+                        _raToast = (cur.Header, cur.Title, cur.Desc, cur.Points, bmp, cur.ShownAt);
+                }
+            });
+        }
+
+        /// <summary>Login + identify (RaInit worker thread). Port of upstream's
+        /// InitRetroAchievements; config writes become RaNewTokenResult for the parent.</summary>
+        private void InitRetroAchievements()
+        {
+            try
+            {
+                var raConfig = App.Configuration?.GetRetroAchievementsConfiguration();
+                if (raConfig == null || !raConfig.Enabled)
+                {
+                    Trace.WriteLine("[RA] Disabled — skipping.");
+                    return;
+                }
+                if (string.IsNullOrWhiteSpace(raConfig.Username) ||
+                    (string.IsNullOrWhiteSpace(raConfig.Password) && string.IsNullOrWhiteSpace(raConfig.Token)))
+                {
+                    Trace.WriteLine("[RA] Missing credentials — skipping.");
+                    ShowDiskMessage("RetroAchievements: credentials missing", 5);
+                    return;
+                }
+
+                string consoleName = HandlerConsoleName;
+                uint consoleId = Services.RetroAchievementsClient.GetConsoleId(consoleName);
+                if (consoleId == 0)
+                {
+                    Trace.WriteLine($"[RA] No RA console ID for '{consoleName}' — skipping.");
+                    ShowDiskMessage($"RetroAchievements: {consoleName} not supported", 5);
+                    return;
+                }
+
+                // RA hardcore-compliance carve-out for PSP: PPSSPP reads cheats from
+                // cheats/<DiscID>.ini directly, bypassing the retro_cheat_set gate we
+                // control — so hardcore can't be honestly enforced there. Drop to
+                // softcore for the session and say so (upstream's posture).
+                bool effectiveHardcore = raConfig.HardcoreMode;
+                if (effectiveHardcore && string.Equals(consoleName, "PSP", StringComparison.Ordinal))
+                {
+                    effectiveHardcore = false;
+                    Trace.WriteLine("[RA] Hardcore refused for PSP — PPSSPP cheat path not gateable; softcore this session.");
+                    ShowDiskMessage("Hardcore Mode is disabled for PSP titles — achievements still track", 6);
+                }
+
+                // Stamp the core into the rcheevos UA BEFORE login/identify HTTP fires.
+                Services.RetroAchievementsClient.SetCoreContext(_core?.CoreName, _core?.CoreVersion);
+
+                var client = new Services.RetroAchievementsClient();
+                client.Initialize(_core, effectiveHardcore, consoleName);
+                _raHardcoreActive = effectiveHardcore;
+
+                // Replay descriptors the core published during retro_load_game (before
+                // the client existed) — without this the descriptor path is dead code.
+                if (_raPendingMemoryRegions != null)
+                    client.SetMemoryDescriptors(_raPendingMemoryRegions);
+
+                client.AchievementTriggered += info => SetRaToast(
+                    "ACHIEVEMENT UNLOCKED", info.Title, info.Description,
+                    info.Points > 0 ? $"{info.Points} points" : "", info.BadgeUrl);
+                client.GameCompleted += () => SetRaToast(
+                    "GAME COMPLETE", "Mastery!", "All achievements earned!", "", null);
+                client.ResetRequested += () =>
+                {
+                    Trace.WriteLine("[RA] Reset requested by rcheevos.");
+                    try { client.Reset(); } catch { }
+                };
+
+                // Token login first, password fallback (new token rides the results file —
+                // the host never writes config; the parent saves it).
+                Trace.WriteLine($"[RA] Logging in as {raConfig.Username}...");
+                bool loginOk = false; string? loginErr = null; string? newToken = null;
+                if (!string.IsNullOrWhiteSpace(raConfig.Token))
+                    (loginOk, loginErr, newToken) = client.LoginWithToken(raConfig.Username, raConfig.Token);
+                if (!loginOk && !string.IsNullOrWhiteSpace(raConfig.Password))
+                {
+                    (loginOk, loginErr, newToken) = client.LoginWithPassword(raConfig.Username, raConfig.Password);
+                    if (loginOk && !string.IsNullOrWhiteSpace(newToken))
+                        RaNewTokenResult = newToken;
+                }
+                if (!loginOk)
+                {
+                    Trace.WriteLine($"[RA] Login failed: {loginErr}");
+                    ShowDiskMessage("RetroAchievements: login failed", 5);
+                    client.Dispose();
+                    return;
+                }
+                Trace.WriteLine("[RA] Login OK");
+
+                string romPath = _romPath;
+                Trace.WriteLine($"[RA] Loading game: {romPath} (console {consoleId})");
+                _raClient = client;   // descriptors arriving mid-load can now reach the client
+                var (loadOk, loadErr) = client.LoadGame(romPath, consoleId);
+                if (!loadOk)
+                {
+                    Trace.WriteLine($"[RA] Game load failed: {loadErr}");
+                    ShowDiskMessage("RetroAchievements: game not in database", 5);
+                    // rcheevos's two "no playable achievements" strings ("Unknown game" /
+                    // "Response contained no sets") both read as not_in_database; anything
+                    // else (network, timeout, credential reject) is a generic load_failed.
+                    string err = loadErr ?? "";
+                    bool noAchievements =
+                           err.IndexOf("unknown game",       StringComparison.OrdinalIgnoreCase) >= 0
+                        || err.IndexOf("no sets",            StringComparison.OrdinalIgnoreCase) >= 0
+                        || err.IndexOf("response contained", StringComparison.OrdinalIgnoreCase) >= 0;
+                    RaOutcomeResult = noAchievements ? "not_in_database" : "load_failed";
+                    Services.RaLog.Write($"launch identify failed: console={consoleName} rom=\"{romPath}\" outcome={RaOutcomeResult} err=\"{err}\"");
+                    _raClient = null;
+                    client.Dispose();
+                    return;
+                }
+
+                RaGameIdResult = client.GetGameId();
+                RaOutcomeResult = "identified";
+                _raReady = true;
+                Services.RaLog.Write($"launch identified: console={consoleName} raGameId={RaGameIdResult} raTitle=\"{client.GetGameTitle()}\"");
+                Trace.WriteLine($"[RA] Game identified: {client.GetGameTitle()} (id={RaGameIdResult})");
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[RA] InitRetroAchievements exception: {ex.Message}\n{ex.StackTrace}");
+            }
+        }
+
         public void Dispose()
         {
             if (_running) System.Threading.Interlocked.Decrement(ref _activeCount);
             _running = false;
+            // RetroAchievements teardown: stop the per-frame ticks, snapshot live progress
+            // for the parent's DB ingest, then destroy the native client.
+            _raReady = false;
+            try
+            {
+                if (_raClient != null)
+                {
+                    var snap = _raClient.GetLiveProgressSnapshot();
+                    if (snap.Count > 0 && RaGameIdResult > 0)
+                    {
+                        var payload = new Models.RALiveProgress { Hardcore = _raHardcoreActive };
+                        foreach (var kvp in snap.OrderByDescending(k => k.Value.MeasuredPercent).Take(50))
+                            payload.Achievements[kvp.Key] = new Models.RALiveAchievementProgress
+                            { Percent = kvp.Value.MeasuredPercent, ProgressText = kvp.Value.MeasuredProgress ?? "" };
+                        RaLiveProgressJsonResult = System.Text.Json.JsonSerializer.Serialize(payload);
+                    }
+                    _raClient.Dispose();
+                    _raClient = null;
+                }
+            }
+            catch (Exception ex) { Trace.WriteLine($"[RA] teardown: {ex.Message}"); }
+
             // Quitting mid-recording (ANY teardown path funnels through here): stop + encode
             // rather than losing the capture. Stop() never blocks — the encode runs in the
             // background and is exposed via PendingRecordingEncode for hosts to wait on.

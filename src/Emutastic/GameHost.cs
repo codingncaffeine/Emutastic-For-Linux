@@ -230,7 +230,7 @@ namespace Emutastic
             int playSeconds = (int)sw.Elapsed.TotalSeconds;
             Trace.WriteLine($"[Host] === game-host end: playSeconds={playSeconds} ===");
             if (log != null) { try { Trace.Flush(); Trace.Listeners.Remove(log); log.Dispose(); } catch { } }
-            WriteResults(resultsPath, 0, playSeconds);
+            WriteResults(resultsPath, 0, playSeconds, session);
             return 0;
         }
 
@@ -259,12 +259,24 @@ namespace Emutastic
 
         // Atomic results handoff to the parent: write <path>.tmp then rename. A crashed child writes
         // nothing → the parent treats "no file + non-zero exit" as a crash.
-        private static void WriteResults(string path, int exitCode, int playSeconds)
+        private static void WriteResults(string path, int exitCode, int playSeconds,
+                                         Emutastic.Emulator.EmulatorSession? session = null)
         {
             if (string.IsNullOrEmpty(path)) return;
             try
             {
-                string json = JsonSerializer.Serialize(new GameHostResult { ExitCode = exitCode, PlaySeconds = playSeconds });
+                string json = JsonSerializer.Serialize(new GameHostResult
+                {
+                    ExitCode = exitCode,
+                    PlaySeconds = playSeconds,
+                    // RetroAchievements session results — the host writes neither DB nor
+                    // config (conventions), so identification + live progress + a refreshed
+                    // login token ride home here for the parent to ingest.
+                    RaGameId = session?.RaGameIdResult ?? 0,
+                    RaOutcome = session?.RaOutcomeResult ?? "",
+                    RaNewToken = session?.RaNewTokenResult,
+                    RaLiveProgressJson = session?.RaLiveProgressJsonResult,
+                });
                 File.WriteAllText(path + ".tmp", json);
                 File.Move(path + ".tmp", path, overwrite: true);
             }
@@ -277,5 +289,10 @@ namespace Emutastic
     {
         public int ExitCode { get; set; }
         public int PlaySeconds { get; set; }
+        // RetroAchievements session results (0/empty/null when RA was off or didn't land).
+        public int RaGameId { get; set; }
+        public string RaOutcome { get; set; } = "";
+        public string? RaNewToken { get; set; }
+        public string? RaLiveProgressJson { get; set; }
     }
 }

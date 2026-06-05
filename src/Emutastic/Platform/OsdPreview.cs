@@ -14,7 +14,8 @@ namespace Emutastic.Platform
             const int W = 940, H = 720;   // the real own-toplevel window size (4:3 game)
 
             void Render(string name, string status, string style, bool maximized, int titleHover,
-                        float hudAlpha, int hover, bool paused)
+                        float hudAlpha, int hover, bool paused,
+                        (string, string, string, string, SKBitmap?)? raToast = null, bool hardcore = false)
             {
                 using var surface = new SKBitmap(new SKImageInfo(W, H, SKColorType.Rgba8888, SKAlphaType.Premul));
                 using var c = new SKCanvas(surface);
@@ -27,7 +28,8 @@ namespace Emutastic.Platform
                 DrawFakeGame(c, W, H);
 
                 var osd = new GlOsd();
-                osd.Build(W, H, status, "Emutastic — Nestopia", style, maximized, titleHover, hudAlpha, hover, paused);
+                osd.Build(W, H, status, "Emutastic — Nestopia", style, maximized, titleHover, hudAlpha, hover, paused,
+                          raToast: raToast, raToastAlpha: raToast != null ? 1f : 0f, hardcore: hardcore);
                 var info = new SKImageInfo(W, H, SKColorType.Rgba8888, SKAlphaType.Unpremul);
                 using (var img = SKImage.FromPixelCopy(info, osd.Pixels, W * 4))
                     c.DrawImage(img, 0, 0);
@@ -48,6 +50,20 @@ namespace Emutastic.Platform
             Render("04-paused", "Paused  (target 60 fps)", "macOS", false, -1, 1f, -1, true);
             Render("05-title-linux", running, "Linux", false, -1, 1f, -1, false);
             Render("06-win11-closehover", running, "Windows11", false, GlOsd.TbClose, 1f, -1, false);
+            // RA unlock toast (A8c, default style) + hardcore status treatment (A8d). The badge
+            // here is a placeholder gold square — real ones come from media.retroachievements.org.
+            using (var badge = new SKBitmap(new SKImageInfo(64, 64, SKColorType.Rgba8888)))
+            {
+                using (var bc = new SKCanvas(badge))
+                {
+                    bc.Clear(new SKColor(0x40, 0x30, 0x10));
+                    using var star = new SKPaint { Color = new SKColor(0xFF, 0xD7, 0x00), IsAntialias = true };
+                    bc.DrawCircle(32, 32, 20, star);
+                }
+                Render("07-ra-toast", running, "macOS", false, -1, 0f, -1, false,
+                       ("ACHIEVEMENT UNLOCKED", "Ace Pilot", "Clear stage 1 without taking damage.", "10 points", badge));
+            }
+            Render("08-ra-hardcore", running, "macOS", false, -1, 1f, -1, false, null, hardcore: true);
         }
 
         // A representative NES-ish frame: gradient sky + a bright band near the bottom so we can judge the

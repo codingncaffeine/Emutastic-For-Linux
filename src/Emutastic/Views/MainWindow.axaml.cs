@@ -496,6 +496,43 @@ public partial class MainWindow : Window
         // Any game session ending (whichever window launched it) ingests states the host wrote;
         // DiscoverSaveStates matches .json sidecars by RomHash and fires SaveStatesChanged.
         Services.GameHostLauncher.OnGameSessionEnded = g => _importer?.DiscoverSaveStates(g);
+        // RetroAchievements session results: the host writes neither DB nor config, so the
+        // identification outcome, live-progress snapshot, and any refreshed login token are
+        // ingested here (off-UI thread — DB + config only, no controls touched).
+        Services.GameHostLauncher.OnRaSessionResults = (g, res) =>
+        {
+            try
+            {
+                if (res.RaGameId > 0 && g.RAGameId != res.RaGameId)
+                {
+                    g.RAGameId = res.RaGameId;
+                    _db?.UpdateRAGameId(g.Id, res.RaGameId);
+                }
+                if (!string.IsNullOrEmpty(res.RaOutcome) && g.RALastLaunchOutcome != res.RaOutcome)
+                {
+                    g.RALastLaunchOutcome = res.RaOutcome;
+                    _db?.UpdateRALastLaunchOutcome(g.Id, res.RaOutcome);
+                }
+                if (!string.IsNullOrEmpty(res.RaLiveProgressJson))
+                {
+                    long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                    g.RALiveProgressJson = res.RaLiveProgressJson!;
+                    g.RALiveProgressFetchedAt = now;
+                    _db?.UpdateRALiveProgress(g.Id, res.RaLiveProgressJson!, now);
+                }
+                if (!string.IsNullOrEmpty(res.RaNewToken) && App.Configuration != null)
+                {
+                    var ra = App.Configuration.GetRetroAchievementsConfiguration();
+                    ra.Token = res.RaNewToken!;
+                    App.Configuration.SetRetroAchievementsConfiguration(ra);
+                    App.Configuration.ScheduleSave();
+                }
+                // A session just ended → the user-progress cache is stale by definition.
+                if (g.RAGameId > 0 && App.Configuration != null && _db != null)
+                    new Services.RetroAchievementsService(App.Configuration, _db).InvalidateUserProgressForGame(g);
+            }
+            catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"[RA] session ingest failed: {ex.Message}"); }
+        };
         // In-game cog → "Edit Game Controls…": the host asks us (UI thread) to open Preferences
         // on the Controls panel with its console preselected.
         Services.GameHostLauncher.OnHostCommand = (verb, arg) =>

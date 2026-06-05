@@ -151,6 +151,86 @@ namespace Emutastic.Platform
             }
         }
 
+        // ── RetroAchievements unlock toast (A8c) ─────────────────────────────────────
+        // Skia rendition of upstream ToastStyleRenderer's DEFAULT style (the host has no
+        // Avalonia): top-center 20px from the edge, horizontal gradient #F21A1A2E→#C81A1A2E,
+        // 1.5px accent border, r=12 card, drop shadow (blur 20 depth 6 @75%), gold eyebrow
+        // header 9pt, white title 14.5pt, #CCFFFFFF desc 11.5pt, gold points 10.5pt, 48px
+        // badge in a gold frame. Caller animates alpha (250ms in / 4s hold / 400ms out).
+        // Style customization (AchievementToastStyle) arrives with its settings UI phase.
+        private static void DrawRaToast(SKCanvas c, int w,
+            (string Header, string Title, string Desc, string Points, SKBitmap? Badge) t, float alpha)
+        {
+            using var headerFont = new SKFont(SKTypeface.FromFamilyName(null, SKFontStyle.Bold), 9f);
+            using var titleFont  = new SKFont(SKTypeface.FromFamilyName(null, SKFontStyle.Bold), 14.5f);
+            using var descFont   = new SKFont(SKTypeface.Default, 11.5f);
+            using var pointsFont = new SKFont(SKTypeface.FromFamilyName(null, SKFontStyle.Bold), 10.5f);
+
+            const float pad = 14, badgeSize = 48, gap = 12, edge = 20;
+            bool hasBadge = t.Badge != null;
+            bool hasHeader = t.Header.Length > 0;
+            bool hasDesc = t.Desc.Length > 0;
+            bool hasPoints = t.Points.Length > 0;
+
+            float textW = Math.Max(Math.Max(titleFont.MeasureText(t.Title), descFont.MeasureText(t.Desc)),
+                                   Math.Max(hasHeader ? headerFont.MeasureText(t.Header) : 0,
+                                            hasPoints ? pointsFont.MeasureText(t.Points) : 0));
+            textW = Math.Min(textW, 360);
+            float bw = pad + (hasBadge ? badgeSize + gap : 0) + textW + pad;
+            float textH = (hasHeader ? 13 : 0) + 19 + (hasDesc ? 15 : 0) + (hasPoints ? 15 : 0);
+            float bh = Math.Max(pad * 2 + textH, hasBadge ? pad * 2 + badgeSize : 0);
+            float x = (w - bw) / 2f, y = edge;
+            var box = new SKRect(x, y, x + bw, y + bh);
+
+            // Whole-toast alpha via a save-layer so overlapping elements fade as one.
+            using (var layer = new SKPaint { Color = new SKColor(255, 255, 255, (byte)(alpha * 255)) })
+            {
+                c.SaveLayer(layer);
+
+                using (var shadow = new SKPaint
+                {
+                    Color = new SKColor(0, 0, 0, 0xBF), IsAntialias = true,
+                    ImageFilter = SKImageFilter.CreateDropShadowOnly(0, 6, 10, 10, new SKColor(0, 0, 0, 0xBF))
+                })
+                    c.DrawRoundRect(box, 12, 12, shadow);
+
+                using (var bg = new SKPaint
+                {
+                    IsAntialias = true,
+                    Shader = SKShader.CreateLinearGradient(
+                        new SKPoint(box.Left, box.Top), new SKPoint(box.Right, box.Top),
+                        new[] { new SKColor(0x1A, 0x1A, 0x2E, 0xF2), new SKColor(0x1A, 0x1A, 0x2E, 0xC8) },
+                        null, SKShaderTileMode.Clamp)
+                })
+                    c.DrawRoundRect(box, 12, 12, bg);
+                using (var border = new SKPaint
+                { Color = new SKColor(0xE0, 0x35, 0x35, 0xFF), IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1.5f })
+                    c.DrawRoundRect(box, 12, 12, border);
+
+                float tx = box.Left + pad;
+                if (hasBadge)
+                {
+                    var br = new SKRect(tx, box.MidY - badgeSize / 2, tx + badgeSize, box.MidY + badgeSize / 2);
+                    c.DrawBitmap(t.Badge, br);
+                    using (var frame = new SKPaint
+                    { Color = new SKColor(0xFF, 0xD7, 0x00, 0xFF), IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1.5f })
+                        c.DrawRoundRect(br, 4, 4, frame);
+                    tx += badgeSize + gap;
+                }
+
+                float ty = box.Top + pad + (hasHeader ? 9 : 14);
+                using var gold  = new SKPaint { Color = new SKColor(0xFF, 0xD7, 0x00, 0xFF), IsAntialias = true };
+                using var white = new SKPaint { Color = SKColors.White, IsAntialias = true };
+                using var dim   = new SKPaint { Color = new SKColor(0xFF, 0xFF, 0xFF, 0xCC), IsAntialias = true };
+                if (hasHeader) { c.DrawText(t.Header, tx, ty, SKTextAlign.Left, headerFont, gold); ty += 16; }
+                c.DrawText(t.Title, tx, ty + 6, SKTextAlign.Left, titleFont, white); ty += 22;
+                if (hasDesc) { c.DrawText(t.Desc, tx, ty + 4, SKTextAlign.Left, descFont, dim); ty += 15; }
+                if (hasPoints) c.DrawText(t.Points, tx, ty + 5, SKTextAlign.Left, pointsFont, gold);
+
+                c.Restore();
+            }
+        }
+
         // Upstream's cheat toggle: 34×18 pill (r=9, 1px #66FFFFFF border), accent fill when on /
         // #55FFFFFF when off, white 14×14 knob inset 2px sliding right/left. #E03535 is the Dark
         // theme's AccentBrush — the OSD palette is fixed-native, so it tracks the default theme.
@@ -241,7 +321,9 @@ namespace Emutastic.Platform
                           int statusHover = -1,
                           IReadOnlyList<(string Label, bool Enabled, string? Value)>? cogMenu = null,
                           int cogHover = -1, string cogFooter = "",
-                          SKBitmap? fxFrame = null, bool recording = false)
+                          SKBitmap? fxFrame = null, bool recording = false,
+                          (string Header, string Title, string Desc, string Points, SKBitmap? Badge)? raToast = null,
+                          float raToastAlpha = 0f, bool hardcore = false)
         {
             if (w <= 0 || h <= 0) return false;
             int aq = (int)Math.Round(Math.Clamp(hudAlpha, 0f, 1f) * 16);   // quantize alpha → limit fade re-renders
@@ -250,7 +332,9 @@ namespace Emutastic.Platform
             // A pause-effect frame is a fresh animation every tick — bypass the signature cache
             // while one is active (cheap: the effect only runs while the game is paused).
             string fxSig = fxFrame != null ? (_fxSeq++).ToString() : "";
-            string sig = $"{w}x{h}|{status}|{title}|{winStyle}|{(maximized ? 1 : 0)}|{titleHover}|{aq}|{hoverBtn}|{(paused ? 1 : 0)}|{pickSig}|{statusHover}|{cogSig}|{fxSig}|{(recording ? 1 : 0)}";
+            int taq = (int)Math.Round(Math.Clamp(raToastAlpha, 0f, 1f) * 16);   // quantize like hudAlpha
+            string toastSig = raToast == null ? "" : $"{raToast.Value.Title}|{(raToast.Value.Badge != null ? 1 : 0)}|{taq}";
+            string sig = $"{w}x{h}|{status}|{title}|{winStyle}|{(maximized ? 1 : 0)}|{titleHover}|{aq}|{hoverBtn}|{(paused ? 1 : 0)}|{pickSig}|{statusHover}|{cogSig}|{fxSig}|{(recording ? 1 : 0)}|{toastSig}|{(hardcore ? 1 : 0)}";
             if (sig == _sig && _bmp != null) return false;
             _sig = sig;
 
@@ -269,10 +353,11 @@ namespace Emutastic.Platform
             if (fxFrame != null)
                 c.DrawBitmap(fxFrame, new SKRect(0, 0, w, h));
             DrawTitleBar(c, w, title, winStyle, maximized, titleHover);
-            DrawStatus(c, w, h, status, statusHover, recording);
+            DrawStatus(c, w, h, status, statusHover, recording, hardcore);
             if (aq > 0) DrawHud(c, w, h, hoverBtn, paused, aq / 16f, recording);
             if (picker != null) DrawLoadPicker(c, w, h, picker, pickerHover);
             if (cogMenu != null) DrawCogMenu(c, w, h, cogMenu, cogHover, cogFooter);
+            if (raToast != null && taq > 0) DrawRaToast(c, w, raToast.Value, taq / 16f);
             // Subtle rounded border at the window edge (the shim erases the corners to transparent so the
             // window reads as rounded; this traces the edge, matching the main app's 1px BorderSubtle).
             if (!maximized)
@@ -285,7 +370,7 @@ namespace Emutastic.Platform
         // Full-width bottom status bar (mirrors EmulatorWindow.xaml's status Border: BgSecondary fill, a
         // 1px top border, ~11px muted left-aligned text). Borderless own-toplevel has no chrome row, so the
         // bar overlays the very bottom edge of the game.
-        private static void DrawStatus(SKCanvas c, int w, int h, string status, int statusHover, bool recording = false)
+        private static void DrawStatus(SKCanvas c, int w, int h, string status, int statusHover, bool recording = false, bool hardcore = false)
         {
             float top = h - StatusBarH;
             using (var bar = new SKPaint { Color = new SKColor(0x16, 0x16, 0x19, 0xF0) })
@@ -297,7 +382,21 @@ namespace Emutastic.Platform
             // (SecondaryButtonStyle: subtle fill, 1px border, icon + 11pt label, hover lift).
             StatusButtonRects(w, h, out var saveR, out var loadR);
             DrawStatusBtn(c, saveR, "Save State", statusHover == StatusBtnSave, isLoad: false);
-            DrawStatusBtn(c, loadR, "Load State", statusHover == StatusBtnLoad, isLoad: true);
+            // RA hardcore-compliance Section E: loading is blocked (button hidden) and the
+            // hardcore state must be visibly indicated during play — gold tag in the
+            // persistent status bar, mirroring upstream's HardcoreIndicator.
+            if (!hardcore)
+                DrawStatusBtn(c, loadR, "Load State", statusHover == StatusBtnLoad, isLoad: true);
+            else
+            {
+                using var hcFont = new SKFont(SKTypeface.FromFamilyName(null, SKFontStyle.Bold), 10f);
+                using var hcText = new SKPaint { Color = new SKColor(0xFF, 0xD7, 0x00, 0xFF), IsAntialias = true };
+                float tw = hcFont.MeasureText("HARDCORE");
+                var tagR = new SKRect(loadR.Right - tw - 18, loadR.Top, loadR.Right, loadR.Bottom);
+                using (var bg = new SKPaint { Color = new SKColor(0xFF, 0xD7, 0x00, 0x22), IsAntialias = true })
+                    c.DrawRoundRect(tagR, 4, 4, bg);
+                c.DrawText("HARDCORE", tagR.Left + 9, tagR.MidY + hcFont.Size * 0.36f, SKTextAlign.Left, hcFont, hcText);
+            }
 
             // "⏺ REC" indicator left of the buttons while recording (upstream's RecIndicator:
             // red #E03535, 11pt bold). The dot is drawn as a filled circle (no emoji font needed).

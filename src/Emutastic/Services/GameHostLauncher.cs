@@ -25,6 +25,8 @@ namespace Emutastic.Services
         /// <summary>Set once by MainWindow: ingests save states the host wrote (DiscoverSaveStates)
         /// after any game session with a known Game ends — regardless of which window launched it.</summary>
         public static Action<Models.Game>? OnGameSessionEnded;
+        /// <summary>RA session results ingest (DB + config writes live in the parent).</summary>
+        public static Action<Models.Game, GameHostResult>? OnRaSessionResults;
 
         /// <summary>Set once by MainWindow: handles "EMUTASTIC-CMD &lt;verb&gt; &lt;arg&gt;" requests the
         /// host writes to stdout (e.g. cog → "Edit Game Controls…" = ("open-controls", console)).
@@ -199,6 +201,14 @@ namespace Emutastic.Services
                 {
                     try { OnGameSessionEnded(game); }
                     catch (Exception ex) { Trace.WriteLine($"[Launcher] save-state ingest failed: {ex.Message}"); }
+                }
+
+                // RetroAchievements session results (identification, live progress, refreshed
+                // token) — the host can't write DB/config, so the parent ingests them here.
+                if (game != null && result != null && OnRaSessionResults != null)
+                {
+                    try { OnRaSessionResults(game, result); }
+                    catch (Exception ex) { Trace.WriteLine($"[Launcher] RA results ingest failed: {ex.Message}"); }
                 }
 
                 // Recording safety net: a host that exits cleanly finishes its own encode first,
