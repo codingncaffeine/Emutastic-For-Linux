@@ -8,8 +8,9 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <!-- Mirror the upstream release line; surfaced in Preferences → About. -->
-    <Version>1.7.6</Version>
+    <!-- The Linux port's own release line (pre-1.0 while features stabilize against
+         upstream 1.7.x). Surfaced in Preferences → About and as the release tag. -->
+    <Version>0.5.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
