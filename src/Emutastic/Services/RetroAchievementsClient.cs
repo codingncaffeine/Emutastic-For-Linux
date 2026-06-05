@@ -17,7 +17,8 @@ namespace Emutastic.Services
     ///
     /// Linux deltas from upstream: badge/avatar URLs come from the
     /// rc_client_*_get_image_url accessors (vendored v11.6.0 dropped the struct
-    /// fields); the CHD cdreader bridge is deferred to the CHD phase (A8f).
+    /// fields); the CHD cdreader installs globally via rc_hash_init_custom_cdreader
+    /// (v11.6.0 has no per-client hash-callbacks merge).
     /// </summary>
     public class RetroAchievementsClient : IDisposable
     {
@@ -240,9 +241,10 @@ namespace Emutastic.Services
             if (_client == IntPtr.Zero)
                 throw new InvalidOperationException("Failed to create rcheevos client.");
 
-            // CHD-aware cdreader (upstream RcheevosChdCdReader) lands with the
-            // CHD identification phase — non-CHD content (.cue+.bin, .gdi,
-            // .iso) flows through rcheevos's default cdreader meanwhile.
+            // CHD-aware cdreader: achievement identification for .chd content on
+            // every CD-based console; non-CHD (.cue+.bin, .gdi, .iso) continues
+            // through rcheevos's default cdreader. Global install (v11.6.0 API).
+            RcheevosChdCdReader.InstallInto(_client);
 
             _logDelegate = OnLogMessage;
             rc_client_enable_logging(_client, RC_CLIENT_LOG_LEVEL_INFO, _logDelegate);

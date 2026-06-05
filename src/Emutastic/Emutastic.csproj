@@ -51,6 +51,20 @@
           DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>
 
+  <!-- libchdr (CHD disc images) built from the vendored source at native/libchdr-src;
+       used by RcheevosChdCdReader so CHD content identifies on RetroAchievements. -->
+  <Target Name="BuildLibChdr" BeforeTargets="Build"
+          Condition="$([MSBuild]::IsOSPlatform('Linux'))"
+          Inputs="$(MSBuildProjectDirectory)/../../native/libchdr/build.sh"
+          Outputs="$(MSBuildProjectDirectory)/../../native/libchdr/libchdr.so">
+    <Exec Command="bash &quot;$(MSBuildProjectDirectory)/../../native/libchdr/build.sh&quot;" />
+  </Target>
+  <Target Name="CopyLibChdr" AfterTargets="BuildLibChdr;Build"
+          Condition="$([MSBuild]::IsOSPlatform('Linux')) And Exists('$(MSBuildProjectDirectory)/../../native/libchdr/libchdr.so')">
+    <Copy SourceFiles="$(MSBuildProjectDirectory)/../../native/libchdr/libchdr.so"
+          DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
   <ItemGroup>
     <!-- VENDORED: Avalonia 12.1.999 built from PR #20926 (Linux X11 drag-and-drop). Served from the
          local feed in nuget.config. Avalonia.Desktop is intentionally NOT referenced — it drags in
