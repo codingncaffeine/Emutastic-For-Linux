@@ -188,19 +188,32 @@ namespace Emutastic.Platform
             using var pointsFont = new SKFont(SKTypeface.FromFamilyName(null, SKFontStyle.Bold), (float)st.PointsSize);
 
             const float pad = 14, badgeSize = 48, gap = 12, edge = 20;
+            const float maxTextW = 360;
             bool hasBadge = t.Badge != null && st.ShowBadge;
             bool hasHeader = t.Header.Length > 0 && st.ShowHeader;
             bool hasDesc = t.Desc.Length > 0;
             bool hasPoints = t.Points.Length > 0;
 
-            float textW = Math.Max(Math.Max(titleFont.MeasureText(t.Title), descFont.MeasureText(t.Desc)),
-                                   Math.Max(hasHeader ? headerFont.MeasureText(t.Header) : 0,
-                                            hasPoints ? pointsFont.MeasureText(t.Points) : 0));
-            textW = Math.Min(textW, 360);
+            // Long strings (identification failures like "ROM not recognized…", verbose unlock
+            // descriptions) must WRAP inside the box — the old code clamped the box width but
+            // drew the full string, so text ran off the toast onto the game. Title wraps to 2
+            // lines, desc to 3 (last line ellipsized); header/points stay single-line ellipsized.
+            string header = hasHeader ? Ellipsize(t.Header, headerFont, maxTextW) : "";
+            string points = hasPoints ? Ellipsize(t.Points, pointsFont, maxTextW) : "";
+            var titleLines = WrapText(t.Title, titleFont, maxTextW, maxLines: 2);
+            var descLines = hasDesc ? WrapText(t.Desc, descFont, maxTextW, maxLines: 3)
+                                    : new List<string>();
+
+            float textW = Math.Max(hasHeader ? headerFont.MeasureText(header) : 0,
+                                   hasPoints ? pointsFont.MeasureText(points) : 0);
+            foreach (var l in titleLines) textW = Math.Max(textW, titleFont.MeasureText(l));
+            foreach (var l in descLines) textW = Math.Max(textW, descFont.MeasureText(l));
+            textW = Math.Min(textW, maxTextW);
             float bw = pad + (hasBadge ? badgeSize + gap : 0) + textW + pad;
             float lineTitle = titleFont.Size + 7, lineHeader = headerFont.Size + 6;
             float lineDesc = descFont.Size + 4, linePoints = pointsFont.Size + 5;
-            float textH = (hasHeader ? lineHeader : 0) + lineTitle + (hasDesc ? lineDesc : 0) + (hasPoints ? linePoints : 0);
+            float textH = (hasHeader ? lineHeader : 0) + titleLines.Count * lineTitle
+                        + descLines.Count * lineDesc + (hasPoints ? linePoints : 0);
             float bh = Math.Max(pad * 2 + textH, hasBadge ? pad * 2 + badgeSize : 0);
 
             // 6-anchor position (upstream ApplyPosition; EdgeMargin = 20).
@@ -306,13 +319,50 @@ namespace Emutastic.Platform
                 using var titlePaint  = new SKPaint { Color = ToastColor(st.TitleColor, SKColors.White), IsAntialias = true };
                 using var descPaint   = new SKPaint { Color = ToastColor(st.DescColor, new SKColor(0xFF, 0xFF, 0xFF, 0xCC)), IsAntialias = true };
                 using var pointsPaint = new SKPaint { Color = ToastColor(st.PointsColor, gold), IsAntialias = true };
-                if (hasHeader) { c.DrawText(t.Header, tx, ty, SKTextAlign.Left, headerFont, headerPaint); ty += lineHeader; }
-                c.DrawText(t.Title, tx, ty + titleFont.Size * 0.5f, SKTextAlign.Left, titleFont, titlePaint); ty += lineTitle;
-                if (hasDesc) { c.DrawText(t.Desc, tx, ty + descFont.Size * 0.35f, SKTextAlign.Left, descFont, descPaint); ty += lineDesc; }
-                if (hasPoints) c.DrawText(t.Points, tx, ty + pointsFont.Size * 0.45f, SKTextAlign.Left, pointsFont, pointsPaint);
+                if (hasHeader) { c.DrawText(header, tx, ty, SKTextAlign.Left, headerFont, headerPaint); ty += lineHeader; }
+                foreach (var l in titleLines)
+                { c.DrawText(l, tx, ty + titleFont.Size * 0.5f, SKTextAlign.Left, titleFont, titlePaint); ty += lineTitle; }
+                foreach (var l in descLines)
+                { c.DrawText(l, tx, ty + descFont.Size * 0.35f, SKTextAlign.Left, descFont, descPaint); ty += lineDesc; }
+                if (hasPoints) c.DrawText(points, tx, ty + pointsFont.Size * 0.45f, SKTextAlign.Left, pointsFont, pointsPaint);
 
                 c.Restore();
             }
+        }
+
+        // Trim with a trailing ellipsis until the string fits maxW (single-line toast fields).
+        private static string Ellipsize(string s, SKFont f, float maxW)
+        {
+            if (f.MeasureText(s) <= maxW) return s;
+            while (s.Length > 1 && f.MeasureText(s + "…") > maxW) s = s[..^1];
+            return s + "…";
+        }
+
+        // Greedy word-wrap to maxW, capped at maxLines (the last kept line is ellipsized when
+        // content is dropped). A single unbreakable over-long word is ellipsized on its own line.
+        private static List<string> WrapText(string s, SKFont f, float maxW, int maxLines)
+        {
+            var lines = new List<string>();
+            if (string.IsNullOrEmpty(s)) return lines;
+            foreach (var hard in s.Split('\n'))
+            {
+                string cur = "";
+                foreach (var word in hard.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    string probe = cur.Length == 0 ? word : cur + " " + word;
+                    if (cur.Length > 0 && f.MeasureText(probe) > maxW) { lines.Add(cur); cur = word; }
+                    else cur = probe;
+                }
+                if (cur.Length > 0) lines.Add(cur);
+            }
+            if (lines.Count > maxLines)
+            {
+                lines.RemoveRange(maxLines, lines.Count - maxLines);
+                lines[maxLines - 1] = Ellipsize(lines[maxLines - 1] + "…", f, maxW);
+            }
+            for (int i = 0; i < lines.Count; i++)
+                if (f.MeasureText(lines[i]) > maxW) lines[i] = Ellipsize(lines[i], f, maxW);
+            return lines;
         }
 
         // Upstream's cheat toggle: 34×18 pill (r=9, 1px #66FFFFFF border), accent fill when on /
