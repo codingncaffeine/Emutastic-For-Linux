@@ -11,10 +11,11 @@ The goal is a **1:1 clone**: aesthetically and functionally identical to the Win
 platform plumbing swapped underneath (WPF → Avalonia, Direct3D/Vulkan → OpenGL/Vulkan, WASAPI → SDL3,
 XInput → SDL3 gamepad, Win32 core loading → `dlopen`).
 
-> **Status:** active development — feature parity with upstream is in progress. The emulation core
-> (run a ROM with video/audio/input), the ROM library + import pipeline, and the main-window UI are
-> in place; remaining subsystems (hardware rendering, achievements, recording, packaging) are landing
-> incrementally.
+> **Status:** 0.5.0 — at feature parity with upstream for the systems listed below: library +
+> import, hardware-rendered cores, save states, cheats, recording, manuals/notes, the full
+> RetroAchievements suite (unlocks, hardcore, Achievements tab, friends, leaderboard toasts), and
+> in-app updates. Still in progress: GameCube & Dreamcast (performance work), ROM-hack patching,
+> and slang shaders.
 
 > **Legal notice:** This project is a frontend only. It does not include, distribute, or facilitate the
 > acquisition of any copyrighted software, ROM images, BIOS files, or other proprietary system files.
@@ -25,9 +26,11 @@ XInput → SDL3 gamepad, Win32 core loading → `dlopen`).
 ## Requirements
 
 - A modern 64-bit Linux desktop (developed on **Debian 13 / KDE Plasma**, X11 or Wayland)
-- Runtime libraries (most desktops already have these; the `.deb` declares them as dependencies):
-  `libsdl3-0` (audio + controllers), `libvulkan1` + Mesa drivers (hardware rendering),
-  `libvlc` (in-app video), `ffmpeg` (recording), plus the usual `libx11-6`/`libice6`/`libsm6`/`libfontconfig1`
+- Runtime libraries (most desktops already have these; the `.deb` declares them):
+  `libsdl3-0` (audio + controllers), `libegl1`/`libgl1` + Mesa drivers (game rendering),
+  `ffmpeg` (recording encodes), `libx11-6` + `libfontconfig1` (UI), ICU (`libicu7x`).
+  Recommended: `libvlc5` + `vlc-plugin-base` (video snap previews). Optional: `libvulkan1`
+  (only the legacy in-process presenter uses it; the default OpenGL path doesn't)
 - libretro core `.so` files (downloadable in-app — Preferences → Cores)
 - Optional: DAT files for ROM identification (Preferences → Cores / Extras)
 
@@ -123,8 +126,13 @@ handled by the .NET BCL; `.7z`/`.rar`/`.tar`/`.gz` via SharpCompress (no native 
 
 Themes (Dark / Light / OLED / Midnight + a visual editor) · automatic artwork & metadata (OpenVGDB +
 libretro thumbnails, optional ScreenScraper) · **SDL3** controller support with analog-stick-as-D-pad ·
-RetroAchievements · GitHub cloud sync of saves + library · disk swapping (L3 + Start) · per-game notes ·
-game manuals · cheats · ROM-hack patching (IPS/BPS/UPS) · core options · play-time tracking.
+**RetroAchievements** (unlock toasts with a full appearance editor, hardcore mode, Achievements tab
+with trophy case + activity heatmap, friends with unlock feeds + leaderboard toasts, CHD support) ·
+screenshots & **gameplay recording** (x264) · GitHub cloud sync of saves + library · disc swapping
+(L3 + Start) · per-game notes · game manuals (auto-download) · cheats (+ cheat database import) ·
+core options · save states with screenshots · play-time tracking · **in-app updates**.
+
+Not yet ported from upstream: ROM-hack patching (IPS/BPS/UPS) and slang shader presets.
 
 (See the upstream [Emutastic wiki](https://github.com/codingncaffeine/Emutastic/wiki) for per-feature
 detail — behavior is intended to match.)
@@ -142,8 +150,7 @@ Follows the XDG Base Directory spec:
     DATs/                        (No-Intro / Redump DATs — downloadable in-app)
     Cores/                       (libretro core .so files — downloadable in-app)
     System/                      (BIOS files)
-    Saves/ / Screenshots/ / Recordings/ / Artwork/ / Themes/ / ...
-~/.cache/Emutastic/              (transient caches)
+    Save States/ / Screenshots/ / Recordings/ / Artwork/ / Manuals/ / Cheats/ / Logs/ / ...
 ```
 
 ### Installing & updating
@@ -175,13 +182,14 @@ Linux PC; paths are stored relative to `PortableData/` so the install travels in
 
 Requires the **.NET 10 SDK** and **Avalonia 12**.
 
-The Wayland game window is presented through a small native shim (`native/wlpresent/`, an own
-`xdg_toplevel` + EGL/GL presenter — the path that hits a clean windowed 60 fps). The build compiles it
-automatically (an MSBuild target invokes `native/wlpresent/build.sh` and copies `libwlpresent.so` beside
-the app), so building from source needs the C toolchain + Wayland/OpenGL **development** packages:
+Three native libraries build automatically from vendored sources via MSBuild targets:
+`libwlpresent.so` (the Wayland game window — an own `xdg_toplevel` + EGL/GL presenter, the path
+that hits a clean windowed 60 fps), `librcheevos.so` (RetroAchievements, pinned v11.6.0 with an
+ABI-check harness), and `libchdr.so` (CHD disc images, built with CMake). Building from source
+therefore needs the C toolchain + CMake + Wayland/OpenGL **development** packages:
 
 ```sh
-sudo apt install build-essential pkg-config libwayland-dev libegl-dev libgl-dev
+sudo apt install build-essential pkg-config cmake libwayland-dev libegl-dev libgl-dev
 ```
 
 ```sh
@@ -191,7 +199,7 @@ dotnet build src/Emutastic.slnx -c Release
 ```
 
 > These `-dev` packages are **only needed to build from source** — they ship the headers the shim is
-> compiled against. End users running a packaged release (`.deb`/AppImage/Flatpak) don't need them: the
+> compiled against. End users running a packaged release (`.deb` or tarball) don't need them: the
 > compiled `libwlpresent.so` is bundled in the package. If the dev packages are missing the managed build
 > still succeeds, but the native game window won't be produced.
 
@@ -218,7 +226,7 @@ list. Please support those projects directly.
 | [rcheevos](https://github.com/RetroAchievements/rcheevos) | RetroAchievements client | MIT |
 | [libchdr](https://github.com/rtissera/libchdr) | CHD format reader | BSD 3-Clause |
 | [LibVLCSharp](https://github.com/videolan/libvlcsharp) | In-app video playback | LGPL-2.1 |
-| [librashader](https://github.com/SnowflakePowered/librashader) | slang shader presets (optional) | MPL-2.0 / MIT |
+| [librashader](https://github.com/SnowflakePowered/librashader) | slang shader presets (planned — not yet integrated) | MPL-2.0 / MIT |
 
 Controller illustrations from [OpenEmuControllerArt](https://github.com/kodi-game/OpenEmuControllerArt)
 (BSD 3-Clause; not affiliated with OpenEmu). Bezels from [The Bezel Project](https://github.com/thebezelproject).
