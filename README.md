@@ -11,11 +11,12 @@ The goal is a **1:1 clone**: aesthetically and functionally identical to the Win
 platform plumbing swapped underneath (WPF → Avalonia, Direct3D/Vulkan → OpenGL/Vulkan, WASAPI → SDL3,
 XInput → SDL3 gamepad, Win32 core loading → `dlopen`).
 
-> **Status:** 0.5.0 — at feature parity with upstream for the systems listed below: library +
+> **Status:** 0.6.1 — at feature parity with upstream for the systems listed below: library +
 > import, hardware-rendered cores, save states, cheats, recording, manuals/notes, the full
-> RetroAchievements suite (unlocks, hardcore, Achievements tab, friends, leaderboard toasts), and
-> in-app updates. Still in progress: GameCube & Dreamcast (performance work), ROM-hack patching,
-> and slang shaders.
+> RetroAchievements suite (unlocks, hardcore, Achievements tab, friends, leaderboard toasts),
+> GitHub cloud sync (shared or per-PC repositories, optional encryption — interoperates with the
+> Windows app), and in-app updates. Still in progress: GameCube & Dreamcast (performance work),
+> ROM-hack patching, and slang shaders.
 
 > **Legal notice:** This project is a frontend only. It does not include, distribute, or facilitate the
 > acquisition of any copyrighted software, ROM images, BIOS files, or other proprietary system files.
@@ -128,14 +129,38 @@ Themes (Dark / Light / OLED / Midnight + a visual editor) · automatic artwork &
 libretro thumbnails, optional ScreenScraper) · **SDL3** controller support with analog-stick-as-D-pad ·
 **RetroAchievements** (unlock toasts with a full appearance editor, hardcore mode, Achievements tab
 with trophy case + activity heatmap, friends with unlock feeds + leaderboard toasts, CHD support) ·
-screenshots & **gameplay recording** (x264) · GitHub cloud sync of saves + library · disc swapping
+screenshots & **gameplay recording** (x264) · **GitHub cloud sync** (below) · disc swapping
 (L3 + Start) · per-game notes · game manuals (auto-download) · cheats (+ cheat database import) ·
 core options · save states with screenshots · play-time tracking · **in-app updates**.
 
 Not yet ported from upstream: ROM-hack patching (IPS/BPS/UPS) and slang shader presets.
 
 (See the upstream [Emutastic wiki](https://github.com/codingncaffeine/Emutastic/wiki) for per-feature
-detail — behavior is intended to match.)
+detail — behavior is intended to match. Diagnostic logs live in the `Logs/` folder of the data
+directory and match the wiki's [Log Files](https://github.com/codingncaffeine/Emutastic/wiki/Log-Files)
+guide, with one delta: `controller-diag.log` is in `Logs/` too, not next to the executable.)
+
+---
+
+## Cloud Sync
+
+Sign in with your GitHub account (**Preferences → Backups** — device flow, no password stored) and
+your battery saves + game library sync through a private repository on your account. Saves pull
+automatically before a game launches and upload when the session ends (configurable: on game close /
+every 15 minutes / manual), or sync everything on demand with **Sync Now**.
+
+- **Cross-platform** — the same repository serves the Windows app and this port: save on one
+  machine, pick up on the other. Battery saves are keyed by ROM hash, so both installs must import
+  the same ROM files.
+- **Shared or per-PC** — by default every PC shares one `emutastic-saves` repository, so your saves
+  and library follow you between machines. Toggle *"Make this PC unique"* and that machine backs up
+  to its own `emutastic-saves-<hostname>` repository instead — other machines never read or write it.
+- **Optional encryption** — AES-256-GCM with a passphrase you choose; the same passphrase is
+  required on every PC that shares the repository.
+- The library database syncs last-writer-wins. If you run established libraries on two machines,
+  take a backup (**Back Up Now**) before your first sync on each.
+
+Sync activity is logged to `Logs/cloudsync.log`.
 
 ---
 
