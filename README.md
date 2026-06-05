@@ -145,9 +145,13 @@ guide, with one delta: `controller-diag.log` is in `Logs/` too, not next to the 
 ## Cloud Sync
 
 Sign in with your GitHub account (**Preferences → Backups** — device flow, no password stored) and
-your battery saves + game library sync through a private repository on your account. Saves pull
-automatically before a game launches and upload when the session ends (configurable: on game close /
-every 15 minutes / manual), or sync everything on demand with **Sync Now**.
+your battery saves + game library sync through a private repository on your account.
+
+<details>
+<summary><strong>How it works</strong> (click to expand)</summary>
+
+Saves pull automatically before a game launches and upload when the session ends (configurable:
+on game close / every 15 minutes / manual), or sync everything on demand with **Sync Now**.
 
 - **Cross-platform** — the same repository serves the Windows app and this port: save on one
   machine, pick up on the other. Battery saves are keyed by ROM hash, so both installs must import
@@ -161,6 +165,8 @@ every 15 minutes / manual), or sync everything on demand with **Sync Now**.
   take a backup (**Back Up Now**) before your first sync on each.
 
 Sync activity is logged to `Logs/cloudsync.log`.
+
+</details>
 
 ---
 
