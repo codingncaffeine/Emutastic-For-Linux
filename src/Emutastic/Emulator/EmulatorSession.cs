@@ -162,6 +162,20 @@ namespace Emutastic.Emulator
         private volatile bool _bezelRowVisible, _bezelActive, _bezelLoaded, _bezelFetching;
         private volatile bool _govRowVisible, _govActive;                           // Vectrex overlay state
 
+        // NDS screen-layout display names (upstream's NdsLayoutLabels — DeSmuME option values).
+        // melonDS values are already human-readable and pass through unmapped.
+        private static readonly Dictionary<string, string> NdsLayoutLabels = new()
+        {
+            { "top/bottom",    "Top / Bottom" },
+            { "bottom/top",    "Bottom / Top" },
+            { "left/right",    "Side by Side" },
+            { "right/left",    "Side by Side (reversed)" },
+            { "top only",      "Top Screen Only" },
+            { "bottom only",   "Bottom Screen Only" },
+            { "hybrid/top",    "Hybrid (Top focus)" },
+            { "hybrid/bottom", "Hybrid (Bottom focus)" },
+        };
+
         // ── Built-in shader presets (upstream's ShaderPreset enum, same order/names — the index is
         // the shim's wlp_set_shader id). Persisted per game as shader_{gameId} = enum name; a saved
         // "slang:" value (downloaded pack, not yet ported on Linux) degrades gracefully to None.
@@ -1096,6 +1110,20 @@ namespace Emutastic.Emulator
                     m.Add((_govActive ? "Overlay: On" : "Overlay: Off", true, null, "\x01OVERLAY"));
                 if (_bezelRowVisible)
                     m.Add((_bezelActive ? "Bezel: On" : "Bezel: Off", true, null, "\x01BEZEL"));
+                // NDS screen layout (upstream's OverlayScreenLayoutBtn): cycle the core's layout
+                // option — DeSmuME and melonDS announce different keys; show whichever this
+                // session's core declared. Applies live via the generic CycleCoreOption path.
+                if (HandlerConsoleName == "NDS")
+                {
+                    string layoutKey = CoreOptionValue("desmume_screens_layout").Length > 0
+                        ? "desmume_screens_layout"
+                        : CoreOptionValue("melonds_screen_layout").Length > 0 ? "melonds_screen_layout" : "";
+                    if (layoutKey.Length > 0)
+                    {
+                        string cur = CoreOptionValue(layoutKey);
+                        m.Add(("Screen Layout", true, NdsLayoutLabels.GetValueOrDefault(cur, cur), layoutKey));
+                    }
+                }
                 if (HandlerConsoleName == "N64" && CoreOptionValue("mupen64plus-pak1").Length > 0)
                     m.Add(("Pak", true, CoreOptionValue("mupen64plus-pak1"), "mupen64plus-pak1"));
                 m.Add((IsRecording ? "Stop Recording" : "Record", true, null, "\x01RECORD"));
