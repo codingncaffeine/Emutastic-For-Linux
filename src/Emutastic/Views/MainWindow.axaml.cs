@@ -752,11 +752,28 @@ public partial class MainWindow : Window
                 var updates = await new Services.CoreDownloadService()
                     .CheckAllForUpdatesAsync(AppPaths.GetCoresFolder());
                 if (updates.Count > 0)
+                {
+                    _coreUpdatesNotified = true;   // banner click → Preferences → Cores
                     Dispatcher.UIThread.Post(() => _vm?.SetStatus(updates.Count == 1
                         ? "1 core update available — Preferences → Cores"
                         : $"{updates.Count} core updates available — Preferences → Cores", 20_000));
+                }
             }
             catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"[CoreUpdateCheck] {ex.Message}"); }
+
+            // App update check (upstream MainWindow:383 — runs after the core check so the two
+            // GitHub probes don't compete). Persistent banner; click → confirm → download+restart.
+            try
+            {
+                var update = await Services.UpdateService.CheckAsync(System.Threading.CancellationToken.None);
+                if (update != null)
+                {
+                    _pendingAppUpdate = update;
+                    Dispatcher.UIThread.Post(() =>
+                        _vm?.SetStatus($"Emutastic {update.Tag} available — click to install", 0));
+                }
+            }
+            catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"[AppUpdateCheck] {ex.Message}"); }
 
             Services.StartupTrace.Mark("deferred_startup_work_done");
         });
@@ -815,6 +832,10 @@ public partial class MainWindow : Window
         if (prefsBtn != null) prefsBtn.Click += (_, _) => PreferencesWindow.OpenOrFocus(this);
         var newCollBtn = this.FindControl<Button>("NewCollectionButton");
         if (newCollBtn != null) newCollBtn.Click += (_, _) => NewCollection();
+        // Status banner click (upstream BannerBorder_MouseLeftButtonUp): pending app update →
+        // confirm + install; core-update notice → Preferences → Cores.
+        var banner = this.FindControl<Border>("StatusBanner");
+        if (banner != null) banner.PointerPressed += OnBannerPressed;
         RefreshCollectionsSidebar();
 
         Task.Run(() =>
@@ -909,6 +930,40 @@ public partial class MainWindow : Window
     // Left-click a card: plain → select one + open detail; Ctrl → toggle; Shift → range from
     // the anchor (ports upstream GameCard_Click + DoRangeSelect). Right-click falls through to
     // ContextRequested. We handle the press so Avalonia's built-in Multiple-toggle doesn't fire.
+    // ── Status-banner click (upstream BannerBorder_MouseLeftButtonUp): a pending app update
+    //    installs after confirmation; the core-update notice opens Preferences → Cores. ─────────
+    private Services.UpdateService.AppUpdate? _pendingAppUpdate;
+    private bool _coreUpdatesNotified;
+
+    private async void OnBannerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        try
+        {
+            if (_vm?.IsNotification != true) return;
+
+            if (_pendingAppUpdate is { } update)
+            {
+                bool ok = await new ConfirmDialog("Update Available",
+                    $"Update to {update.Tag}?\n\nThe app will download the update and restart.",
+                    "Update").ShowDialog<bool>(this);
+                if (!ok) return;
+                _pendingAppUpdate = null;
+                var progress = new Progress<(int pct, string msg)>(p => _vm?.SetStatus(p.msg, 0));
+                string? err = await Services.UpdateService.DownloadAndApplyAsync(
+                    update.Asset, update.Kind, progress, System.Threading.CancellationToken.None);
+                if (err != null) _vm?.SetStatus(err, 10_000);   // success never returns — the app exits
+                return;
+            }
+
+            if (_coreUpdatesNotified)
+            {
+                _coreUpdatesNotified = false;
+                PreferencesWindow.OpenOrFocus(this, panel: "NavCores");
+            }
+        }
+        catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"[Banner] click failed: {ex.Message}"); }
+    }
+
     private void OnGamePointerPressed(object? sender, PointerPressedEventArgs e)
     {
         if (!e.GetCurrentPoint(sender as Visual).Properties.IsLeftButtonPressed) return;

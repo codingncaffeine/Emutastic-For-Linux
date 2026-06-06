@@ -60,6 +60,54 @@ namespace Emutastic.Services
 
         public sealed record ReleaseAsset(string Name, string Url, long Size);
 
+        /// <summary>A newer self-installable release found by <see cref="CheckAsync"/>.</summary>
+        public sealed record AppUpdate(string Tag, ReleaseAsset Asset, InstallKind Kind);
+
+        /// <summary>
+        /// Startup app-update probe (port of upstream MainWindow's post-core-check call).
+        /// Honors <c>UserPreferences.CheckForUpdates</c>; returns null unless a strictly newer
+        /// release exists AND this install kind can self-update. Never throws.
+        /// </summary>
+        public static async Task<AppUpdate?> CheckAsync(CancellationToken ct)
+        {
+            try
+            {
+                var prefs = App.Configuration?.GetUserPreferences();
+                if (prefs?.CheckForUpdates == false) return null;
+
+                var kind = DetectInstallKind();
+                if (kind is not (InstallKind.Deb or InstallKind.SelfContained)) return null;
+
+                using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+                http.DefaultRequestHeaders.UserAgent.ParseAdd("Emutastic/updater");
+                string json = await http.GetStringAsync(LatestApi, ct).ConfigureAwait(false);
+
+                var obj = Newtonsoft.Json.Linq.JObject.Parse(json);
+                string tag = obj.Value<string>("tag_name") ?? "";
+                if (!Version.TryParse(tag.TrimStart('v', 'V').Trim(), out var remote)) return null;
+                var local = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+                if (local == null) return null;
+                if (new Version(remote.Major, remote.Minor, remote.Build)
+                        .CompareTo(new Version(local.Major, local.Minor, local.Build)) <= 0) return null;
+
+                var assets = new System.Collections.Generic.List<ReleaseAsset>();
+                if (obj["assets"] is Newtonsoft.Json.Linq.JArray arr)
+                    foreach (var a in arr)
+                        assets.Add(new ReleaseAsset(
+                            a.Value<string>("name") ?? "",
+                            a.Value<string>("browser_download_url") ?? "",
+                            a.Value<long?>("size") ?? 0));
+
+                var asset = PickAsset(kind, assets);
+                return asset == null ? null : new AppUpdate(tag, asset, kind);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Update] startup check failed: {ex.Message}");
+                return null;
+            }
+        }
+
         /// <summary>Picks the right asset for this install kind, or null.</summary>
         public static ReleaseAsset? PickAsset(InstallKind kind, System.Collections.Generic.IReadOnlyList<ReleaseAsset> assets)
         {

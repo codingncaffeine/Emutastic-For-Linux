@@ -1200,7 +1200,7 @@
              Mirrors upstream MainWindow ToastStack. -->
         <StackPanel Name="ToastStack" ZIndex="100" HorizontalAlignment="Right"
                     VerticalAlignment="Bottom" Margin="0,0,18,18" IsHitTestVisible="True"/>
-        <Border Grid.Row="2" Background="{DynamicResource BgSecondaryBrush}"
+        <Border Name="StatusBanner" Grid.Row="2" Background="{DynamicResource BgSecondaryBrush}"
                 BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0"
                 Padding="16,8" IsVisible="{Binding IsBannerVisible}">
             <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">

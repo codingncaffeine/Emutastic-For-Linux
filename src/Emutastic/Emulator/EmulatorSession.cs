@@ -1533,7 +1533,7 @@ namespace Emutastic.Emulator
                 {
                     case GlOsd.BtnPower: RequestQuit(); break;
                     case GlOsd.BtnPause: SetPaused(!IsPaused); break;
-                    case GlOsd.BtnReset: RequestReset(); break;
+                    case GlOsd.BtnReset: RequestReset(); ShowDiskMessage("Game reset", 2); break;   // upstream OverlayReset_Click feedback
                     // Pill Save mirrors the status-bar Save State button (timestamped, like upstream).
                     case GlOsd.BtnSave:
                         RequestSaveState(DateTime.Now.ToString("yyyy-MM-dd HH.mm.ss"));

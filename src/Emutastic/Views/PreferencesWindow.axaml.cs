@@ -43,17 +43,27 @@ public partial class PreferencesWindow : Window
     private static PreferencesWindow? _open;
 
     /// <summary>Open Preferences (reusing the existing window if already open), optionally landing on
-    /// the Controls panel with <paramref name="console"/> preselected.</summary>
-    public static void OpenOrFocus(Window owner, string? console = null)
+    /// the Controls panel with <paramref name="console"/> preselected, or on the nav section named by
+    /// <paramref name="panel"/> (a RadioButton name, e.g. "NavCores").</summary>
+    public static void OpenOrFocus(Window owner, string? console = null, string? panel = null)
     {
         if (_open != null)
         {
             if (!string.IsNullOrEmpty(console)) _open.SelectConsole(console);
+            if (!string.IsNullOrEmpty(panel)) _open.SelectPanelNav(panel);
             _open.Activate();
             return;
         }
         _open = new PreferencesWindow(console);
+        if (!string.IsNullOrEmpty(panel)) _open.SelectPanelNav(panel);
         _open.Show(owner);
+    }
+
+    /// <summary>Switch to a nav section by its RadioButton name (e.g. "NavCores").</summary>
+    public void SelectPanelNav(string nav)
+    {
+        var rb = this.FindControl<RadioButton>(nav);
+        if (rb != null) rb.IsChecked = true;   // IsCheckedChanged → ShowPanel
     }
 
     /// <summary>Reselect the Controls system combo (and reload its mappings) for a console tag.</summary>
