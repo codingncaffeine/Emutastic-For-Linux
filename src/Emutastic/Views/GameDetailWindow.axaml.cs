@@ -384,7 +384,10 @@ public partial class GameDetailWindow : Window
     private void FavoriteButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         _game.IsFavorite = !_game.IsFavorite;
-        _db.ToggleFavorite(_game.Id, _game.IsFavorite);
+        // UI updates first; persistence off the UI thread (same blocking class as the rating fix:
+        // a contended SQLite write must never pin the UI thread).
+        bool fav = _game.IsFavorite;
+        _ = Task.Run(() => { try { _db.ToggleFavorite(_game.Id, fav); } catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"[DetailFav] {ex.Message}"); } });
         Get<Button>("FavoriteButton").Content = _game.IsFavorite ? "♥  Favorited" : "♡  Favorite";
         Get<Border>("FavoriteBadge").IsVisible = _game.IsFavorite;
     }
@@ -409,7 +412,7 @@ public partial class GameDetailWindow : Window
             string? newTitle = await new RenameWindow(_game.Title).ShowDialog<string?>(this);
             if (string.IsNullOrWhiteSpace(newTitle)) return;
             _game.Title = newTitle;
-            _db.UpdateTitle(_game.Id, _game.Title);
+            await Task.Run(() => _db.UpdateTitle(_game.Id, _game.Title));
             Get<TextBlock>("GameTitle").Text = _game.Title;
             Get<TextBlock>("ArtPlaceholderText").Text = _game.Title;
         };
@@ -443,7 +446,7 @@ public partial class GameDetailWindow : Window
             bool ok = await new ConfirmDialog("Remove Game",
                 $"Remove \"{_game.Title}\" from your library?\n\nThis will not delete the ROM file.",
                 "Remove", danger: true).ShowDialog<bool>(this);
-            if (ok) { _db.DeleteGame(_game.Id); Close(); }
+            if (ok) { await Task.Run(() => _db.DeleteGame(_game.Id)); Close(); }
         };
         menu.Items.Add(remove);
 

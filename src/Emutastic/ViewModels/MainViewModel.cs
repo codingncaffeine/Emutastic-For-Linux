@@ -217,7 +217,7 @@ namespace Emutastic.ViewModels
         {
             IsShowingFavorites = false;
             IsMixedView = true;
-            LoadRecent(_db);
+            await LoadRecentAsync(_db);
             ToolbarTitle = "Recently Played";
             Navigated?.Invoke("Recent");
             await PreloadVisibleArtworkAsync();
@@ -227,7 +227,7 @@ namespace Emutastic.ViewModels
         {
             IsShowingFavorites = true;
             IsMixedView = true;
-            LoadFavorites(_db);
+            await LoadFavoritesAsync(_db);
             ToolbarTitle = "Favorites";
             Navigated?.Invoke("Favorites");
             await PreloadVisibleArtworkAsync();
@@ -238,7 +238,7 @@ namespace Emutastic.ViewModels
             CancelInFlightSearch();
             IsShowingFavorites = false;
             IsMixedView = true;
-            var games = _db.GetRecentlyAdded(25);
+            var games = await Task.Run(() => _db.GetRecentlyAdded(25));
             Games = new ObservableCollection<Game>(games);
             IsGroupedView = false;
             GameCountText = $"{games.Count} games";
@@ -252,7 +252,7 @@ namespace Emutastic.ViewModels
             CancelInFlightSearch();
             IsShowingFavorites = false;
             IsMixedView = true;
-            var games = _db.GetGamesByCollectionId(collectionId);
+            var games = await Task.Run(() => _db.GetGamesByCollectionId(collectionId));
             Games = new ObservableCollection<Game>(games);
             IsGroupedView = false;
             GameCountText = $"{games.Count} games";
@@ -462,20 +462,22 @@ namespace Emutastic.ViewModels
             UpdateCount();
         }
 
-        public void LoadFavorites(DatabaseService db)
+        // DB reads run off the UI thread (WAL readers never block on writers, but a large query
+        // on a slow disk still janks); collection assignment stays on the calling (UI) context.
+        public async Task LoadFavoritesAsync(DatabaseService db)
         {
             CancelInFlightSearch();
-            var favs = db.GetFavorites();
+            var favs = await Task.Run(() => db.GetFavorites());
             Games = new ObservableCollection<Game>(favs);
             IsGroupedView = false;
             InvalidateCache();
             UpdateCount();
         }
 
-        public void LoadRecent(DatabaseService db)
+        public async Task LoadRecentAsync(DatabaseService db)
         {
             CancelInFlightSearch();
-            var recent = db.GetRecentlyPlayed();
+            var recent = await Task.Run(() => db.GetRecentlyPlayed());
             Games = new ObservableCollection<Game>(recent);
             IsGroupedView = false;
             InvalidateCache();

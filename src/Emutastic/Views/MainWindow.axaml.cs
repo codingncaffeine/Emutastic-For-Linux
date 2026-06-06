@@ -435,9 +435,14 @@ public partial class MainWindow : Window
             {
                 var artBorder = new Border { Height = 200, ClipToBounds = true, Background = Brushes.Transparent };
                 string? artPath = game.DisplayArtPath;
-                if (!string.IsNullOrEmpty(artPath) && System.IO.File.Exists(artPath)
-                    && DecodeThumb(artPath, 296) is { } bmp)
-                    artBorder.Child = new Image { Source = bmp, Stretch = Stretch.Uniform };
+                if (!string.IsNullOrEmpty(artPath) && System.IO.File.Exists(artPath))
+                {
+                    // Async decode (cache hit applies instantly) — sync per-card decode froze the
+                    // UI for the whole panel build on large favorites lists.
+                    var img = new Image { Stretch = Stretch.Uniform };
+                    Controls.AsyncImage.SetSourcePath(img, artPath);
+                    artBorder.Child = img;
+                }
                 else
                     artBorder.Child = new TextBlock
                     {
@@ -1645,10 +1650,10 @@ public partial class MainWindow : Window
             game.IsFavorite = !game.IsFavorite;
             _vm!.RefreshGame(game);
             // Favorites view re-reads the DB, so reload only after the write lands.
-            DbWriteAsync(() => _db!.ToggleFavorite(game.Id, game.IsFavorite), thenOnUi: () =>
+            DbWriteAsync(() => _db!.ToggleFavorite(game.Id, game.IsFavorite), thenOnUi: () => RunGuarded(async () =>
             {
-                if (_vm?.IsShowingFavorites == true) { _vm.LoadFavorites(_db!); PopulateFavoritesView(); }
-            });
+                if (_vm?.IsShowingFavorites == true) { await _vm.LoadFavoritesAsync(_db!); PopulateFavoritesView(); }
+            }));
         }));
 
         items.Add(new Separator());
@@ -2080,10 +2085,13 @@ public partial class MainWindow : Window
         var stack = new StackPanel();
 
         var thumb = new Border { Height = 100, ClipToBounds = true, Background = Brushes.Black };
-        if (s.ScreenshotPath.Length > 0 && System.IO.File.Exists(s.ScreenshotPath))
+        if (s.ScreenshotPath.Length > 0)
         {
-            var bmp = DecodeThumb(s.ScreenshotPath, 296);
-            if (bmp != null) thumb.Child = new Image { Source = bmp, Stretch = Stretch.UniformToFill };
+            // Async decode (cache hit applies instantly): a sync DecodeThumb here ran once PER CARD
+            // on the UI thread — multi-second freeze on large save-state libraries.
+            var img = new Image { Stretch = Stretch.UniformToFill };
+            Controls.AsyncImage.SetSourcePath(img, s.ScreenshotPath);
+            thumb.Child = img;
         }
         stack.Children.Add(thumb);
 
@@ -2134,17 +2142,21 @@ public partial class MainWindow : Window
             string oldCheevos = System.IO.Path.ChangeExtension(s.StatePath, ".cheevos");
             try
             {
-                if (System.IO.File.Exists(s.StatePath))      System.IO.File.Move(s.StatePath, newState, overwrite: true);
-                if (System.IO.File.Exists(s.ScreenshotPath)) System.IO.File.Move(s.ScreenshotPath, newPng, overwrite: true);
-                if (System.IO.File.Exists(oldJson))          System.IO.File.Move(oldJson, newJson, overwrite: true);
-                if (System.IO.File.Exists(oldCheevos))       System.IO.File.Move(oldCheevos, newCheevos, overwrite: true);
+                // File moves + DB write off the UI thread (large .state files can live on slow disks).
+                await Task.Run(() =>
+                {
+                    if (System.IO.File.Exists(s.StatePath))      System.IO.File.Move(s.StatePath, newState, overwrite: true);
+                    if (System.IO.File.Exists(s.ScreenshotPath)) System.IO.File.Move(s.ScreenshotPath, newPng, overwrite: true);
+                    if (System.IO.File.Exists(oldJson))          System.IO.File.Move(oldJson, newJson, overwrite: true);
+                    if (System.IO.File.Exists(oldCheevos))       System.IO.File.Move(oldCheevos, newCheevos, overwrite: true);
+                    _db!.UpdateSaveStateName(s.Id, newName, newState, newPng);
+                });
             }
             catch (Exception ex)
             {
                 await new ConfirmDialog("Error", $"Rename failed: {ex.Message}", "OK", infoOnly: true).ShowDialog<bool>(this);
                 return;
             }
-            _db!.UpdateSaveStateName(s.Id, newName, newState, newPng);
             PopulateSaveStatesView();
         })));
         menu.Items.Add(new Separator());
@@ -2153,12 +2165,16 @@ public partial class MainWindow : Window
             bool ok = await new ConfirmDialog("Delete Save State",
                 $"Delete \"{s.Name}\"? This cannot be undone.", "Delete", danger: true).ShowDialog<bool>(this);
             if (!ok) return;
-            try { if (System.IO.File.Exists(s.StatePath))      System.IO.File.Delete(s.StatePath);      } catch { }
-            try { if (System.IO.File.Exists(s.ScreenshotPath)) System.IO.File.Delete(s.ScreenshotPath); } catch { }
-            try { string p = System.IO.Path.ChangeExtension(s.StatePath, ".png");  if (System.IO.File.Exists(p)) System.IO.File.Delete(p); } catch { }
-            try { string j = System.IO.Path.ChangeExtension(s.StatePath, ".json"); if (System.IO.File.Exists(j)) System.IO.File.Delete(j); } catch { }
-            try { string c = System.IO.Path.ChangeExtension(s.StatePath, ".cheevos"); if (System.IO.File.Exists(c)) System.IO.File.Delete(c); } catch { }
-            _db!.DeleteSaveState(s.Id);
+            // File deletes + DB write off the UI thread (same blocking class as the rating fix).
+            await Task.Run(() =>
+            {
+                try { if (System.IO.File.Exists(s.StatePath))      System.IO.File.Delete(s.StatePath);      } catch { }
+                try { if (System.IO.File.Exists(s.ScreenshotPath)) System.IO.File.Delete(s.ScreenshotPath); } catch { }
+                try { string p = System.IO.Path.ChangeExtension(s.StatePath, ".png");  if (System.IO.File.Exists(p)) System.IO.File.Delete(p); } catch { }
+                try { string j = System.IO.Path.ChangeExtension(s.StatePath, ".json"); if (System.IO.File.Exists(j)) System.IO.File.Delete(j); } catch { }
+                try { string c = System.IO.Path.ChangeExtension(s.StatePath, ".cheevos"); if (System.IO.File.Exists(c)) System.IO.File.Delete(c); } catch { }
+                _db!.DeleteSaveState(s.Id);
+            });
             PopulateSaveStatesView();
         }));
         del.Foreground = new SolidColorBrush(Color.Parse("#FF5F57"));

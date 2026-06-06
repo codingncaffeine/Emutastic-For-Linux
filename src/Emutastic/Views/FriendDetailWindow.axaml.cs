@@ -902,7 +902,9 @@ namespace Emutastic.Views
                 string payload = System.Text.Json.JsonSerializer.Serialize(list);
                 long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                 long ttl = (long)TimeSpan.FromHours(24).TotalSeconds;
-                _db.SetRaCache(key, $"friend_compare:{_entry?.UserId ?? 0}", payload, now, ttl);
+                string tag = $"friend_compare:{_entry?.UserId ?? 0}";
+                // Best-effort cache — keep the (possibly contended) write off the UI thread.
+                _ = Task.Run(() => { try { _db.SetRaCache(key, tag, payload, now, ttl); } catch { } });
             }
             catch { /* cache write best-effort */ }
         }
