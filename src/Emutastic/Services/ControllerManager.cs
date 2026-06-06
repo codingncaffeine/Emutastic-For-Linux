@@ -115,9 +115,14 @@ namespace Emutastic.Services
         private void Poll()
         {
             if (!_initialized || _disposed) return;
-            // Only pump SDL ourselves when no game owns the pads — in-process (AnyActive) OR in a
-            // separate --game-host child (ExternalGameActive). Two pumpers over one device queue contend.
-            if (!EmulatorSession.AnyActive && !EmulatorSession.ExternalGameActive) { SDL_PumpEvents(); SDL_UpdateGamepads(); }
+            // Only skip pumping for IN-PROCESS sessions (AnyActive): their SdlInput pumps the same
+            // SDL instance from the emu thread, and two pumpers over one queue contend. A separate
+            // --game-host child has its OWN SDL in its own process — evdev serves concurrent
+            // readers, so pumping here can't fight it. (Gating on ExternalGameActive starved this
+            // process's SDL during any game session: a controller connected mid-session stayed
+            // listed-but-frozen — the Controls panel went unresponsive until an app restart.
+            // Windows never hit this; XInput state reads need no pump.)
+            if (!EmulatorSession.AnyActive) { SDL_PumpEvents(); SDL_UpdateGamepads(); }
             if (++_refreshCounter >= 60) { _refreshCounter = 0; Refresh(); }   // ~1Hz hotplug rescan
 
             if (!RawMode || _activeDevice < 0 || _activeDevice >= _pads.Count) return;
