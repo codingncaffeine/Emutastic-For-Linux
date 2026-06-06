@@ -210,7 +210,10 @@
                 </Grid>
                 <Grid Name="PanelCores" IsVisible="False">
                     <ScrollViewer Margin="24,16,24,16" VerticalScrollBarVisibility="Auto">
-                        <StackPanel Name="CoresListPanel"/>
+                        <!-- Right inset keeps the Download buttons clear of the overlay scrollbar
+                             (it floats over the content edge — buttons flush against it were
+                             getting mis-clicked as scrollbar drags). -->
+                        <StackPanel Name="CoresListPanel" Margin="0,0,18,0"/>
                     </ScrollViewer>
                 </Grid>
                 <Grid Name="PanelCoreOptions" IsVisible="False" ColumnDefinitions="200,*">
