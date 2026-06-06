@@ -259,6 +259,15 @@ namespace Emutastic.Controls
 
         protected override void OnItemsChanged(IReadOnlyList<object?> items, NotifyCollectionChangedEventArgs e)
         {
+            // GHOST-CARD root cause: RecycleRange exempts the container recorded in
+            // KeyboardNavigation.TabOnceActiveElement (the "where does Tab return to" memory —
+            // set by clicking a card, replaced only by the NEXT click, indifferent to selection,
+            // keyboard focus, and time). Across a collection change that memory points at a
+            // container bound to the OLD item set, so the exempted container survived every
+            // swap, painted over the new view. The memory is meaningless once the items change —
+            // drop it so the recycle sweep below is total.
+            if (ItemsControl is { } ic && KeyboardNavigation.GetTabOnceActiveElement(ic) != null)
+                KeyboardNavigation.SetTabOnceActiveElement(ic, null);
             // Simplest correct policy for our usage (navigation re-seats the whole collection, deletes
             // remove a handful): drop all realized containers and re-realize on the next measure.
             RecycleRange(int.MinValue, int.MaxValue);
