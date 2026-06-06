@@ -376,7 +376,7 @@
                                                      so the MultiBinding would never re-fire and the card couldn't
                                                      resize (matches upstream's AncestorLevel=1 Border binding). -->
                                                 <Binding Path="Width" RelativeSource="{RelativeSource AncestorType=Border}"/>
-                                                <Binding Path="DataContext.IsMixedView" RelativeSource="{RelativeSource AncestorType=ListBox}"/>
+                                                <Binding Path="DataContext.IsMixedView" ElementName="GameGridView"/>
                                             </MultiBinding>
                                         </Border.Height>
                                         <Panel>
@@ -425,7 +425,7 @@
                                         <MultiBinding Converter="{StaticResource ConsoleToArtHeight}">
                                             <Binding Path="Console"/>
                                             <Binding Path="Width" RelativeSource="{RelativeSource AncestorType=Border}"/>
-                                            <Binding Path="DataContext.IsMixedView" RelativeSource="{RelativeSource AncestorType=ListBox}"/>
+                                            <Binding Path="DataContext.IsMixedView" ElementName="GameGridView"/>
                                         </MultiBinding>
                                     </Panel.Height>
                                     <Border Name="SelGlow"
