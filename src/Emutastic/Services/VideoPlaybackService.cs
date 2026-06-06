@@ -46,7 +46,10 @@ namespace Emutastic.Services
                 // first UVD job hung the ring and the wedged SMU made the GPU reset
                 // unrecoverable (hard OS freeze, 2026-06-05). Decode-side twin of the
                 // h264_vaapi encode freeze (40100d4). Snaps are tiny clips; CPU decode is free.
-                var lib = new LibVLC("--no-audio", "--no-osd", "--no-snapshot-preview", "--avcodec-hw=none");
+                // --quiet: snaps stopped mid-decode (hover moves off a card) spam h264 'no frame!' +
+                // 'Failed to create video converter' to stderr — harmless, but it buries real output
+                // when running from a terminal.
+                var lib = new LibVLC("--no-audio", "--no-osd", "--no-snapshot-preview", "--avcodec-hw=none", "--quiet");
                 sw.Stop();
                 Trace.WriteLine($"[VideoPlayback] LibVLC warmed in {sw.ElapsedMilliseconds}ms");
                 return lib;
