@@ -1989,12 +1989,21 @@ public partial class MainWindow : Window
             }
         };
 
-        // Right-click → delete selection (or this one).
+        // Right-click → show-in-folder + delete selection (or this one).
         card.ContextRequested += (_, e) =>
         {
             var paths = _selectedScreenshots.Count > 0 ? _selectedScreenshots.ToList() : new List<string> { ss.FilePath };
             string label = paths.Count == 1 ? "🗑  Delete Screenshot" : $"🗑  Delete {paths.Count} Screenshots";
             var menu = new ContextMenu();
+            // Mirrors the library's "Show in Files" (upstream's "Show in Explorer", which selects
+            // the file). Always acts on the card under the cursor (ss), not the multi-selection —
+            // opening N file-manager windows for a shift-selection would be hostile.
+            menu.Items.Add(MenuAction("📁  Show in Files", () =>
+            {
+                if (System.IO.File.Exists(ss.FilePath)) Services.ShellOpen.ShowInFolder(ss.FilePath);
+                else _vm?.SetStatus("Screenshot file not found.", autoClear: true);
+            }));
+            menu.Items.Add(new Separator());
             menu.Items.Add(MenuAction(label, () => RunGuarded(() => DeleteScreenshotsWithConfirm(paths))));
             menu.Open(card);
             e.Handled = true;
