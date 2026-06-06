@@ -29,6 +29,7 @@ cp -f "src/Emutastic/Assets/buttons/powerbutton.png" "$PUB/" 2>/dev/null || true
 cp packaging/README.txt "$PUB/README.txt"
 cp LICENSE "$PUB/LICENSE"
 cp LICENSE-CONTROLLER-ART.txt "$PUB/LICENSE-CONTROLLER-ART.txt"
+cp NOTICES.txt "$PUB/NOTICES.txt"   # BSD-3/MIT attribution for the bundled native libs
 
 echo "── tarball"
 tar -C "$PUB" -czf "$OUT/Emutastic-$VER-linux-x64.tar.gz" .
@@ -43,6 +44,7 @@ cp -a "$PUB/." "$DEB/usr/lib/emutastic/"
 rm -f "$DEB/usr/lib/emutastic/README.txt"
 cp packaging/README.txt "$DEB/usr/share/doc/emutastic/README.txt"
 cp LICENSE "$DEB/usr/share/doc/emutastic/copyright"
+cp NOTICES.txt "$DEB/usr/share/doc/emutastic/NOTICES.txt"
 mkdir -p "$DEB/usr/share/metainfo"
 cp packaging/io.github.codingncaffeine.Emutastic.metainfo.xml "$DEB/usr/share/metainfo/"
 cat > "$DEB/usr/bin/emutastic" <<'WRAP'
