@@ -30,6 +30,8 @@ namespace Emutastic.Emulator
         const uint ENV_SET_INPUT_DESCRIPTORS = 11; // per-port button labels (feeds the turbo menu)
         const uint ENV_GET_SYSTEM_DIRECTORY = 9;
         const uint ENV_SET_PIXEL_FORMAT = 10;
+        const uint ENV_SET_SYSTEM_AV_INFO = 32;  // full AV reset (geometry + timing) mid-session
+        const uint ENV_SET_GEOMETRY = 37;        // lightweight geometry change (NDS layout switch etc.)
         const uint ENV_GET_VARIABLE = 15;
         const uint ENV_SET_VARIABLES = 16;
         const uint ENV_GET_VARIABLE_UPDATE = 17;
@@ -1768,6 +1770,26 @@ namespace Emutastic.Emulator
                 case ENV_SET_INPUT_DESCRIPTORS:
                     ParseInputDescriptors(data);
                     return true;
+                case ENV_SET_GEOMETRY:
+                    // Live geometry change — NDS screen-layout switches resize the output
+                    // (256×384 ↔ 512×192 ↔ hybrid) and announce the new shape here. Without
+                    // this the present kept letterboxing at the LOAD-time aspect, squishing
+                    // the new frame into the old box.
+                    if (data != IntPtr.Zero)
+                        ApplyGeometry(Marshal.PtrToStructure<retro_game_geometry>(data));
+                    return true;
+                case ENV_SET_SYSTEM_AV_INFO:
+                    // Full AV reset: honor the geometry half (the timing half — fps/sample-rate
+                    // changes — is rare mid-game and would need an audio-stream rebuild; log it
+                    // so a core that needs it is visible in the logs).
+                    if (data != IntPtr.Zero)
+                    {
+                        var av = Marshal.PtrToStructure<retro_system_av_info>(data);
+                        ApplyGeometry(av.geometry);
+                        if (av.timing.fps > 0 && Math.Abs(av.timing.fps - _fps) > 0.01)
+                            Trace.WriteLine($"[Emu] SET_SYSTEM_AV_INFO timing change requested ({_fps:F2} → {av.timing.fps:F2} fps) — geometry applied, timing kept");
+                    }
+                    return true;
                 case ENV_GET_SYSTEM_DIRECTORY:
                     if (data != IntPtr.Zero) Marshal.WriteIntPtr(data, _systemDirPtr);
                     return true;
@@ -2039,6 +2061,20 @@ namespace Emutastic.Emulator
             // readback cost ~1ms ↔ ~11ms, and the native stderr line is dropped when app-launched.
             Trace.WriteLine($"[Emu] HW-render {Platform.HwGlContext.Info()}");
             try { _hwContextReset?.Invoke(); } catch (Exception ex) { Trace.WriteLine($"[Emu] context_reset threw: {ex}"); }
+        }
+
+        // Recompute the display aspect from a mid-session geometry announcement and push it to the
+        // live presenter (the shim re-letterboxes from the next present; the aligned double write
+        // is safe cross-thread). Mirrors the load-time computation.
+        private void ApplyGeometry(retro_game_geometry geo)
+        {
+            double old = DisplayAspectRatio;
+            DisplayAspectRatio = _handler.GetDisplayAspectRatio(geo.base_width, geo.base_height, geo.aspect_ratio);
+            if (Math.Abs(DisplayAspectRatio - old) > 0.001)
+            {
+                Trace.WriteLine($"[Emu] geometry change: {geo.base_width}x{geo.base_height} ar={geo.aspect_ratio:F3} → DAR {DisplayAspectRatio:F3}");
+                _wlTop?.SetAspect(DisplayAspectRatio);
+            }
         }
 
         // ── Turbo / autofire ─────────────────────────────────────────────────────────────────────────
