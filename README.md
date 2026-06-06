@@ -137,9 +137,13 @@ with trophy case + activity heatmap, friends with unlock feeds + leaderboard toa
 screenshots & **gameplay recording** (x264) · **GitHub cloud sync** (below) · disc swapping
 (L3 + Start) · per-game notes · game manuals (auto-download) · cheats (+ cheat database import) ·
 core options · save states with screenshots · play-time tracking · **ROM hacks**
-(IPS/BPS/UPS soft-patching — original ROM untouched) · **in-app updates**.
+(IPS/BPS/UPS soft-patching — original ROM untouched) · **video shaders** (7 built-ins + the
+downloadable libretro GLSL pack) · **bezels & Vectrex overlays** · **turbo buttons** ·
+**in-app updates**.
 
-Not yet ported from upstream: slang shader presets.
+(Shader note: the Windows app runs the libretro *slang* pack through librashader; librashader
+ships no Linux binaries, so this port runs the libretro *GLSL* pack — the same shader library —
+through a built-in OpenGL preset chain.)
 
 (See the upstream [Emutastic wiki](https://github.com/codingncaffeine/Emutastic/wiki) for per-feature
 detail — behavior is intended to match. Diagnostic logs live in the `Logs/` folder of the data
@@ -263,7 +267,7 @@ list. Please support those projects directly.
 | [rcheevos](https://github.com/RetroAchievements/rcheevos) | RetroAchievements client | MIT |
 | [libchdr](https://github.com/rtissera/libchdr) | CHD format reader | BSD 3-Clause |
 | [LibVLCSharp](https://github.com/videolan/libvlcsharp) | In-app video playback | LGPL-2.1 |
-| [librashader](https://github.com/SnowflakePowered/librashader) | slang shader presets (planned — not yet integrated) | MPL-2.0 / MIT |
+| [libretro shaders](https://github.com/libretro/glsl-shaders) | downloadable GLSL shader presets (run by a built-in GL chain) | per-shader (see repo) |
 
 Controller illustrations from [OpenEmuControllerArt](https://github.com/kodi-game/OpenEmuControllerArt)
 (BSD 3-Clause; not affiliated with OpenEmu). Bezels from [The Bezel Project](https://github.com/thebezelproject).

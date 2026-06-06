@@ -9,6 +9,7 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
+using Avalonia.VisualTree;
 using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 
@@ -1556,10 +1557,11 @@ public partial class PreferencesWindow : Window
             int catFound = active.Sum(d => byDisplay[d].Count(FoundFor));
             int catTotal = active.Sum(d => byDisplay[d].Count);
 
-            var body = new StackPanel { IsVisible = false, Margin = new Thickness(0, 2, 0, 0) };
-            var header = MakeAccordionHeader(category, $"{active.Count} {(active.Count == 1 ? "system" : "systems")}", catFound, catTotal, body, 14);
+            var body = new StackPanel { Margin = new Thickness(0, 2, 0, 0) };
+            var nest = MakeAccordionNest(body);
+            var header = MakeAccordionHeader(category, $"{active.Count} {(active.Count == 1 ? "system" : "systems")}", catFound, catTotal, nest, 14, $"sysfiles/{category}");
             panel.Children.Add(header);
-            panel.Children.Add(body);
+            panel.Children.Add(nest);
 
             foreach (var display in active)
             {
@@ -1570,10 +1572,17 @@ public partial class PreferencesWindow : Window
         }
     }
 
-    // A clickable accordion header (chevron + label + summary + found/total badge) that toggles `body`.
-    private Border MakeAccordionHeader(string label, string summary, int found, int total, StackPanel body, double fontSize)
+    // Expansion state survives panel rebuilds (downloads/preferred-core clicks repaint the whole
+    // Cores panel — without this every accordion snapped shut and the view jumped, unlike the
+    // Windows app whose WPF accordion updates rows in place).
+    private readonly HashSet<string> _accordionExpanded = new();
+
+    // A clickable accordion header (chevron + label + summary + found/total badge) that toggles
+    // `body`. Pass a stateKey to remember the open/closed state across rebuilds.
+    private Border MakeAccordionHeader(string label, string summary, int found, int total, Control body, double fontSize, string? stateKey = null)
     {
-        var chevron = new TextBlock { Text = "▸", FontSize = fontSize, Foreground = Brush("TextSecondaryBrush"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) };
+        bool expanded = stateKey != null && _accordionExpanded.Contains(stateKey);
+        var chevron = new TextBlock { Text = expanded ? "▾" : "▸", FontSize = fontSize, Foreground = Brush("TextSecondaryBrush"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) };
         var grid = new Grid { Cursor = new Cursor(StandardCursorType.Hand), ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto") };
         Grid.SetColumn(chevron, 0);
         var lbl = new TextBlock { Text = label, FontSize = fontSize, FontWeight = FontWeight.SemiBold, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextPrimaryBrush"), VerticalAlignment = VerticalAlignment.Center };
@@ -1584,9 +1593,31 @@ public partial class PreferencesWindow : Window
         Grid.SetColumn(badge, 3);
         grid.Children.Add(chevron); grid.Children.Add(lbl); grid.Children.Add(sum); grid.Children.Add(badge);
         var header = new Border { Background = new SolidColorBrush(Color.Parse("#1F1F21")), CornerRadius = new CornerRadius(6), Padding = new Thickness(14, 12, 14, 12), Margin = new Thickness(0, 6, 0, 0), Child = grid };
-        header.PointerPressed += (_, _) => { body.IsVisible = !body.IsVisible; chevron.Text = body.IsVisible ? "▾" : "▸"; };
+        body.IsVisible = expanded;
+        header.PointerPressed += (_, _) =>
+        {
+            body.IsVisible = !body.IsVisible;
+            chevron.Text = body.IsVisible ? "▾" : "▸";
+            if (stateKey != null)
+            {
+                if (body.IsVisible) _accordionExpanded.Add(stateKey);
+                else _accordionExpanded.Remove(stateKey);
+            }
+        };
         return header;
     }
+
+    // Indented body wrapper for nested accordion levels: a subtle left guide rule + inset, so
+    // expanded content reads as belonging to its header (the flat layout looked unnested).
+    private Border MakeAccordionNest(Control body) => new()
+    {
+        IsVisible = false,
+        Child = body,
+        BorderBrush = Brush("BorderSubtleBrush"),
+        BorderThickness = new Thickness(1, 0, 0, 0),
+        Margin = new Thickness(10, 2, 0, 4),
+        Padding = new Thickness(14, 0, 0, 0),
+    };
 
     private Border MakeFoundBadge(int found, int total)
     {
@@ -1794,6 +1825,10 @@ public partial class PreferencesWindow : Window
         if (_coresBuilding) return;
         _coresBuilding = true;
         var panel = this.FindControl<StackPanel>("CoresListPanel")!;
+        // Rebuilds happen mid-interaction (a download finishing, a preferred-core click) — keep
+        // the user's place: scroll offset captured here, restored after the repaint lays out.
+        var coresScroller = panel.FindAncestorOfType<ScrollViewer>();
+        var savedScroll = coresScroller?.Offset ?? default;
         panel.Children.Clear();
         _coreUpdatePills.Clear();
         panel.Children.Add(new TextBlock { Text = "Scanning…", FontFamily = Font("PrimaryFont"), FontSize = 12, Foreground = Brush("TextMutedBrush"), Margin = new Thickness(2, 8, 0, 0) });
@@ -1863,9 +1898,10 @@ public partial class PreferencesWindow : Window
             int catInstalled = 0, catTotal = 0;
             foreach (var c in catConsoles) { var cs = Services.CoreManager.ConsoleCoreMap[c]; catTotal += cs.Length; catInstalled += cs.Count(IsInstalled); }
 
-            var catBody = new StackPanel { IsVisible = false };
-            panel.Children.Add(MakeAccordionHeader(category, $"{catConsoles.Count} {(catConsoles.Count == 1 ? "system" : "systems")}", catInstalled, catTotal, catBody, 14));
-            panel.Children.Add(catBody);
+            var catBody = new StackPanel();
+            var catNest = MakeAccordionNest(catBody);
+            panel.Children.Add(MakeAccordionHeader(category, $"{catConsoles.Count} {(catConsoles.Count == 1 ? "system" : "systems")}", catInstalled, catTotal, catNest, 14, $"cores/{category}"));
+            panel.Children.Add(catNest);
 
             foreach (var consoleName in catConsoles)
             {
@@ -1874,9 +1910,10 @@ public partial class PreferencesWindow : Window
                 string? savedPref = prefs.PreferredCores.TryGetValue(consoleName, out var pp) ? pp : null;
                 string activeDll = candidates.FirstOrDefault(d => d == savedPref && IsInstalled(d)) ?? candidates.FirstOrDefault(IsInstalled) ?? "";
 
-                var conBody = new StackPanel { IsVisible = false, Margin = new Thickness(12, 0, 0, 4) };
-                catBody.Children.Add(MakeAccordionHeader(consoleName, IsInstalled(activeDll) ? FormatCoreName(activeDll) : "Not installed", conInstalled, candidates.Length, conBody, 13));
-                catBody.Children.Add(conBody);
+                var conBody = new StackPanel();
+                var conNest = MakeAccordionNest(conBody);
+                catBody.Children.Add(MakeAccordionHeader(consoleName, IsInstalled(activeDll) ? FormatCoreName(activeDll) : "Not installed", conInstalled, candidates.Length, conNest, 13, $"cores/{category}/{consoleName}"));
+                catBody.Children.Add(conNest);
 
                 foreach (var dll in candidates)
                     conBody.Children.Add(BuildCoreRow(dll, consoleName, coresFolder, IsInstalled(dll), dll == activeDll && IsInstalled(dll), candidates.Count(IsInstalled) > 1));
@@ -1887,6 +1924,10 @@ public partial class PreferencesWindow : Window
         _ = DecorateCoreUpdatesAsync(coresFolder, updateAllBtn, allProgressBar, dlAllSummary);
 
         AppendExtrasSection(panel);
+        // Restore the pre-rebuild scroll position once the new content has been laid out.
+        if (coresScroller != null && savedScroll != default)
+            Avalonia.Threading.Dispatcher.UIThread.Post(() => coresScroller.Offset = savedScroll,
+                Avalonia.Threading.DispatcherPriority.Loaded);
         _coresBuilding = false;
     }
 
