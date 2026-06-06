@@ -1607,10 +1607,12 @@ namespace Emutastic.Emulator
                 var pickerItems = statePicker?.Select(p => (p.Name, p.RelTime)).ToList();
                 var cogItems = cogMenu?.Select(m => (m.Label, m.Enabled, m.Value)).ToList();
                 var (raToast, raToastAlpha) = RaToastForPresent();
+                var (raChallenges, raProgress, raIndVer) = RaIndicatorsForPresent();
                 if (osd.Build(ww, wh, shownStatus, title, winStyle, _wlTop.IsMaximized, titleHover, hudAlpha, hover, IsPaused,
                               pickerItems, pickerHover, statusHover,
                               cogItems, cogHover, cogMenu != null ? CoreName : "", fxFrame, IsRecording,
-                              raToast, raToastAlpha, RaHardcoreActive))
+                              raToast, raToastAlpha, RaHardcoreActive,
+                              raChallenges, raProgress, raIndVer))
                     _wlTop.SetOverlay(osd.Pixels, osd.Width, osd.Height);
 
                 // Present the latest frame every iteration; the shim's FIFO swap is the pace (re-presenting a
@@ -3346,6 +3348,86 @@ namespace Emutastic.Emulator
             });
         }
 
+        // ── RA challenge + progress indicators (rcheevos CHALLENGE_/PROGRESS_INDICATOR events).
+        // Upstream defines the events but never rendered them — this follows RetroArch's standard
+        // presentation: primed challenge badges bottom-right, a transient measured-progress pill
+        // top-right (rcheevos drives show/update/hide). Badge bitmaps share the toast cache.
+        private readonly Dictionary<uint, SkiaSharp.SKBitmap?> _raChallenges = new();   // under _raToastLock
+        private (string Text, SkiaSharp.SKBitmap? Badge)? _raProgress;                  // under _raToastLock
+        private int _raIndicatorVersion;   // bumped on every change → the OSD signature cache
+
+        private void SetRaChallenge(AchievementInfo info, bool shown)
+        {
+            lock (_raToastLock)
+            {
+                if (!shown) _raChallenges.Remove(info.Id);
+                else
+                {
+                    _raChallenges[info.Id] =
+                        info.BadgeUrl != null && _raBadgeCache.TryGetValue(info.BadgeUrl, out var b) ? b : null;
+                    if (info.BadgeUrl != null && !_raBadgeCache.ContainsKey(info.BadgeUrl))
+                        FetchBadgeThen(info.BadgeUrl, bmp =>
+                        { if (_raChallenges.ContainsKey(info.Id)) { _raChallenges[info.Id] = bmp; _raIndicatorVersion++; } });
+                }
+                _raIndicatorVersion++;
+            }
+        }
+
+        private void SetRaProgress(AchievementInfo? info, bool shown)
+        {
+            lock (_raToastLock)
+            {
+                if (!shown || info == null) _raProgress = null;
+                else
+                {
+                    string text = info.MeasuredProgress.Length > 0
+                        ? info.MeasuredProgress
+                        : $"{info.MeasuredPercent:0}%";
+                    var badge = info.BadgeUrl != null && _raBadgeCache.TryGetValue(info.BadgeUrl, out var b) ? b : null;
+                    _raProgress = (text, badge);
+                    if (info.BadgeUrl != null && !_raBadgeCache.ContainsKey(info.BadgeUrl))
+                        FetchBadgeThen(info.BadgeUrl, bmp =>
+                        { if (_raProgress is { } cur) { _raProgress = (cur.Text, bmp); _raIndicatorVersion++; } });
+                }
+                _raIndicatorVersion++;
+            }
+        }
+
+        // Fetch a badge into the shared cache, then run apply under the toast lock (no-op if the
+        // indicator moved on meanwhile). Mirrors the toast's late-badge join.
+        private void FetchBadgeThen(string badgeUrl, Action<SkiaSharp.SKBitmap?> apply)
+        {
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                SkiaSharp.SKBitmap? bmp = null;
+                try
+                {
+                    byte[] png = await _raBadgeHttp.GetByteArrayAsync(badgeUrl);
+                    bmp = SkiaSharp.SKBitmap.Decode(png);
+                }
+                catch (Exception ex) { Trace.WriteLine($"[RA] badge fetch failed ({badgeUrl}): {ex.Message}"); }
+                lock (_raToastLock)
+                {
+                    _raBadgeCache[badgeUrl] = bmp;
+                    apply(bmp);
+                }
+            });
+        }
+
+        /// <summary>Snapshot for the present thread: primed challenge badges (stable order) +
+        /// the progress pill, plus a version for the OSD's dirty-signature cache.</summary>
+        private (List<SkiaSharp.SKBitmap?>? challenges, (string Text, SkiaSharp.SKBitmap? Badge)? progress, int version)
+            RaIndicatorsForPresent()
+        {
+            lock (_raToastLock)
+            {
+                List<SkiaSharp.SKBitmap?>? ch = null;
+                if (_raChallenges.Count > 0)
+                    ch = _raChallenges.OrderBy(kv => kv.Key).Select(kv => kv.Value).ToList();
+                return (ch, _raProgress, _raIndicatorVersion);
+            }
+        }
+
         /// <summary>Login + identify (RaInit worker thread). Port of upstream's
         /// InitRetroAchievements; config writes become RaNewTokenResult for the parent.</summary>
         private void InitRetroAchievements()
@@ -3404,6 +3486,10 @@ namespace Emutastic.Emulator
                     info.Points > 0 ? $"{info.Points} points" : "", info.BadgeUrl);
                 client.GameCompleted += () => SetRaToast(
                     "GAME COMPLETE", "Mastery!", "All achievements earned!", "", null);
+                // In-game indicators (emu thread → state behind the toast lock; the present
+                // thread snapshots via RaIndicatorsForPresent).
+                client.ChallengeIndicatorChanged += SetRaChallenge;
+                client.ProgressIndicatorChanged += SetRaProgress;
                 // Leaderboard SCOREBOARD: the triumph/proximity decision needs the
                 // friend-rank cache, which lives in the LIBRARY (host has no DB and
                 // never writes config). Ship the event up; the library decides and

@@ -330,6 +330,57 @@ namespace Emutastic.Platform
             }
         }
 
+        // ── RA challenge + progress indicators (RetroArch's presentation) ─────────────
+        // Challenge badges: a primed "do X without failing" achievement shows its badge in a row
+        // bottom-right above the status bar, for as long as rcheevos keeps it primed. Progress
+        // pill: a transient top-right tracker ("47/100" + badge) while rcheevos shows it.
+        private static void DrawRaIndicators(SKCanvas c, int w, int h,
+            IReadOnlyList<SKBitmap?>? challenges, (string Text, SKBitmap? Badge)? progress)
+        {
+            const float size = 28, gap = 5, margin = 10;
+            if (challenges != null && challenges.Count > 0)
+            {
+                float x = w - margin;
+                float yTop = h - StatusBarH - margin - size;
+                using var bg = new SKPaint { Color = new SKColor(0x0F, 0x0F, 0x11, 0xCC), IsAntialias = true };
+                using var frame = new SKPaint
+                { Color = new SKColor(0xFF, 0xD7, 0x00, 0x88), IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1f };
+                using var glyph = new SKFont(SKTypeface.Default, 15f);
+                using var glyphPaint = new SKPaint { Color = new SKColor(0xFF, 0xD7, 0x00, 0xFF), IsAntialias = true };
+                foreach (var badge in challenges)
+                {
+                    x -= size;
+                    var r = new SKRect(x, yTop, x + size, yTop + size);
+                    c.DrawRoundRect(r, 4, 4, bg);
+                    if (badge != null)
+                        c.DrawBitmap(badge, new SKRect(r.Left + 2, r.Top + 2, r.Right - 2, r.Bottom - 2));
+                    else   // badge still fetching → gold bolt placeholder
+                        c.DrawText("⚡", r.MidX - glyph.MeasureText("⚡") / 2, r.MidY + 5, SKTextAlign.Left, glyph, glyphPaint);
+                    c.DrawRoundRect(r, 4, 4, frame);
+                    x -= gap;
+                }
+            }
+            if (progress is { } p && p.Text.Length > 0)
+            {
+                using var font = new SKFont(SKTypeface.Default, 12.5f);
+                const float badgeSz = 20, padX = 8, ph = 28;
+                float textW = font.MeasureText(p.Text);
+                float pw = padX + (p.Badge != null ? badgeSz + 6 : 0) + textW + padX;
+                float px = w - margin - pw, py = TitleBarHeight + margin;
+                var box = new SKRect(px, py, px + pw, py + ph);
+                using (var bg = new SKPaint { Color = new SKColor(0x0F, 0x0F, 0x11, 0xCC), IsAntialias = true })
+                    c.DrawRoundRect(box, ph / 2, ph / 2, bg);
+                float tx = px + padX;
+                if (p.Badge != null)
+                {
+                    c.DrawBitmap(p.Badge, new SKRect(tx, py + (ph - badgeSz) / 2, tx + badgeSz, py + (ph + badgeSz) / 2));
+                    tx += badgeSz + 6;
+                }
+                using var tp = new SKPaint { Color = SKColors.White, IsAntialias = true };
+                c.DrawText(p.Text, tx, box.MidY + font.Size * 0.36f, SKTextAlign.Left, font, tp);
+            }
+        }
+
         // Trim with a trailing ellipsis until the string fits maxW (single-line toast fields).
         private static string Ellipsize(string s, SKFont f, float maxW)
         {
@@ -457,7 +508,9 @@ namespace Emutastic.Platform
                           int cogHover = -1, string cogFooter = "",
                           SKBitmap? fxFrame = null, bool recording = false,
                           (string Header, string Title, string Desc, string Points, SKBitmap? Badge)? raToast = null,
-                          float raToastAlpha = 0f, bool hardcore = false)
+                          float raToastAlpha = 0f, bool hardcore = false,
+                          IReadOnlyList<SKBitmap?>? raChallenges = null,
+                          (string Text, SKBitmap? Badge)? raProgress = null, int raIndicatorVersion = 0)
         {
             if (w <= 0 || h <= 0) return false;
             int aq = (int)Math.Round(Math.Clamp(hudAlpha, 0f, 1f) * 16);   // quantize alpha → limit fade re-renders
@@ -468,7 +521,9 @@ namespace Emutastic.Platform
             string fxSig = fxFrame != null ? (_fxSeq++).ToString() : "";
             int taq = (int)Math.Round(Math.Clamp(raToastAlpha, 0f, 1f) * 16);   // quantize like hudAlpha
             string toastSig = raToast == null ? "" : $"{raToast.Value.Title}|{(raToast.Value.Badge != null ? 1 : 0)}|{taq}";
-            string sig = $"{w}x{h}|{status}|{title}|{winStyle}|{(maximized ? 1 : 0)}|{titleHover}|{aq}|{hoverBtn}|{(paused ? 1 : 0)}|{pickSig}|{statusHover}|{cogSig}|{fxSig}|{(recording ? 1 : 0)}|{toastSig}|{(hardcore ? 1 : 0)}";
+            // Indicators redraw on the session's version counter (badge bitmaps can arrive late).
+            string indSig = raChallenges == null && raProgress == null ? "" : $"ind{raIndicatorVersion}";
+            string sig = $"{w}x{h}|{status}|{title}|{winStyle}|{(maximized ? 1 : 0)}|{titleHover}|{aq}|{hoverBtn}|{(paused ? 1 : 0)}|{pickSig}|{statusHover}|{cogSig}|{fxSig}|{(recording ? 1 : 0)}|{toastSig}|{(hardcore ? 1 : 0)}|{indSig}";
             if (sig == _sig && _bmp != null) return false;
             _sig = sig;
 
@@ -492,6 +547,7 @@ namespace Emutastic.Platform
             if (picker != null) DrawLoadPicker(c, w, h, picker, pickerHover);
             if (cogMenu != null) DrawCogMenu(c, w, h, cogMenu, cogHover, cogFooter);
             if (raToast != null && taq > 0) DrawRaToast(c, w, h, raToast.Value, taq / 16f);
+            if (raChallenges != null || raProgress != null) DrawRaIndicators(c, w, h, raChallenges, raProgress);
             // Subtle rounded border at the window edge (the shim erases the corners to transparent so the
             // window reads as rounded; this traces the edge, matching the main app's 1px BorderSubtle).
             if (!maximized)
