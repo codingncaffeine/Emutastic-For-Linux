@@ -108,7 +108,16 @@ namespace Emutastic.Platform
             _initialized = true;
             SDL_InitSubSystem(SDL_INIT_GAMEPAD);
             Refresh();
+            _announceChanges = true;   // pads found by the baseline scan above are not hot-plug events
         }
+
+        /// <summary>
+        /// Hot-plug feedback: (connected, name) for pads added/removed AFTER the baseline scan —
+        /// controllers already present at game start are not events (mirrors upstream
+        /// EmulatorWindow's silent first-tick prime). Raised on the emu thread from Poll().
+        /// </summary>
+        public event Action<bool, string>? DeviceChanged;
+        private bool _announceChanges;
 
         /// <summary>
         /// Load the per-console input mappings saved by the Controls panel. Builds, for each player
@@ -206,14 +215,15 @@ namespace Emutastic.Platform
             for (int i = 0; i < count; i++) present.Add((uint)Marshal.ReadInt32(arr, i * 4));
             if (arr != IntPtr.Zero) SDL_free(arr);
 
-            // close removed
+            // close removed (read the name BEFORE closing the handle)
             for (int i = _pads.Count - 1; i >= 0; i--)
                 if (!present.Contains(_pads[i].id))
                 {
-                    Services.ControllerDiagLog.Write(
-                        $"[session] Removed: id={_pads[i].id} \"{Marshal.PtrToStringUTF8(SDL_GetGamepadName(_pads[i].handle)) ?? "?"}\"");
+                    string name = Marshal.PtrToStringUTF8(SDL_GetGamepadName(_pads[i].handle)) ?? "?";
+                    Services.ControllerDiagLog.Write($"[session] Removed: id={_pads[i].id} \"{name}\"");
                     SDL_CloseGamepad(_pads[i].handle);
                     _pads.RemoveAt(i);
+                    if (_announceChanges) DeviceChanged?.Invoke(false, name);
                 }
 
             // open new
@@ -224,8 +234,10 @@ namespace Emutastic.Platform
                     if (h != IntPtr.Zero)
                     {
                         _pads.Add((id, h));
+                        string name = Marshal.PtrToStringUTF8(SDL_GetGamepadName(h)) ?? "?";
                         Services.ControllerDiagLog.Write(
-                            $"[session] Detected: id={id} \"{Marshal.PtrToStringUTF8(SDL_GetGamepadName(h)) ?? "?"}\" (player {_pads.Count})");
+                            $"[session] Detected: id={id} \"{name}\" (player {_pads.Count})");
+                        if (_announceChanges) DeviceChanged?.Invoke(true, name);
                     }
                     else
                         Services.ControllerDiagLog.Write($"[session] Open FAILED for id={id}");

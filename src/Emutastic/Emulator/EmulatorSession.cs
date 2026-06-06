@@ -454,6 +454,11 @@ namespace Emutastic.Emulator
             {
                 _input.Initialize();
                 _input.LoadConfiguration(_console, App.Configuration);   // honor the Controls-panel bindings
+                // In-game controller hot-plug feedback: named connect/disconnect in the same
+                // transient OSD slot as disc swaps — mirrors upstream EmulatorWindow's status-tick
+                // diff (be69750). Fires on the emu thread; ShowDiskMessage only sets volatile fields.
+                _input.DeviceChanged += (connected, name) =>
+                    ShowDiskMessage($"Controller {(connected ? "connected" : "disconnected")}: {name}", 5);
                 // Free the previous session's deferred core handle before dlopen'ing a fresh one
                 // (prevents the stale-globals 2nd-launch failure for mupen64/dolphin/ppsspp-class cores).
                 LibretroCore.FreeStaleDll();
