@@ -881,6 +881,39 @@ public partial class MainWindow : Window
             e.Handled = true;
             OpenGameDetail(g);
         }
+        // Handling the press stops the ListBox's default focus grab — take it explicitly so the
+        // grid's KeyDown (Delete/Enter) works right after a click. (The window-level Delete in
+        // OnKeyDown is the belt to this suspender.)
+        grid.Focus();
+    }
+
+    // Window-level Delete (upstream's PreviewKeyDown at MainWindow:2555): works regardless of
+    // which control has focus — Library tab deletes the selected games, Screenshots tab deletes
+    // the selected shots. The grid/list KeyDown handlers stay for when they hold focus.
+    protected override void OnKeyDown(Avalonia.Input.KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        if (e.Handled || e.Key != Key.Delete) return;
+        // Don't hijack Delete while typing in a text box.
+        if (FocusManager?.GetFocusedElement() is TextBox) return;
+
+        if (_activeTab == "Library")
+        {
+            var grid = this.FindControl<ListBox>("GameGridView");
+            var list = this.FindControl<DataGrid>("GameListView");
+            var sel = grid?.IsVisible == true ? grid.SelectedItems?.OfType<Game>().ToList()
+                    : list?.IsVisible == true ? list.SelectedItems?.OfType<Game>().ToList() : null;
+            if (sel is { Count: > 0 })
+            {
+                e.Handled = true;
+                RunGuarded(() => DeleteGamesWithConfirmAsync(sel));
+            }
+        }
+        else if (_activeTab == "Screenshots" && _selectedScreenshots.Count > 0)
+        {
+            e.Handled = true;
+            RunGuarded(() => DeleteScreenshotsWithConfirm(_selectedScreenshots.ToList()));
+        }
     }
 
     private void DoRangeSelect(ListBox grid, Game clicked)
