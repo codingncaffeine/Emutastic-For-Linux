@@ -32,7 +32,7 @@ namespace Emutastic.Platform
         public const uint RETRO_DEVICE_JOYPAD = 1;
         const int RJ_B = 0, RJ_Y = 1, RJ_SELECT = 2, RJ_START = 3, RJ_UP = 4, RJ_DOWN = 5,
                   RJ_LEFT = 6, RJ_RIGHT = 7, RJ_A = 8, RJ_X = 9, RJ_L = 10, RJ_R = 11,
-                  RJ_L3 = 14, RJ_R3 = 15;
+                  RJ_L2 = 12, RJ_R2 = 13, RJ_L3 = 14, RJ_R3 = 15;
         const int JOYPAD_COUNT = 16;
         public const uint RETRO_DEVICE_ANALOG = 5;
         // Set per-console from the handler: analog consoles (PS1/N64/GC…) report stick values; digital
@@ -69,6 +69,9 @@ namespace Emutastic.Platform
         [DllImport("SDL3")] static extern void SDL_free(IntPtr mem);
         [DllImport("SDL3")] [return: MarshalAs(UnmanagedType.I1)]
         static extern bool SDL_RumbleGamepad(IntPtr gamepad, ushort low_frequency_rumble, ushort high_frequency_rumble, uint duration_ms);
+
+        // De-dupes the unknown-button-name diagnostic (once per console+name pair).
+        private static readonly HashSet<string> _unknownButtonNamesLogged = new();
 
         // open gamepads in player order
         private readonly List<(uint id, IntPtr handle)> _pads = new();
@@ -148,6 +151,13 @@ namespace Emutastic.Platform
                     foreach (var m in config.ControllerMappings)
                     {
                         uint libretroId = LibretroInput.GetButtonId(m.ButtonName, console);
+                        // A saved binding whose name the translator doesn't know is a BUG
+                        // (definition/translator drift — NeoGeo, CDi and the NDS Touch row have
+                        // all hit this upstream). Surface it instead of silently ignoring the
+                        // user's binding. Once per console+name (upstream fc55478).
+                        if (libretroId == uint.MaxValue && _unknownButtonNamesLogged.Add($"{console}:{m.ButtonName}"))
+                            Services.ControllerDiagLog.Write(
+                                $"[session] UNKNOWN BUTTON NAME '{m.ButtonName}' (console={console}) — binding ignored! LibretroInput.GetButtonId needs a case for it.");
                         if (!int.TryParse(m.InputIdentifier, out var rawId)) continue;
                         if (libretroId < JOYPAD_COUNT)
                             map[libretroId] = rawId;
@@ -319,6 +329,13 @@ namespace Emutastic.Platform
                 {
                     int sdlBtn = _retroToSdl[(int)id];
                     if (sdlBtn >= 0 && SDL_GetGamepadButton(h, sdlBtn)) pressed = true;
+                    // Default L2/R2: the trigger axes (SDL has no digital trigger buttons).
+                    // Matters out-of-the-box for NDS Touch — DeSmuME taps on the JOYPAD_R2
+                    // wire, so the right trigger taps with no Controls-panel setup.
+                    else if (sdlBtn < 0 && (int)id == RJ_L2)
+                        pressed = SDL_GetGamepadAxis(h, AXIS_LTRIG) > TRIG_THRESHOLD;
+                    else if (sdlBtn < 0 && (int)id == RJ_R2)
+                        pressed = SDL_GetGamepadAxis(h, AXIS_RTRIG) > TRIG_THRESHOLD;
                 }
 
                 // Digital consoles: let the left analog stick drive the d-pad when no digital
