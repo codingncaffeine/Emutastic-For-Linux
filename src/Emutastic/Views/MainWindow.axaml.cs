@@ -1066,12 +1066,22 @@ public partial class MainWindow : Window
     //    installs after confirmation; the core-update notice opens Preferences → Cores. ─────────
     private Services.UpdateService.AppUpdate? _pendingAppUpdate;
     private bool _coreUpdatesNotified;
+    private System.Threading.CancellationTokenSource? _metadataRefreshCts;   // banner click cancels (upstream)
 
     private async void OnBannerPressed(object? sender, PointerPressedEventArgs e)
     {
         try
         {
             if (_vm?.IsNotification != true) return;
+
+            // A metadata refresh in progress → click STOPS the refresh (upstream order: this
+            // wins over everything else). Resumable — the next Refresh skips filled games.
+            if (_metadataRefreshCts is { IsCancellationRequested: false } cts)
+            {
+                cts.Cancel();
+                _vm?.SetStatus("Metadata refresh stopped.", autoClear: true);
+                return;
+            }
 
             if (_pendingAppUpdate is { } update)
             {
@@ -1569,10 +1579,16 @@ public partial class MainWindow : Window
                 try
                 {
                     _db!.ResetMetadataAttemptsForConsole(console);
+                    // Cancellable via banner click (upstream _metadataRefreshCts): state is
+                    // naturally resumable — the next Refresh skips already-filled games.
+                    _metadataRefreshCts?.Dispose();
+                    _metadataRefreshCts = new System.Threading.CancellationTokenSource();
                     await _artworkFetch!.RefreshConsoleMetadataAsync(console,
-                        s => _vm?.SetStatus(s, autoClear: true));
+                        s => _vm?.SetStatus(s, autoClear: true), _metadataRefreshCts.Token);
                 }
                 catch { }
+                _metadataRefreshCts?.Dispose();
+                _metadataRefreshCts = null;
                 _refreshInProgress = false;
             });
         };
