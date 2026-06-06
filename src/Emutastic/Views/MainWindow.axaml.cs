@@ -939,6 +939,16 @@ public partial class MainWindow : Window
         grid.Focus();
     }
 
+    // After a console-scoped artwork batch finishes: if the user is still LOOKING at that
+    // console, re-run its navigation — exactly what "leave and come back" did by hand. Rebuilds
+    // the cards with the new art and re-evaluates the 2D/3D toggle via the Navigated hook.
+    private async Task RefreshCurrentViewIfShowing(string console)
+    {
+        if (_vm == null) return;
+        if (!string.Equals(_vm.SelectedConsole, console, StringComparison.OrdinalIgnoreCase)) return;
+        await _vm.NavigateToConsoleCommand.ExecuteAsync(console);
+    }
+
     // Window-level Delete (upstream's PreviewKeyDown at MainWindow:2555): works regardless of
     // which control has focus — Library tab deletes the selected games, Screenshots tab deletes
     // the selected shots. The grid/list KeyDown handlers stay for when they hold focus.
@@ -1200,16 +1210,31 @@ public partial class MainWindow : Window
         remove.Foreground = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#FF5F57"));
         menu.Items.Add(remove);
 
+        // Each artwork download ends with RefreshCurrentViewIfShowing — the live per-card
+        // refreshes cover mid-batch arrivals, and this guarantees the END state (all boxes +
+        // the 2D/3D toggle) snaps into the open view without leaving and coming back.
         menu.Items.Add(MenuAction("⬇  Download Missing Artwork",
-            () => RunGuarded(() => _artworkFetch!.FetchMissingArtworkForConsoleAsync(console, display))));
+            () => RunGuarded(async () =>
+            {
+                await _artworkFetch!.FetchMissingArtworkForConsoleAsync(console, display);
+                await RefreshCurrentViewIfShowing(console);
+            })));
 
         var snap = App.Configuration?.GetSnapConfiguration();
         if (snap is { ScreenScraperEnabled: true } && !string.IsNullOrWhiteSpace(snap.ScreenScraperUser))
         {
             menu.Items.Add(MenuAction("⬇  Download 3D Box Art",
-                () => RunGuarded(() => _artworkFetch!.Fetch3DBoxArtForConsoleAsync(console, display))));
+                () => RunGuarded(async () =>
+                {
+                    await _artworkFetch!.Fetch3DBoxArtForConsoleAsync(console, display);
+                    await RefreshCurrentViewIfShowing(console);
+                })));
             menu.Items.Add(MenuAction("⬇  Download ScreenScraper 2D Art",
-                () => RunGuarded(() => _artworkFetch!.FetchScreenScraperArtForConsoleAsync(console, display))));
+                () => RunGuarded(async () =>
+                {
+                    await _artworkFetch!.FetchScreenScraperArtForConsoleAsync(console, display);
+                    await RefreshCurrentViewIfShowing(console);
+                })));
         }
 
         // Edit Controls — opens Preferences on the Controls panel with this console preselected.
