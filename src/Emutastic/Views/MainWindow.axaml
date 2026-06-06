@@ -330,8 +330,18 @@
                         </Style>
                         <!-- ── Selection indicator (upstream's SelectionRing, theme-accent-tied,
                              with the Linux flair: the halo breathes + a ✓ badge for unambiguous
-                             multi-select). Elements live in the card template, hidden until the
-                             container is :selected. ── -->
+                             multi-select). Elements live in the card template. The hidden base
+                             state MUST be a style setter (not a local IsVisible attribute) —
+                             local values outrank styles, so a local False would be unbeatable. ── -->
+                        <Style Selector="ListBoxItem Border#SelGlow">
+                            <Setter Property="IsVisible" Value="False"/>
+                        </Style>
+                        <Style Selector="ListBoxItem Border#SelRing">
+                            <Setter Property="IsVisible" Value="False"/>
+                        </Style>
+                        <Style Selector="ListBoxItem Border#SelBadge">
+                            <Setter Property="IsVisible" Value="False"/>
+                        </Style>
                         <Style Selector="ListBoxItem:selected Border#SelGlow">
                             <Setter Property="IsVisible" Value="True"/>
                             <Style.Animations>
@@ -404,22 +414,35 @@
                                                    FontSize="11" Foreground="White" HorizontalAlignment="Left"/>
                                     </Panel>
                                 </StackPanel>
-                                <!-- ── Selection indicator overlays (shown via :selected styles above):
-                                     breathing halo + steady ring + corner ✓ badge, all AccentBrush. ── -->
-                                <Border Name="SelGlow" IsVisible="False" IsHitTestVisible="False"
-                                        BorderBrush="{DynamicResource AccentBrush}" BorderThickness="5"
-                                        CornerRadius="12" Margin="-4" Opacity="0.5"/>
-                                <Border Name="SelRing" IsVisible="False" IsHitTestVisible="False"
-                                        BorderBrush="{DynamicResource AccentBrush}" BorderThickness="2"
-                                        CornerRadius="10" Margin="-2"/>
-                                <Border Name="SelBadge" IsVisible="False" IsHitTestVisible="False"
-                                        Width="22" Height="22" CornerRadius="11"
-                                        Background="{DynamicResource AccentBrush}"
-                                        BorderBrush="#66000000" BorderThickness="1"
-                                        HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-7,-7,0">
-                                    <TextBlock Text="✓" FontSize="12" FontWeight="Bold" Foreground="White"
-                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                </Border>
+                                <!-- ── Selection indicator overlays (shown via :selected styles
+                                     above). Sized to the ART AREA like upstream's SelectionRing
+                                     (same ConsoleToArtHeight binding as the art Border), brush =
+                                     LibrarySelectionBrush — the per-theme selection color the
+                                     Theme tab edits. Linux flair on top of upstream's 2px ring:
+                                     a breathing halo + a ✓ badge for multi-select counting. ── -->
+                                <Panel VerticalAlignment="Top" IsHitTestVisible="False">
+                                    <Panel.Height>
+                                        <MultiBinding Converter="{StaticResource ConsoleToArtHeight}">
+                                            <Binding Path="Console"/>
+                                            <Binding Path="Width" RelativeSource="{RelativeSource AncestorType=Border}"/>
+                                            <Binding Path="DataContext.IsMixedView" RelativeSource="{RelativeSource AncestorType=ListBox}"/>
+                                        </MultiBinding>
+                                    </Panel.Height>
+                                    <Border Name="SelGlow"
+                                            BorderBrush="{DynamicResource LibrarySelectionBrush}" BorderThickness="5"
+                                            CornerRadius="11" Margin="-3" Opacity="0.5"/>
+                                    <Border Name="SelRing"
+                                            BorderBrush="{DynamicResource LibrarySelectionBrush}" BorderThickness="2"
+                                            CornerRadius="8"/>
+                                    <Border Name="SelBadge"
+                                            Width="22" Height="22" CornerRadius="11"
+                                            Background="{DynamicResource LibrarySelectionBrush}"
+                                            BorderBrush="#66000000" BorderThickness="1"
+                                            HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-6,-6,0">
+                                        <TextBlock Text="✓" FontSize="12" FontWeight="Bold" Foreground="White"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                </Panel>
                                 </Panel>
                             </Border>
                         </DataTemplate>
