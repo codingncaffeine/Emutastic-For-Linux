@@ -987,7 +987,11 @@ namespace Emutastic.Platform
             _powerTried = true;
             foreach (var cand in new[]
             {
-                Path.Combine(AppContext.BaseDirectory, "powerbutton.png"),
+                // powerbutton2 (upstream b37e3c7): cropped edge-to-edge + accent red — the old
+                // art's pill filled only part of its canvas and rendered soft on large displays.
+                Path.Combine(AppContext.BaseDirectory, "powerbutton2.png"),
+                "/home/eldritch/Projects/emutastic-linux/src/Emutastic/Assets/buttons/powerbutton2.png",
+                Path.Combine(AppContext.BaseDirectory, "powerbutton.png"),   // pre-0.7.7 fallback
                 "/home/eldritch/Projects/emutastic-linux/src/Emutastic/Assets/buttons/powerbutton.png",
             })
             {
