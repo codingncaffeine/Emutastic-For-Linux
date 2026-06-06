@@ -311,11 +311,11 @@
                             <TextBlock Text="Choose a color theme for the entire app. Changes take effect immediately."
                                        FontSize="11" FontFamily="{DynamicResource PrimaryFont}"
                                        Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,2,0,8" TextWrapping="Wrap"/>
-                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                <ComboBox Name="ThemeCombo" Width="220" Theme="{StaticResource DarkComboBox}"/>
-                                <Button Name="CustomizeThemeBtn" Content="Customize…" Theme="{StaticResource PrefSecondaryBtn}"
-                                        Padding="10,4" FontSize="12" IsEnabled="False" ToolTip.Tip="Theme editor — coming soon"/>
-                            </StackPanel>
+                            <!-- Upstream's "Customize…" opened ThemeEditorWindow; on Linux theme
+                                 customization lives in the panels themselves (swatches + .emutheme
+                                 import here, the Toast Appearance editor on the Achievements panel),
+                                 so the dead coming-soon button is dropped rather than shipped. -->
+                            <ComboBox Name="ThemeCombo" Width="220" Theme="{StaticResource DarkComboBox}"/>
 
                             <TextBlock Text="INSTALLED THEMES" Theme="{StaticResource PrefLabel}" Margin="0,22,0,4"/>
                             <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,0,0,12"/>
