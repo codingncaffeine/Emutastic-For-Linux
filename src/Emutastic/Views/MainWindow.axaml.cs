@@ -598,7 +598,15 @@ public partial class MainWindow : Window
                     stale++;
                     GhostLog($"STALE-CONTAINER '{g.Title}' ({g.Console}) painted in view '{tag}'");
                 }
-            if (stale > 0) GhostLog($"{stale} stale container(s) in '{tag}'  Games.Count={_vm.Games.Count}");
+            if (stale > 0)
+            {
+                GhostLog($"{stale} stale container(s) in '{tag}'  Games.Count={_vm.Games.Count}");
+                // Auto-heal belt: re-seat the whole collection (new ObservableCollection → the
+                // binding swaps ItemsSource → full container regeneration). Keeps the binding
+                // intact, unlike assigning ItemsSource directly.
+                _vm.RefreshAllGames();
+                GhostLog("auto-healed (collection re-seated, containers regenerated)");
+            }
             if (_lastPlayedGame is { } lp && !string.Equals(lp.Console, tag, StringComparison.OrdinalIgnoreCase)
                 && _vm.Games.Any(g => g.Id == lp.Id))
                 GhostLog($"DATA-GHOST '{lp.Title}' ({lp.Console}) is IN the Games collection for view '{tag}'  Games.Count={_vm.Games.Count}");
@@ -893,6 +901,16 @@ public partial class MainWindow : Window
         // The 2D/3D box-art toggle is hidden unless the current view has 3D art. Re-evaluate after
         // every navigation, and force it visible the moment a 3D-art download finishes.
         _vm.Navigated += tag => Dispatcher.UIThread.Post(() => OnNavigated(tag));
+        // Ghost-card fix (root cause): Avalonia's virtualizer keeps the SELECTED item's container
+        // alive across an ItemsSource swap — the orphan stayed painted over the next view
+        // (ghost-diag.log: the ghost was always the clicked card). Clear selection BEFORE the
+        // Games collection is replaced so no container is pinned through the swap.
+        _vm.ViewSwapping += () =>
+        {
+            _selectionAnchor = null;
+            this.FindControl<ListBox>("GameGridView")?.SelectedItems?.Clear();
+            this.FindControl<DataGrid>("GameListView")?.SelectedItems?.Clear();
+        };
         _artworkFetch.BoxArt3DFetched += () => Dispatcher.UIThread.Post(() =>
         {
             var panel = this.FindControl<Border>("BoxArtTogglePanel");

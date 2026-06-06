@@ -158,6 +158,12 @@ namespace Emutastic.ViewModels
         /// <summary>Raised after any navigation command completes. Arg is the console tag or category name.</summary>
         public event Action<string>? Navigated;
 
+        // Raised right before the visible Games collection is replaced. The window clears the
+        // grid/list selection here: Avalonia's virtualizer keeps the SELECTED item's container
+        // alive across an ItemsSource swap, which left an orphaned "ghost" card painted over the
+        // next view (see Logs/ghost-diag.log findings — the ghost was always the clicked card).
+        public event Action? ViewSwapping;
+
         public IAsyncRelayCommand<string> NavigateToConsoleCommand { get; }
         public IAsyncRelayCommand NavigateToAllGamesCommand { get; }
         public IAsyncRelayCommand NavigateToRecentCommand { get; }
@@ -236,6 +242,7 @@ namespace Emutastic.ViewModels
         private async Task NavigateToRecentlyAddedAsync()
         {
             CancelInFlightSearch();
+            ViewSwapping?.Invoke();
             IsShowingFavorites = false;
             IsMixedView = true;
             var games = await Task.Run(() => _db.GetRecentlyAdded(25));
@@ -250,6 +257,7 @@ namespace Emutastic.ViewModels
         private async Task NavigateToCollectionAsync(int collectionId)
         {
             CancelInFlightSearch();
+            ViewSwapping?.Invoke();
             IsShowingFavorites = false;
             IsMixedView = true;
             var games = await Task.Run(() => _db.GetGamesByCollectionId(collectionId));
@@ -425,6 +433,7 @@ namespace Emutastic.ViewModels
         public async Task FilterGamesAsync()
         {
             CancelInFlightSearch();
+            ViewSwapping?.Invoke();
             var console = SelectedConsole;
 
             // Cache hit — reuse the previously built collection for this console.
@@ -467,6 +476,7 @@ namespace Emutastic.ViewModels
         public async Task LoadFavoritesAsync(DatabaseService db)
         {
             CancelInFlightSearch();
+            ViewSwapping?.Invoke();
             var favs = await Task.Run(() => db.GetFavorites());
             Games = new ObservableCollection<Game>(favs);
             IsGroupedView = false;
@@ -477,6 +487,7 @@ namespace Emutastic.ViewModels
         public async Task LoadRecentAsync(DatabaseService db)
         {
             CancelInFlightSearch();
+            ViewSwapping?.Invoke();
             var recent = await Task.Run(() => db.GetRecentlyPlayed());
             Games = new ObservableCollection<Game>(recent);
             IsGroupedView = false;
