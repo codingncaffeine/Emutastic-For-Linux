@@ -570,9 +570,51 @@ public partial class MainWindow : Window
 
         _currentNavTag = tag;
         ApplyCurrentViewMode(tag == "Favorites");   // Favorites → grouped panel; else grid/list per toggle
+        // Ghost-card diagnostic (user repro: the just-played game "follows" navigation into other
+        // libraries for a while). Discriminates DATA (game wrongly present in the new view's
+        // collection) vs VISUAL (a recycled container painting a game that isn't in the
+        // collection). Logs to Logs/ghost-diag.log only when something is wrong — cheap otherwise.
+        Dispatcher.UIThread.Post(() => GhostCheck(tag), DispatcherPriority.Loaded);
         UpdateBoxArtToggleVisibility();
         UpdateSpacingControl(tag, IsConsoleTag(tag));
         HighlightSidebar(tag);
+    }
+
+    // ── Ghost-card diagnostic ───────────────────────────────────────────────────────────────
+    private Game? _lastPlayedGame;   // set by the play-stats hook; the ghost is always the played game
+
+    private void GhostCheck(string tag)
+    {
+        try
+        {
+            if (_vm == null) return;
+            var grid = this.FindControl<ListBox>("GameGridView");
+            if (grid == null || !grid.IsVisible) return;
+            var inView = new HashSet<Game>(_vm.Games);
+            int stale = 0;
+            foreach (var c in grid.GetRealizedContainers())
+                if (c.DataContext is Game g && !inView.Contains(g))
+                {
+                    stale++;
+                    GhostLog($"STALE-CONTAINER '{g.Title}' ({g.Console}) painted in view '{tag}'");
+                }
+            if (stale > 0) GhostLog($"{stale} stale container(s) in '{tag}'  Games.Count={_vm.Games.Count}");
+            if (_lastPlayedGame is { } lp && !string.Equals(lp.Console, tag, StringComparison.OrdinalIgnoreCase)
+                && _vm.Games.Any(g => g.Id == lp.Id))
+                GhostLog($"DATA-GHOST '{lp.Title}' ({lp.Console}) is IN the Games collection for view '{tag}'  Games.Count={_vm.Games.Count}");
+        }
+        catch (Exception ex) { GhostLog($"check failed: {ex.Message}"); }
+    }
+
+    private static void GhostLog(string msg)
+    {
+        try
+        {
+            System.IO.File.AppendAllText(
+                System.IO.Path.Combine(AppPaths.GetFolder("Logs"), "ghost-diag.log"),
+                $"{DateTime.Now:HH:mm:ss.fff} {msg}{Environment.NewLine}");
+        }
+        catch { /* never throw from logging */ }
     }
 
     // Keep the selected library/console lit in the sidebar (persistent, same fill as hover) so it's
@@ -703,6 +745,8 @@ public partial class MainWindow : Window
                 g.PlayCount++;
                 g.LastPlayed = DateTime.Now;
                 g.TotalPlayTimeSeconds += seconds;
+                _lastPlayedGame = g;   // ghost-card diagnostic: the ghost is always the played game
+                GhostLog($"SESSION-END '{g.Title}' ({g.Console})");
             }
             catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"[PlayStats] record failed: {ex.Message}"); }
         };
