@@ -12,8 +12,16 @@ namespace Emutastic.Platform
     /// uncontended window, nothing composited over it — the thing that made RetroArch smooth here.
     /// Call <see cref="Present"/> from the emu thread; it blocks to vsync, pacing the loop.
     /// </summary>
-    public sealed unsafe class GlPresenter : IDisposable
+    public sealed unsafe class GlPresenter : IGamePresenter
     {
+        // X11/SDL fallback presenter: native WM decorations (no OSD chrome). Deco layers (bezel +
+        // Vectrex screen art) mirror the shim's geometry; the shader chain and displayed-res
+        // capture remain Wayland-shim-only.
+        public bool HasWindowChrome => false;
+        public bool HasDecoLayers => true;
+        public bool HasShaderChain => false;
+        public bool HasCapture => false;
+
         private IntPtr _window, _ctx;
         // Rotating upload textures. Uploading into the SAME texture the previous frame is still being
         // drawn from forces the driver to stall the glTexSubImage until that draw completes (CPU↔GPU
@@ -41,12 +49,23 @@ namespace Emutastic.Platform
         const uint SDL_EVENT_QUIT = 0x100, SDL_EVENT_WINDOW_MOUSE_LEAVE = 0x20D,
                    SDL_EVENT_WINDOW_CLOSE_REQUESTED = 0x210,
                    SDL_EVENT_KEY_DOWN = 0x300, SDL_EVENT_KEY_UP = 0x301,
-                   SDL_EVENT_MOUSE_MOTION = 0x400;
+                   SDL_EVENT_MOUSE_MOTION = 0x400,
+                   SDL_EVENT_MOUSE_BUTTON_DOWN = 0x401, SDL_EVENT_MOUSE_BUTTON_UP = 0x402;
+        const ulong SDL_WINDOW_MAXIMIZED = 0x0000000000000080UL;
 
         /// <summary>Mouse moved inside the game window (hover-reveal an overlay). Emu thread.</summary>
         public event Action? MouseMoved;
         /// <summary>Mouse left the game window (hide the overlay). Emu thread.</summary>
         public event Action? MouseLeft;
+
+        /// <summary>(0=left/1=right/2=mid, isDown) — drives the OSD HUD/cog hit-testing.</summary>
+        public event Action<int, bool>? PointerButton;
+        // Latest pointer position in WINDOW PIXELS (hit-tests run against the pixel-sized OSD)
+        // + whether the pointer is over the window. SDL3 reports window coords (logical points);
+        // we scale by pixel/logical ratio at event time so HiDPI X11 still hit-tests correctly.
+        public int MouseX { get; private set; }
+        public int MouseY { get; private set; }
+        public bool MouseInside { get; private set; }
 
         /// <summary>Set once the window/app asked to close (window X or Ctrl-Q). The emu loop polls this.</summary>
         public bool CloseRequested { get; private set; }
@@ -269,8 +288,19 @@ namespace Emutastic.Platform
                         if (_evBuf[37] == 0)   // ignore auto-repeat; we only want real transitions
                             KeyEvent?.Invoke((int)BitConverter.ToUInt32(_evBuf, 24), type == SDL_EVENT_KEY_DOWN);
                         break;
-                    case SDL_EVENT_MOUSE_MOTION:       MouseMoved?.Invoke(); break;
-                    case SDL_EVENT_WINDOW_MOUSE_LEAVE: MouseLeft?.Invoke(); break;
+                    case SDL_EVENT_MOUSE_MOTION:
+                        // SDL_MouseMotionEvent: x float@28, y float@32 (window coords).
+                        UpdateMouse(BitConverter.ToSingle(_evBuf, 28), BitConverter.ToSingle(_evBuf, 32));
+                        MouseMoved?.Invoke();
+                        break;
+                    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                    case SDL_EVENT_MOUSE_BUTTON_UP:
+                        // SDL_MouseButtonEvent: button u8@24 (1=L 2=M 3=R), x float@28, y float@32.
+                        UpdateMouse(BitConverter.ToSingle(_evBuf, 28), BitConverter.ToSingle(_evBuf, 32));
+                        int btn = _evBuf[24] switch { 1 => 0, 3 => 1, 2 => 2, _ => -1 };
+                        if (btn >= 0) PointerButton?.Invoke(btn, type == SDL_EVENT_MOUSE_BUTTON_DOWN);
+                        break;
+                    case SDL_EVENT_WINDOW_MOUSE_LEAVE: MouseInside = false; MouseLeft?.Invoke(); break;
                 }
             }
         }
@@ -322,10 +352,26 @@ namespace Emutastic.Platform
 
             SDL_GetWindowSizeInPixels(_window, out int winW, out int winH);
             if (winW <= 0 || winH <= 0) { winW = frameW; winH = frameH; }
-            // Aspect-preserving (Uniform/contain) fit-rect, centred. GL viewport origin is bottom-left.
-            double scale = Math.Min((double)winW / frameW, (double)winH / frameH);
-            int fw = (int)Math.Round(frameW * scale), fh = (int)Math.Round(frameH * scale);
-            int x0 = (winW - fw) / 2, y0 = (winH - fh) / 2;
+            // Game fit geometry — mirrors wl_present.c: fit in the content area (window minus the
+            // chrome insets); when a bezel is up, its aspect-fit rect becomes the game's fit
+            // CONTAINER so the game lands in the art's transparent cutout whatever the window
+            // shape; the game keeps the DISPLAY aspect (DAR), not the frame pixel ratio.
+            int contentH = Math.Max(1, winH - _insetTop - _insetBottom);
+            double dar = _dar > 0.0 ? _dar : (double)frameW / frameH;
+            bool bezOn = _bezOn && _bezTex != 0 && _bezW > 0 && _bezH > 0;
+            int bx = 0, by = _insetBottom, bw = winW, bh = contentH;
+            if (bezOn)
+            {
+                double bar = (double)_bezW / _bezH;
+                if ((double)winW / contentH > bar) { bh = contentH; bw = (int)(contentH * bar + 0.5); }
+                else { bw = winW; bh = (int)(winW / bar + 0.5); }
+                bx = (winW - bw) / 2; by = _insetBottom + (contentH - bh) / 2;
+            }
+            int gcw = bezOn ? bw : winW, gch = bezOn ? bh : contentH;   // game fit container
+            int fw, fh;
+            if ((double)gcw / gch > dar) { fh = gch; fw = (int)(gch * dar + 0.5); }
+            else { fw = gcw; fh = (int)(gcw / dar + 0.5); }
+            int x0 = bx + (gcw - fw) / 2, y0 = by + (gch - fh) / 2;
             bool useShader = _shaderReady && _shaderWanted;
 
             // Clear: shader path scissor-clears ONLY the letterbox bars (cheap); fallback does a full clear.
@@ -373,6 +419,28 @@ namespace Emutastic.Platform
                 }
             }
 
+            // Deco layers (shim draw order): Vectrex screen art stretched over the GAME rect,
+            // then the bezel frame at its own rect — its transparent center frames the game.
+            if (_govOn && _govTex != 0)
+            {
+                glViewport(x0, y0, fw, fh);
+                DrawBlendedQuad(_govTex);
+            }
+            if (bezOn)
+            {
+                glViewport(bx, by, bw, bh);
+                DrawBlendedQuad(_bezTex);
+            }
+
+            // OSD overlay last: window-sized straight-alpha quad over everything (status line, HUD
+            // pill, cog menu, toasts — same buffer the Wayland shim composites). Fixed-function on
+            // purpose: the 2.1 compatibility context always has it, independent of the shader path.
+            if (_osdVisible && _osdTex != 0)
+            {
+                glViewport(0, 0, winW, winH);
+                DrawBlendedQuad(_osdTex);
+            }
+
             long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
             // Direct EGL present (Mesa FIFO, pipelined) when self-paced; else SDL's blocking swap.
             bool ok = (_eglDpy != IntPtr.Zero && _eglSurf != IntPtr.Zero)
@@ -381,6 +449,131 @@ namespace Emutastic.Platform
             LastSwapMs = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
             return ok;
         }
+
+        // Window coords (points) -> pixels for OSD hit-testing.
+        private void UpdateMouse(float wx, float wy)
+        {
+            double sx = 1, sy = 1;
+            if (SDL_GetWindowSize(_window, out int lw, out int lh)
+                && SDL_GetWindowSizeInPixels(_window, out int pw, out int ph) && lw > 0 && lh > 0)
+            { sx = (double)pw / lw; sy = (double)ph / lh; }
+            MouseX = (int)Math.Round(wx * sx);
+            MouseY = (int)Math.Round(wy * sy);
+            MouseInside = true;
+        }
+
+        public void GetSize(out int w, out int h)
+        {
+            w = h = 0;
+            if (_window != IntPtr.Zero) SDL_GetWindowSizeInPixels(_window, out w, out h);
+        }
+
+        public bool IsMaximized => _window != IntPtr.Zero && (SDL_GetWindowFlags(_window) & SDL_WINDOW_MAXIMIZED) != 0;
+
+        // ── OSD overlay quad (window-sized straight-alpha RGBA8, row 0 = top) ───────────────────
+        private uint _osdTex;
+        private int _osdW, _osdH;
+        private bool _osdVisible;
+
+        public void SetOverlay(IntPtr rgba, int w, int h)
+        {
+            if (_window == IntPtr.Zero) return;
+            if (rgba == IntPtr.Zero || w <= 0 || h <= 0) { _osdVisible = false; return; }
+            if (_osdTex == 0)
+            {
+                glGenTextures(1, out _osdTex);
+                glBindTexture(GL_TEXTURE_2D, _osdTex);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (int)GL_NEAREST);   // 1:1 window-sized
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (int)GL_NEAREST);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, (int)GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, (int)GL_CLAMP_TO_EDGE);
+            }
+            else glBindTexture(GL_TEXTURE_2D, _osdTex);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+            if (w != _osdW || h != _osdH)
+            {
+                glTexImage2D(GL_TEXTURE_2D, 0, (int)GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+                _osdW = w; _osdH = h;
+            }
+            else glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+            _osdVisible = true;
+        }
+
+        // ── chrome insets: reserve top/bottom strips (status bar) out of the game fit-rect ─────
+        private int _insetTop, _insetBottom;
+        public void SetInsets(int top, int bottom) { _insetTop = Math.Max(0, top); _insetBottom = Math.Max(0, bottom); }
+
+        // Native WM owns the chrome on this path — window-management calls are no-ops, and the
+        // shim-only extras report unsupported (see the capability flags up top).
+        // Display aspect ratio for the game fit-rect (0 → frame pixel ratio), like the shim.
+        private double _dar;
+        public void SetAspect(double dar) { _dar = dar; }
+
+        public void Minimize() { }
+        public void ToggleMaximize() { }
+        public void StartMove() { }
+        public void StartResize(int edge) { }
+        public void SetCursorShape(int shape) { }
+
+        // ── Static deco layers (mirrors wl_present.c): bezel frame aspect-fit in the content
+        //    area becomes the game's fit CONTAINER (its transparent cutout frames the game);
+        //    the Vectrex screen art stretches over the game rect, alpha-blended. LINEAR filtering
+        //    — these are photographic art scaled to arbitrary window sizes. ─────────────────────
+        private uint _bezTex, _govTex;
+        private int _bezW, _bezH;
+        private bool _bezOn, _govOn;
+
+        private uint UploadDeco(uint tex, byte[] rgba, int w, int h)
+        {
+            if (tex == 0)
+            {
+                glGenTextures(1, out tex);
+                glBindTexture(GL_TEXTURE_2D, tex);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (int)GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (int)GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, (int)GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, (int)GL_CLAMP_TO_EDGE);
+            }
+            else glBindTexture(GL_TEXTURE_2D, tex);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+            fixed (byte* pput = rgba)
+                glTexImage2D(GL_TEXTURE_2D, 0, (int)GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, (IntPtr)pput);
+            return tex;
+        }
+
+        public void SetBezel(byte[] rgba, int w, int h)
+        {
+            if (_window == IntPtr.Zero || rgba == null || w <= 0 || h <= 0) return;
+            _bezTex = UploadDeco(_bezTex, rgba, w, h); _bezW = w; _bezH = h;
+        }
+        public void ShowBezel(bool on) => _bezOn = on;
+
+        public void SetGameOverlay(byte[] rgba, int w, int h)
+        {
+            if (_window == IntPtr.Zero || rgba == null || w <= 0 || h <= 0) return;
+            _govTex = UploadDeco(_govTex, rgba, w, h);
+        }
+        public void ShowGameOverlay(bool on) => _govOn = on;
+
+        // Blended fullscreen quad into the CURRENT viewport (deco layers + OSD share this).
+        private static void DrawBlendedQuad(uint tex)
+        {
+            glBindTexture(GL_TEXTURE_2D, tex);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glColor4f(1, 1, 1, 1);
+            glBegin(GL_QUADS);
+            glTexCoord2f(0, 0); glVertex2f(-1, 1);
+            glTexCoord2f(1, 0); glVertex2f(1, 1);
+            glTexCoord2f(1, 1); glVertex2f(1, -1);
+            glTexCoord2f(0, 1); glVertex2f(-1, -1);
+            glEnd();
+            glDisable(GL_BLEND);
+        }
+        public void SetShader(int preset) { }
+        public bool SetGlslp(string? presetPath) => false;
+        public void RequestCapture() { }
+        public bool TryTakeCapture(byte[] buf, out int w, out int h) { w = h = 0; return false; }
 
         public void SetFullscreen(bool fullscreen)
         {
@@ -394,6 +587,9 @@ namespace Emutastic.Platform
                 SDL_GL_MakeCurrent(_window, _ctx);
                 for (int i = 0; i < TexCount; i++)
                     if (_texes[i] != 0) { glDeleteTextures(1, ref _texes[i]); _texes[i] = 0; }
+                if (_osdTex != 0) { glDeleteTextures(1, ref _osdTex); _osdTex = 0; }
+                if (_bezTex != 0) { glDeleteTextures(1, ref _bezTex); _bezTex = 0; }
+                if (_govTex != 0) { glDeleteTextures(1, ref _govTex); _govTex = 0; }
             }
             if (_ctx != IntPtr.Zero) { SDL_GL_DestroyContext(_ctx); _ctx = IntPtr.Zero; }
             if (_window != IntPtr.Zero) { SDL_DestroyWindow(_window); _window = IntPtr.Zero; }

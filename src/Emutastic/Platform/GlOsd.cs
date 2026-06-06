@@ -575,7 +575,8 @@ namespace Emutastic.Platform
             // (title bar / status bar / HUD stay readable, like upstream's overlay stack).
             if (fxFrame != null)
                 c.DrawBitmap(fxFrame, new SKRect(0, 0, w, h));
-            DrawTitleBar(c, w, title, winStyle, maximized, titleHover);
+            if (winStyle != "none")   // native-WM-decorated presenter — no OSD chrome
+                DrawTitleBar(c, w, title, winStyle, maximized, titleHover);
             DrawStatus(c, w, h, status, statusHover, recording, hardcore);
             if (aq > 0) DrawHud(c, w, h, hoverBtn, paused, aq / 16f, recording);
             if (picker != null) DrawLoadPicker(c, w, h, picker, pickerHover);

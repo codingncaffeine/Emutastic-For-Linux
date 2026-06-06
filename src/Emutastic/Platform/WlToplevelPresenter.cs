@@ -11,8 +11,14 @@ namespace Emutastic.Platform
     /// keyboard (wl_seat). Same surface members the decoupled present loop uses from GlPresenter, so it
     /// drops into PresentThreadProc behind EMUTASTIC_GL_TOPLEVEL.
     /// </summary>
-    public sealed class WlToplevelPresenter : IDisposable
+    public sealed class WlToplevelPresenter : IGamePresenter
     {
+        // Full-featured presenter: borderless shim window with OSD-drawn chrome plus all extras.
+        public bool HasWindowChrome => true;
+        public bool HasDecoLayers => true;
+        public bool HasShaderChain => true;
+        public bool HasCapture => true;
+
         const string LIB = "wlpresent";
 
         // Resolve libwlpresent.so: prefer alongside the app (production), fall back to the spike build dir

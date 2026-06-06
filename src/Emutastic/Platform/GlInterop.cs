@@ -74,7 +74,8 @@ namespace Emutastic.Platform
             GL_UNSIGNED_BYTE = 0x1401, GL_TEXTURE_MAG_FILTER = 0x2800, GL_TEXTURE_MIN_FILTER = 0x2801,
             GL_NEAREST = 0x2600, GL_LINEAR = 0x2601, GL_QUADS = 0x0007, GL_COLOR_BUFFER_BIT = 0x4000,
             GL_TEXTURE_WRAP_S = 0x2802, GL_TEXTURE_WRAP_T = 0x2803, GL_CLAMP_TO_EDGE = 0x812F,
-            GL_UNPACK_ALIGNMENT = 0x0CF5, GL_UNPACK_ROW_LENGTH = 0x0CF2;
+            GL_UNPACK_ALIGNMENT = 0x0CF5, GL_UNPACK_ROW_LENGTH = 0x0CF2,
+            GL_BLEND = 0x0BE2, GL_SRC_ALPHA = 0x0302, GL_ONE_MINUS_SRC_ALPHA = 0x0303;
 
         [DllImport(GL)] public static extern void glGenTextures(int n, out uint textures);
         [DllImport(GL)] public static extern void glDeleteTextures(int n, ref uint textures);
@@ -91,6 +92,8 @@ namespace Emutastic.Platform
         [DllImport(GL)] public static extern void glEnd();
         [DllImport(GL)] public static extern void glTexCoord2f(float s, float t);
         [DllImport(GL)] public static extern void glVertex2f(float x, float y);
+        [DllImport(GL)] public static extern void glBlendFunc(uint sfactor, uint dfactor);
+        [DllImport(GL)] public static extern void glColor4f(float r, float g, float b, float a);
 
         public static string? SdlError() => Marshal.PtrToStringUTF8(SDL_GetError());
 
