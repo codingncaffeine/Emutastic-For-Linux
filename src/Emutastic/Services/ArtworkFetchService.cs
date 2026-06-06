@@ -438,7 +438,12 @@ namespace Emutastic.Services
                     {
                         _db.UpdateBoxArt3D(game.Id, result.LocalPath);
                         game.BoxArt3DPath = result.LocalPath;
-                        Interlocked.Increment(ref fetched);
+                        // First success raises the event LIVE so the 2D/3D toggle appears while
+                        // the download is still running (it used to fire only after WhenAll, so
+                        // the toggle showed only once the whole console finished — the parked
+                        // "not a live change" bug).
+                        if (Interlocked.Increment(ref fetched) == 1)
+                            BoxArt3DFetched?.Invoke();
                         OnUI(() => _vm.RefreshGame(game));
                     }
 
