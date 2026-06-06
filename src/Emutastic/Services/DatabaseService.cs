@@ -25,7 +25,14 @@ namespace Emutastic.Services
             {
                 string appFolder = AppPaths.GetFolder();
                 _dbPath = Path.Combine(appFolder, "library.db");
-                _connectionString = $"Data Source={_dbPath}";
+                // Default Timeout doubles as the per-connection SQLite busy timeout in
+                // Microsoft.Data.Sqlite. The busy_timeout PRAGMA below only ever applied to the
+                // single connection it ran on — every other connection this class opens fell back
+                // to the driver default (30s), so a write hitting lock contention (e.g. six import
+                // workers writing) could pin its caller for up to 30 SECONDS. On the UI thread,
+                // under an open context menu holding the X11 pointer grab, that reads as a
+                // whole-desktop freeze (Arch field report: rating a game wedged the session).
+                _connectionString = $"Data Source={_dbPath};Default Timeout=5";
                 InitializeDatabase();
                 System.Diagnostics.Debug.WriteLine($"DatabaseService: Initialized database at {_dbPath}");
             }

@@ -1352,6 +1352,26 @@ public partial class MainWindow : Window
         return mi;
     }
 
+    // Fire-and-forget DB write off the UI thread. A context-menu click must NEVER do a
+    // synchronous SQLite write: under lock contention the UI thread blocks while the open menu
+    // holds the X11 pointer/keyboard grab — the whole DESKTOP stops accepting input until the
+    // write returns (Arch field report: rating a game wedged the session past logging out).
+    // In-memory state is updated by the caller first, so the UI is correct immediately and the
+    // write is pure persistence; failures surface in the banner instead of crashing the click.
+    private void DbWriteAsync(Action write, Action? thenOnUi = null) => _ = Task.Run(() =>
+    {
+        try
+        {
+            write();
+            if (thenOnUi != null) Dispatcher.UIThread.Post(thenOnUi);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.WriteLine($"[DbWrite] {ex.Message}");
+            Dispatcher.UIThread.Post(() => _vm?.SetStatus("Saving the change failed — see Logs.", 8000));
+        }
+    });
+
     // ── Sidebar context menu (right-click a console OR a collection in the left nav) ──
     private void OnConsoleContextRequested(object? sender, ContextRequestedEventArgs e)
     {
@@ -1623,9 +1643,12 @@ public partial class MainWindow : Window
         items.Add(MenuAction(fav ? "♥  Remove from Favorites" : "♡  Add to Favorites", () =>
         {
             game.IsFavorite = !game.IsFavorite;
-            _db!.ToggleFavorite(game.Id, game.IsFavorite);
             _vm!.RefreshGame(game);
-            if (_vm.IsShowingFavorites) { _vm.LoadFavorites(_db); PopulateFavoritesView(); }
+            // Favorites view re-reads the DB, so reload only after the write lands.
+            DbWriteAsync(() => _db!.ToggleFavorite(game.Id, game.IsFavorite), thenOnUi: () =>
+            {
+                if (_vm?.IsShowingFavorites == true) { _vm.LoadFavorites(_db!); PopulateFavoritesView(); }
+            });
         }));
 
         items.Add(new Separator());
@@ -1637,7 +1660,8 @@ public partial class MainWindow : Window
             int v = value;
             rating.Items.Add(MenuAction((game.Rating == v ? "✓ " : "    ") + label, () =>
             {
-                game.Rating = v; _db!.UpdateRating(game.Id, v); _vm!.RefreshGame(game);
+                game.Rating = v; _vm!.RefreshGame(game);
+                DbWriteAsync(() => _db!.UpdateRating(game.Id, v));
             }));
         }
         items.Add(rating);
@@ -1686,8 +1710,11 @@ public partial class MainWindow : Window
             if (string.IsNullOrEmpty(src)) return;
             string dest = System.IO.Path.Combine(AppPaths.GetFolder("Artwork", game.Console ?? ""),
                 $"{game.RomHash}_custom{System.IO.Path.GetExtension(src)}");
-            System.IO.File.Copy(src, dest, overwrite: true);
-            _db!.UpdateCoverArt(game.Id, dest);
+            await Task.Run(() =>
+            {
+                System.IO.File.Copy(src, dest, overwrite: true);   // file IO off the UI thread too
+                _db!.UpdateCoverArt(game.Id, dest);
+            });
             // Evict the dest path (its bytes just changed) + the old path, then force a change
             // notification even when dest == the current CoverArtPath (the Game setter no-ops on equal).
             Converters.PathToImageConverter.Evict(dest);
@@ -1708,8 +1735,11 @@ public partial class MainWindow : Window
             bool inIt = memberOf.Contains(cid);
             addToColl.Items.Add(MenuAction((inIt ? "✓ " : "    ") + cname, () =>
             {
-                if (inIt) _db!.RemoveGameFromCollection(game.Id, id);
-                else _db!.AddGameToCollection(game.Id, id);
+                DbWriteAsync(() =>
+                {
+                    if (inIt) _db!.RemoveGameFromCollection(game.Id, id);
+                    else _db!.AddGameToCollection(game.Id, id);
+                });
                 _vm?.SetStatus(inIt ? $"Removed from {cname}." : $"Added to {cname}.", autoClear: true);
             }));
         }
@@ -1718,8 +1748,11 @@ public partial class MainWindow : Window
         {
             string? name = await new RenameWindow("").ShowDialog<string?>(this);
             if (string.IsNullOrWhiteSpace(name)) return;
-            int id = _db!.CreateCollection(name.Trim());
-            _db.AddGameToCollection(game.Id, id);
+            await Task.Run(() =>
+            {
+                int id = _db!.CreateCollection(name.Trim());
+                _db.AddGameToCollection(game.Id, id);
+            });
             RefreshCollectionsSidebar();
         })));
         items.Add(addToColl);
@@ -1731,7 +1764,7 @@ public partial class MainWindow : Window
             string? newTitle = await new RenameWindow(game.Title).ShowDialog<string?>(this);
             if (string.IsNullOrEmpty(newTitle)) return;
             game.Title = newTitle;
-            _db!.UpdateTitle(game.Id, newTitle);
+            await Task.Run(() => _db!.UpdateTitle(game.Id, newTitle));
             _vm!.RefreshGame(game);
         })));
 
@@ -1741,7 +1774,7 @@ public partial class MainWindow : Window
                 $"Remove \"{game.Title}\" from your library? (The ROM file is not deleted.)",
                 "Remove", danger: true).ShowDialog<bool>(this);
             if (!ok) return;
-            _db!.DeleteGame(game.Id);
+            await Task.Run(() => _db!.DeleteGame(game.Id));
             _vm!.RemoveGame(game);
         })));
 
