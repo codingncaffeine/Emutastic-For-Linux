@@ -478,6 +478,13 @@
                         </DataGridTemplateColumn>
                     </DataGrid.Columns>
                 </DataGrid>
+
+                <!-- Favorites grouped view (upstream FavoritesGroupedView): per-console headers +
+                     wrapped art cards, populated in code-behind. Replaces grid/list while the
+                     Favorites view is active. -->
+                <ScrollViewer Name="FavoritesGroupedView" IsVisible="False" VerticalScrollBarVisibility="Auto">
+                    <StackPanel Name="FavoritesPanel" Margin="16,8,16,16"/>
+                </ScrollViewer>
                 </Grid>
 
                 <!-- ══ SCREENSHOTS view (per-game groups, populated in code-behind) ══ -->

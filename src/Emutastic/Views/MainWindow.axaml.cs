@@ -333,8 +333,90 @@ public partial class MainWindow : Window
         bool list = (sender as ToggleButton)?.Tag as string == "List";
         this.FindControl<ToggleButton>("ViewGrid")!.IsChecked = !list;
         this.FindControl<ToggleButton>("ViewList")!.IsChecked = list;
-        this.FindControl<ListBox>("GameGridView")!.IsVisible = !list;
-        this.FindControl<DataGrid>("GameListView")!.IsVisible = list;
+        ApplyCurrentViewMode(_vm?.IsShowingFavorites == true);
+    }
+
+    // Upstream ApplyCurrentViewMode — single source of truth for the three content panels:
+    // Favorites swaps in its own grouped panel; everything else restores the user's grid/list
+    // choice so navigation never desyncs from the toggle.
+    private void ApplyCurrentViewMode(bool forceFavorites)
+    {
+        bool list = this.FindControl<ToggleButton>("ViewList")?.IsChecked == true;
+        this.FindControl<ScrollViewer>("FavoritesGroupedView")!.IsVisible = forceFavorites;
+        this.FindControl<ListBox>("GameGridView")!.IsVisible = !forceFavorites && !list;
+        this.FindControl<DataGrid>("GameListView")!.IsVisible = !forceFavorites && list;
+        if (forceFavorites) PopulateFavoritesView();
+    }
+
+    // Port of upstream PopulateFavoritesView: per-console headers (alphabetical) + WrapPanels of
+    // art-only cards (148px, art height 200, title text fallback). Left-click opens the detail
+    // card, right-click the regular game context menu.
+    private void PopulateFavoritesView()
+    {
+        var panel = this.FindControl<StackPanel>("FavoritesPanel");
+        if (panel == null || _db == null) return;
+        panel.Children.Clear();
+        var favs = _db.GetFavorites();
+
+        if (favs.Count == 0)
+        {
+            panel.Children.Add(new TextBlock
+            {
+                Text = "No favorites yet. Right-click a game and choose Add to Favorites.",
+                FontSize = 13,
+                Foreground = this.TryFindResource("TextMutedBrush", out var mb) ? mb as IBrush : Brushes.Gray,
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+                Margin = new Thickness(0, 60, 0, 0),
+            });
+            return;
+        }
+
+        var headerBrush = this.TryFindResource("TextSecondaryBrush", out var hb) ? hb as IBrush : Brushes.LightGray;
+        foreach (var group in favs.GroupBy(g => g.Console).OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            panel.Children.Add(new TextBlock
+            {
+                Text = string.IsNullOrEmpty(group.Key) ? "Unknown" : group.Key,
+                FontSize = 13, FontWeight = FontWeight.SemiBold,
+                Foreground = headerBrush, Margin = new Thickness(0, 16, 0, 8),
+            });
+
+            var wrap = new WrapPanel { Orientation = Avalonia.Layout.Orientation.Horizontal };
+            foreach (var game in group.OrderBy(g => g.Title, StringComparer.OrdinalIgnoreCase))
+            {
+                var artBorder = new Border { Height = 200, ClipToBounds = true, Background = Brushes.Transparent };
+                string? artPath = game.DisplayArtPath;
+                if (!string.IsNullOrEmpty(artPath) && System.IO.File.Exists(artPath)
+                    && DecodeThumb(artPath, 296) is { } bmp)
+                    artBorder.Child = new Image { Source = bmp, Stretch = Stretch.Uniform };
+                else
+                    artBorder.Child = new TextBlock
+                    {
+                        Text = game.Title, FontSize = 13, FontWeight = FontWeight.SemiBold,
+                        Foreground = new SolidColorBrush(Color.FromArgb(0xCC, 0xFF, 0xFF, 0xFF)),
+                        TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center,
+                        VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                        HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+                        Margin = new Thickness(12),
+                    };
+
+                var card = new Border
+                {
+                    Width = 148, Margin = new Thickness(0, 0, 12, 12),
+                    CornerRadius = new CornerRadius(8), ClipToBounds = true,
+                    Cursor = new Cursor(StandardCursorType.Hand),
+                    Background = Brushes.Transparent, Child = artBorder, DataContext = game,
+                };
+                card.PointerPressed += (_, e) =>
+                {
+                    var props = e.GetCurrentPoint(card).Properties;
+                    if (props.IsRightButtonPressed) { BuildGameContextMenu(game).Open(card); e.Handled = true; }
+                    else if (props.IsLeftButtonPressed) { OpenGameDetail(game); e.Handled = true; }
+                };
+                wrap.Children.Add(card);
+            }
+            panel.Children.Add(wrap);
+        }
     }
 
     // Switches the library between 2D cover art and 3D box art for the current console (or every
@@ -433,6 +515,7 @@ public partial class MainWindow : Window
         }
 
         _currentNavTag = tag;
+        ApplyCurrentViewMode(tag == "Favorites");   // Favorites → grouped panel; else grid/list per toggle
         UpdateBoxArtToggleVisibility();
         UpdateSpacingControl(tag, IsConsoleTag(tag));
         HighlightSidebar(tag);
@@ -1477,7 +1560,7 @@ public partial class MainWindow : Window
             game.IsFavorite = !game.IsFavorite;
             _db!.ToggleFavorite(game.Id, game.IsFavorite);
             _vm!.RefreshGame(game);
-            if (_vm.IsShowingFavorites) _vm.LoadFavorites(_db);
+            if (_vm.IsShowingFavorites) { _vm.LoadFavorites(_db); PopulateFavoritesView(); }
         }));
 
         items.Add(new Separator());
