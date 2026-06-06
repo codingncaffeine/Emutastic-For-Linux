@@ -36,9 +36,11 @@ Favorites view, and an important stability fix for context menus.
 - **Context-menu actions could freeze the desktop** (reported on Arch — thank
   you!). Rating a game while the app was busy importing could block the UI
   thread while the open menu held the X11 input grab, locking up the entire
-  desktop until a hard reboot. All context-menu actions now save in the
-  background, and database busy-waits are capped, so menu clicks are always
-  instant.
+  desktop until a hard reboot. A full sweep followed the report: every menu,
+  button, and dialog action across the app (library, game detail card, save
+  states, achievements) now saves in the background, database busy-waits are
+  capped, and the Save States tab no longer decodes every thumbnail on the UI
+  thread — clicks stay instant no matter what's running.
 - **Startup CPU burst tamed** — artwork pre-warming used to spawn one decode
   worker per console at launch (~dozens at once), which could starve the UI on
   busy systems. It's now a single background worker.
