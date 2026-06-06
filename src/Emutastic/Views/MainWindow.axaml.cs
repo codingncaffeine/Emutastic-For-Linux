@@ -596,17 +596,24 @@ public partial class MainWindow : Window
                 if (c.DataContext is Game g && !inView.Contains(g))
                 {
                     stale++;
-                    GhostLog($"STALE-CONTAINER '{g.Title}' ({g.Console}) painted in view '{tag}'");
+                    GhostLog($"STALE-CONTAINER '{g.Title}' ({g.Console}) painted in view '{tag}' — hidden");
+                    // Heal by HIDING the orphan directly. (Re-seating the collection was proven
+                    // futile in the field: the root bug is that this container survives
+                    // ItemsSource swaps, so a heal built on another swap healed nothing.) A hidden
+                    // control paints nothing, period; if the virtualizer later legitimately reuses
+                    // the container for a real game, the one-shot rebind handler restores it.
+                    var orphan = c;
+                    orphan.IsVisible = false;
+                    EventHandler? onRebind = null;
+                    onRebind = (_, _) =>
+                    {
+                        orphan.DataContextChanged -= onRebind;
+                        orphan.IsVisible = true;
+                    };
+                    orphan.DataContextChanged += onRebind;
                 }
             if (stale > 0)
-            {
-                GhostLog($"{stale} stale container(s) in '{tag}'  Games.Count={_vm.Games.Count}");
-                // Auto-heal belt: re-seat the whole collection (new ObservableCollection → the
-                // binding swaps ItemsSource → full container regeneration). Keeps the binding
-                // intact, unlike assigning ItemsSource directly.
-                _vm.RefreshAllGames();
-                GhostLog("auto-healed (collection re-seated, containers regenerated)");
-            }
+                GhostLog($"{stale} stale container(s) hidden in '{tag}'  Games.Count={_vm.Games.Count}");
             if (_lastPlayedGame is { } lp && !string.Equals(lp.Console, tag, StringComparison.OrdinalIgnoreCase)
                 && _vm.Games.Any(g => g.Id == lp.Id))
                 GhostLog($"DATA-GHOST '{lp.Title}' ({lp.Console}) is IN the Games collection for view '{tag}'  Games.Count={_vm.Games.Count}");
