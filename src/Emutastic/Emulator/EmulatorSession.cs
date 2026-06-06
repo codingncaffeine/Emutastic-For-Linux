@@ -40,6 +40,7 @@ namespace Emutastic.Emulator
         const uint ENV_GET_CORE_ASSETS_DIRECTORY = 30;
         const uint ENV_GET_SAVE_DIRECTORY = 31;
         const uint ENV_SET_DISK_CONTROL_INTERFACE = 13;
+        const uint ENV_GET_RUMBLE_INTERFACE = 23;
         const uint ENV_SET_DISK_CONTROL_EXT_INTERFACE = 58;
         // libretro OR's these flags into command IDs; mask them off before switching.
         const uint RETRO_ENVIRONMENT_EXPERIMENTAL = 0x10000;
@@ -71,6 +72,32 @@ namespace Emutastic.Emulator
         // libretro disk-control interface (FDS / multi-disc). The core hands us these callbacks via
         // SET_DISK_CONTROL_INTERFACE; we use them to insert disk 0 after load (FDS boots ejected →
         // the BIOS otherwise sits on "Set the Disk Card").
+        // ── Rumble (upstream OnSetRumbleState): struct retro_rumble_interface is a single
+        //    set_rumble_state function pointer. effect 0 = RETRO_RUMBLE_STRONG (low-freq/left),
+        //    1 = RETRO_RUMBLE_WEAK (high-freq/right). Cores send each motor independently, so
+        //    P1 accumulates both before applying (upstream tracks accumulators for port 0 only).
+        //    Providing the interface also matters beyond vibration: Reicast/Flycast won't
+        //    initialise maple-bus sub-peripherals (VMU, Purupuru) without it. ─────────────────
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate bool SetRumbleStateFn(uint port, uint effect, ushort strength);
+        private readonly SetRumbleStateFn _rumbleCb;   // kept alive; handed to the core via GET_RUMBLE_INTERFACE
+        private ushort _rumbleStrong, _rumbleWeak;     // P1 motor accumulators
+
+        private bool OnSetRumbleState(uint port, uint effect, ushort strength)
+        {
+            if (port >= 4) return true;
+            if (port == 0)
+            {
+                if (effect == 0) _rumbleStrong = strength; else _rumbleWeak = strength;
+                _input.SetRumble(0, _rumbleStrong, _rumbleWeak);
+            }
+            else
+                // Ports 1-3: apply directly (no cross-frame accumulation, upstream parity)
+                _input.SetRumble((int)port,
+                    effect == 0 ? strength : (ushort)0,
+                    effect == 1 ? strength : (ushort)0);
+            return true;
+        }
+
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate bool SetEjectStateFn(bool ejected);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate bool SetImageIndexFn(uint index);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate bool GetEjectStateFn();
@@ -444,6 +471,7 @@ namespace Emutastic.Emulator
             _inputPollCb = InputPoll_cb;
             _inputStateCb = InputState_cb;
             _logCb = RetroLog_cb;
+            _rumbleCb = OnSetRumbleState;
         }
 
         /// <summary>Loads the core+ROM and starts the emulation thread. Returns false on failure.</summary>
@@ -1807,6 +1835,10 @@ namespace Emutastic.Emulator
                 case ENV_GET_LOG_INTERFACE:
                     // retro_log_callback is a single function-pointer field; hand the core our logger.
                     if (data != IntPtr.Zero) Marshal.WriteIntPtr(data, Marshal.GetFunctionPointerForDelegate(_logCb));
+                    return true;
+                case ENV_GET_RUMBLE_INTERFACE:
+                    // retro_rumble_interface is a single function-pointer field (see _rumbleCb).
+                    if (data != IntPtr.Zero) Marshal.WriteIntPtr(data, Marshal.GetFunctionPointerForDelegate(_rumbleCb));
                     return true;
                 case ENV_SET_PERFORMANCE_LEVEL:
                     return true;

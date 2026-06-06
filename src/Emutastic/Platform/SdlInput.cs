@@ -67,6 +67,8 @@ namespace Emutastic.Platform
         [DllImport("SDL3")] static extern IntPtr SDL_GetGamepadName(IntPtr gamepad);
         [DllImport("SDL3")] static extern void SDL_UpdateGamepads();
         [DllImport("SDL3")] static extern void SDL_free(IntPtr mem);
+        [DllImport("SDL3")] [return: MarshalAs(UnmanagedType.I1)]
+        static extern bool SDL_RumbleGamepad(IntPtr gamepad, ushort low_frequency_rumble, ushort high_frequency_rumble, uint duration_ms);
 
         // open gamepads in player order
         private readonly List<(uint id, IntPtr handle)> _pads = new();
@@ -203,6 +205,18 @@ namespace Emutastic.Platform
         }
 
         public int GamepadCount => _pads.Count;
+
+        /// <summary>
+        /// Drive a pad's rumble motors (libretro: strong = low-freq/left, weak = high-freq/right).
+        /// The 5s window is re-issued on every state change a core sends; a (0,0) call stops the
+        /// motors. Called from the emu thread via the GET_RUMBLE_INTERFACE callback.
+        /// </summary>
+        public bool SetRumble(int port, ushort strong, ushort weak)
+        {
+            if (port < 0 || port >= _pads.Count) return false;
+            var h = _pads[port].handle;
+            return h != IntPtr.Zero && SDL_RumbleGamepad(h, strong, weak, 5000);
+        }
 
         public string? FirstGamepadName =>
             _pads.Count > 0 ? Marshal.PtrToStringUTF8(SDL_GetGamepadName(_pads[0].handle)) : null;
