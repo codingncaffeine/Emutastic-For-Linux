@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds librcheevos.so from the vendored rcheevos source (../rcheevos-src,
-# pinned to rcheevos PR #517 head = v12.3.0 + .neo hashing, see NOTES.md) plus a checkabi harness that prints sizeof/offsetof for
+# pinned to v11.6.0) plus a checkabi harness that prints sizeof/offsetof for
 # every struct the C# interop marshals. RcheevosInterop.VerifyAbi() holds the
 # same numbers — if a future version bump shifts a layout, both sides scream
 # instead of silently corrupting fields (see the upstream interop's warnings).
@@ -12,10 +12,8 @@ CFLAGS="-O2 -fPIC -Wall -Wno-unused-function -I$SRC/include -I$SRC/src -DRC_CLIE
 
 # Everything except rc_client_raintegration.c (Windows RAIntegration.dll
 # bridge) and rc_libretro.c (RetroArch glue; we do our own memory routing).
-# (v12.3 layout: rurl/ was folded into rapi/; rhash split into hash_*.c files — both
-# covered by the globs. rc_client_external.c is the external-client ABI shim, harmless.)
 SOURCES=$(ls "$SRC"/src/*.c "$SRC"/src/rcheevos/*.c "$SRC"/src/rapi/*.c \
-             "$SRC"/src/rhash/*.c \
+             "$SRC"/src/rhash/*.c "$SRC"/src/rurl/*.c 2>/dev/null \
           | grep -v raintegration | grep -v rc_libretro)
 
 echo "[rcheevos] compiling librcheevos.so"

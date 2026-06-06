@@ -16,20 +16,21 @@ void rc_parse_trigger_internal(rc_trigger_t* self, const char** memaddr, rc_pars
   parse->measured_as_percent = 0;
 
   if (*aux == 's' || *aux == 'S') {
-    self->requirement = NULL;
+    self->requirement = 0;
   }
   else {
-    self->requirement = rc_parse_condset(&aux, parse);
+    self->requirement = rc_parse_condset(&aux, parse, 0);
 
-    if (parse->offset < 0)
+    if (parse->offset < 0) {
       return;
+    }
 
-    self->requirement->next = NULL;
+    self->requirement->next = 0;
   }
 
   while (*aux == 's' || *aux == 'S') {
     aux++;
-    *next = rc_parse_condset(&aux, parse);
+    *next = rc_parse_condset(&aux, parse, 0);
 
     if (parse->offset < 0) {
       return;
@@ -38,7 +39,7 @@ void rc_parse_trigger_internal(rc_trigger_t* self, const char** memaddr, rc_pars
     next = &(*next)->next;
   }
 
-  *next = NULL;
+  *next = 0;
   *memaddr = aux;
 
   self->measured_target = parse->measured_target;
@@ -46,49 +47,39 @@ void rc_parse_trigger_internal(rc_trigger_t* self, const char** memaddr, rc_pars
   self->measured_as_percent = parse->measured_as_percent;
   self->state = RC_TRIGGER_STATE_WAITING;
   self->has_hits = 0;
-  self->has_memrefs = 0;
+  self->has_required_hits = parse->has_required_hits;
 }
 
 int rc_trigger_size(const char* memaddr) {
-  rc_trigger_with_memrefs_t* trigger;
-  rc_preparse_state_t preparse;
-  rc_init_preparse_state(&preparse);
+  rc_trigger_t* self;
+  rc_parse_state_t parse;
+  rc_memref_t* memrefs;
+  rc_init_parse_state(&parse, 0, 0, 0);
+  rc_init_parse_state_memrefs(&parse, &memrefs);
 
-  trigger = RC_ALLOC(rc_trigger_with_memrefs_t, &preparse.parse);
-  rc_parse_trigger_internal(&trigger->trigger, &memaddr, &preparse.parse);
-  rc_preparse_alloc_memrefs(NULL, &preparse);
+  self = RC_ALLOC(rc_trigger_t, &parse);
+  rc_parse_trigger_internal(self, &memaddr, &parse);
 
-  rc_destroy_preparse_state(&preparse);
-  return preparse.parse.offset;
+  rc_destroy_parse_state(&parse);
+  return parse.offset;
 }
 
-rc_trigger_t* rc_parse_trigger(void* buffer, const char* memaddr, void* unused_L, int unused_funcs_idx) {
-  rc_trigger_with_memrefs_t* trigger;
-  rc_preparse_state_t preparse;
-  const char* preparse_memaddr = memaddr;
-
-  (void)unused_L;
-  (void)unused_funcs_idx;
+rc_trigger_t* rc_parse_trigger(void* buffer, const char* memaddr, lua_State* L, int funcs_ndx) {
+  rc_trigger_t* self;
+  rc_parse_state_t parse;
 
   if (!buffer || !memaddr)
     return NULL;
 
-  /* first pass : determine how many memrefs are needed */
-  rc_init_preparse_state(&preparse);
-  trigger = RC_ALLOC(rc_trigger_with_memrefs_t, &preparse.parse);
-  rc_parse_trigger_internal(&trigger->trigger, &preparse_memaddr, &preparse.parse);
+  rc_init_parse_state(&parse, buffer, L, funcs_ndx);
 
-  /* allocate the trigger and memrefs */
-  rc_reset_parse_state(&preparse.parse, buffer);
-  trigger = RC_ALLOC(rc_trigger_with_memrefs_t, &preparse.parse);
-  rc_preparse_alloc_memrefs(&trigger->memrefs, &preparse);
+  self = RC_ALLOC(rc_trigger_t, &parse);
+  rc_init_parse_state_memrefs(&parse, &self->memrefs);
 
-  /* parse the trigger */
-  rc_parse_trigger_internal(&trigger->trigger, &memaddr, &preparse.parse);
-  trigger->trigger.has_memrefs = 1;
+  rc_parse_trigger_internal(self, &memaddr, &parse);
 
-  rc_destroy_preparse_state(&preparse);
-  return (preparse.parse.offset >= 0) ? &trigger->trigger : NULL;
+  rc_destroy_parse_state(&parse);
+  return (parse.offset >= 0) ? self : NULL;
 }
 
 int rc_trigger_state_active(int state)
@@ -133,32 +124,12 @@ static void rc_reset_trigger_hitcounts(rc_trigger_t* self) {
   }
 }
 
-static void rc_update_trigger_memrefs(rc_trigger_t* self, rc_peek_t peek, void* ud) {
-  if (self->has_memrefs) {
-    rc_trigger_with_memrefs_t* trigger = (rc_trigger_with_memrefs_t*)self;
-    rc_update_memref_values(&trigger->memrefs, peek, ud);
-  }
-}
-
-rc_memrefs_t* rc_trigger_get_memrefs(rc_trigger_t* self) {
-  if (self->has_memrefs) {
-    rc_trigger_with_memrefs_t* trigger = (rc_trigger_with_memrefs_t*)self;
-    return &trigger->memrefs;
-  }
-
-  return NULL;
-}
-
-int rc_evaluate_trigger(rc_trigger_t* self, rc_peek_t peek, void* ud, void* unused_L) {
+int rc_evaluate_trigger(rc_trigger_t* self, rc_peek_t peek, void* ud, lua_State* L) {
   rc_eval_state_t eval_state;
   rc_condset_t* condset;
-  rc_typed_value_t measured_value;
-  int measured_from_hits = 0;
   int ret;
   char is_paused;
   char is_primed;
-
-  (void)unused_L;
 
   switch (self->state)
   {
@@ -172,7 +143,7 @@ int rc_evaluate_trigger(rc_trigger_t* self, rc_peek_t peek, void* ud, void* unus
 
     case RC_TRIGGER_STATE_INACTIVE:
       /* not yet active. update the memrefs so deltas are correct when it becomes active, then return INACTIVE */
-      rc_update_trigger_memrefs(self, peek, ud);
+      rc_update_memref_values(self->memrefs, peek, ud);
       return RC_TRIGGER_STATE_INACTIVE;
 
     default:
@@ -180,24 +151,18 @@ int rc_evaluate_trigger(rc_trigger_t* self, rc_peek_t peek, void* ud, void* unus
   }
 
   /* update the memory references */
-  rc_update_trigger_memrefs(self, peek, ud);
+  rc_update_memref_values(self->memrefs, peek, ud);
 
   /* process the trigger */
   memset(&eval_state, 0, sizeof(eval_state));
   eval_state.peek = peek;
   eval_state.peek_userdata = ud;
-
-  measured_value.type = RC_VALUE_TYPE_NONE;
+  eval_state.L = L;
 
   if (self->requirement != NULL) {
     ret = rc_test_condset(self->requirement, &eval_state);
-    is_paused = eval_state.is_paused;
-    is_primed = eval_state.is_primed;
-
-    if (eval_state.measured_value.type != RC_VALUE_TYPE_NONE) {
-      memcpy(&measured_value, &eval_state.measured_value, sizeof(measured_value));
-      measured_from_hits = eval_state.measured_from_hits;
-    }
+    is_paused = self->requirement->is_paused;
+    is_primed = eval_state.primed;
   } else {
     ret = 1;
     is_paused = 0;
@@ -212,17 +177,8 @@ int rc_evaluate_trigger(rc_trigger_t* self, rc_peek_t peek, void* ud, void* unus
 
     do {
       sub |= rc_test_condset(condset, &eval_state);
-      sub_paused &= eval_state.is_paused;
-      sub_primed |= eval_state.is_primed;
-
-      if (eval_state.measured_value.type != RC_VALUE_TYPE_NONE) {
-        /* if no previous Measured value was captured, or the new one is greater, keep the new one */
-        if (measured_value.type == RC_VALUE_TYPE_NONE ||
-            rc_typed_value_compare(&eval_state.measured_value, &measured_value, RC_OPERATOR_GT)) {
-          memcpy(&measured_value, &eval_state.measured_value, sizeof(measured_value));
-          measured_from_hits = eval_state.measured_from_hits;
-        }
-      }
+      sub_paused &= condset->is_paused;
+      sub_primed |= eval_state.primed;
 
       condset = condset->next;
     } while (condset);
@@ -235,23 +191,17 @@ int rc_evaluate_trigger(rc_trigger_t* self, rc_peek_t peek, void* ud, void* unus
     is_paused |= sub_paused;
   }
 
-  if (is_paused) {
-    /* if the trigger is fully paused, ignore any updates to the measured value */
-  }
-  else if (measured_value.type == RC_VALUE_TYPE_NONE) {
-    /* if a measured value was not captured, keep the old value (it's possible to pause
-     * an alt that is generating the measured value without fully pausing the trigger) */
-  }
-  else {
-    rc_typed_value_convert(&measured_value, RC_VALUE_TYPE_UNSIGNED);
-    self->measured_value = measured_value.value.u32;
+  /* if paused, the measured value may not be captured, keep the old value */
+  if (!is_paused) {
+    rc_typed_value_convert(&eval_state.measured_value, RC_VALUE_TYPE_UNSIGNED);
+    self->measured_value = eval_state.measured_value.value.u32;
   }
 
   /* if any ResetIf condition was true, reset the hit counts */
   if (eval_state.was_reset) {
     /* if the measured value came from a hit count, reset it. do this before calling
      * rc_reset_trigger_hitcounts in case we need to call rc_condset_is_measured_from_hitcount */
-    if (measured_from_hits) {
+    if (eval_state.measured_from_hits) {
       self->measured_value = 0;
     }
     else if (is_paused && self->measured_value) {
@@ -322,11 +272,11 @@ int rc_evaluate_trigger(rc_trigger_t* self, rc_peek_t peek, void* ud, void* unus
   return self->state;
 }
 
-int rc_test_trigger(rc_trigger_t* self, rc_peek_t peek, void* ud, void* unused_L) {
+int rc_test_trigger(rc_trigger_t* self, rc_peek_t peek, void* ud, lua_State* L) {
   /* for backwards compatibilty, rc_test_trigger always assumes the achievement is active */
   self->state = RC_TRIGGER_STATE_ACTIVE;
 
-  return (rc_evaluate_trigger(self, peek, ud, unused_L) == RC_TRIGGER_STATE_TRIGGERED);
+  return (rc_evaluate_trigger(self, peek, ud, L) == RC_TRIGGER_STATE_TRIGGERED);
 }
 
 void rc_reset_trigger(rc_trigger_t* self) {

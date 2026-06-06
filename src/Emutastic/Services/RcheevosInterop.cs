@@ -96,7 +96,7 @@ namespace Emutastic.Services
         public const uint RC_CONSOLE_PC_ENGINE_CD = 76;
         public const uint RC_CONSOLE_FAMICOM_DISK_SYSTEM = 81;
 
-        // ── Structs (v12.3.0 layouts — PR #517 pin, see VerifyAbi + native/rcheevos/NOTES.md) ──
+        // ── Structs (v11.6.0 layouts — see VerifyAbi) ────────────────────────
 
         [StructLayout(LayoutKind.Sequential)]
         public struct rc_client_event_t
@@ -107,7 +107,6 @@ namespace Emutastic.Services
             public IntPtr leaderboard_tracker;    // rc_client_leaderboard_tracker_t*
             public IntPtr leaderboard_scoreboard; // rc_client_leaderboard_scoreboard_t*
             public IntPtr server_error;           // rc_client_server_error_t*
-            public IntPtr subset;                 // rc_client_subset_t* (v12.0+)
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -129,9 +128,7 @@ namespace Emutastic.Services
             public byte unlocked;
             public float rarity;           // @76
             public float rarity_hardcore;  // @80
-            public byte type;              // @84; pads to 88
-            public IntPtr badge_url;        // const char* @88  (v12.0+)
-            public IntPtr badge_locked_url; // const char* @96  (v12.0+) — struct = 104
+            public byte type;              // @84; struct pads to 88
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -142,8 +139,7 @@ namespace Emutastic.Services
             public IntPtr token;           // const char*
             public uint score;
             public uint score_softcore;
-            public uint num_unread_messages; // pads to 40
-            public IntPtr avatar_url;        // const char* (v12.0+) — struct = 48
+            public uint num_unread_messages; // struct pads to 40
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -154,7 +150,6 @@ namespace Emutastic.Services
             public IntPtr title;           // const char*
             public IntPtr hash;            // const char*
             public IntPtr badge_name;      // const char*
-            public IntPtr badge_url;       // const char* (v12.0+) — struct = 40
         }
 
         // ALL THREE leading fields are pointers (const char*), NOT inline
@@ -229,11 +224,11 @@ namespace Emutastic.Services
                 return null;
             }
 
-            return Check<rc_client_event_t>(56, ("type", 0), ("achievement", 8), ("server_error", 40))
-                ?? Check<rc_client_achievement_t>(104, ("title", 0), ("badge_name", 16), ("measured_progress", 24),
+            return Check<rc_client_event_t>(48, ("type", 0), ("achievement", 8), ("server_error", 40))
+                ?? Check<rc_client_achievement_t>(88, ("title", 0), ("badge_name", 16), ("measured_progress", 24),
                        ("measured_percent", 48), ("unlock_time", 64), ("state", 72), ("rarity", 76), ("type", 84))
-                ?? Check<rc_client_user_t>(48, ("token", 16), ("score", 24))
-                ?? Check<rc_client_game_t>(40, ("title", 8), ("badge_name", 24))
+                ?? Check<rc_client_user_t>(40, ("token", 16), ("score", 24))
+                ?? Check<rc_client_game_t>(32, ("title", 8), ("badge_name", 24))
                 ?? Check<rc_client_leaderboard_t>(32, ("tracker_value", 16), ("lower_is_better", 30))
                 ?? Check<rc_client_leaderboard_scoreboard_t>(80, ("submitted_score", 4), ("new_rank", 52))
                 ?? Check<rc_api_server_response_t>(24, ("body_length", 8), ("http_status_code", 16));
