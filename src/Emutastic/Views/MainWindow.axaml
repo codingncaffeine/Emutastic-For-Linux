@@ -455,13 +455,36 @@
                           CanUserResizeColumns="True" IsReadOnly="True" GridLinesVisibility="Horizontal"
                           Background="Transparent" RowBackground="Transparent"
                           HeadersVisibility="Column" SelectionMode="Extended">
+                    <!-- Row chrome (upstream ListRowItemStyle): alternating fills are set in
+                         LoadingRow (code-behind — Avalonia has no AlternationIndex); hover +
+                         selection tint the row template's background rectangle. -->
+                    <DataGrid.Styles>
+                        <Style Selector="DataGridRow:pointerover /template/ Rectangle#BackgroundRectangle">
+                            <Setter Property="Fill" Value="#FF2A2A2A"/>
+                            <Setter Property="Opacity" Value="1"/>
+                        </Style>
+                        <Style Selector="DataGridRow:selected /template/ Rectangle#BackgroundRectangle">
+                            <Setter Property="Fill" Value="#FF2D5A8C"/>
+                            <Setter Property="Opacity" Value="1"/>
+                        </Style>
+                        <Style Selector="DataGridRow:selected TextBlock">
+                            <Setter Property="Foreground" Value="White"/>
+                        </Style>
+                    </DataGrid.Styles>
                     <!-- Column order matches upstream: Name / Rating / Last Played / System. -->
                     <DataGrid.Columns>
-                        <DataGridTextColumn Header="Name" Binding="{Binding Title}" Width="*"/>
+                        <DataGridTextColumn Header="Name" Binding="{Binding Title}" Width="380"/>
                         <DataGridTemplateColumn Header="Rating" Width="90" SortMemberPath="Rating">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate x:DataType="models:Game">
-                                    <TextBlock Text="{Binding Rating, Converter={StaticResource RatingToStars}}" Margin="8,0" VerticalAlignment="Center"/>
+                                    <!-- Two-layer stars (upstream): 5 dim base stars with a soft
+                                         shadow for the "indented" feel, filled stars overlaid. -->
+                                    <Panel Margin="8,0" VerticalAlignment="Center">
+                                        <TextBlock Text="★★★★★" Foreground="#33FFFFFF"
+                                                   Effect="drop-shadow(0 1 1 #99000000)"/>
+                                        <TextBlock Text="{Binding Rating, Converter={StaticResource RatingToFilledStars}}"
+                                                   Foreground="White"/>
+                                    </Panel>
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>

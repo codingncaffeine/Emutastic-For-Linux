@@ -76,6 +76,23 @@ public partial class MainWindow : Window
 
         // List view (DataGrid) shares the launch + context-menu gestures.
         var list = this.FindControl<DataGrid>("GameListView")!;
+        // Alternating row fills (upstream ListRowItemStyle #FF161616/#FF1E1E1E via AlternationIndex;
+        // Avalonia has no alternation, so paint per-row as rows realize/recycle).
+        list.LoadingRow += (_, e) =>
+            e.Row.Background = (e.Row.Index % 2 == 0) ? RowFillEven : RowFillOdd;
+        // Sort persistence (upstream GameListColumnHeader_Click → listSortColumn/listSortDirection):
+        // the control sorts on header click; we persist the result after it lands.
+        list.Sorting += (_, _) => Dispatcher.UIThread.Post(() =>
+        {
+            // Read the result off the collection view once the click's sort has landed.
+            var sd = list.CollectionView?.SortDescriptions?.OfType<Avalonia.Collections.DataGridSortDescription>().FirstOrDefault();
+            if (sd?.PropertyPath is not { Length: > 0 } path) return;
+            App.Configuration?.SetValue("listSortColumn", HeaderToSortMember(path));
+            App.Configuration?.SetValue("listSortDirection",
+                sd.Direction == System.ComponentModel.ListSortDirection.Descending ? "Descending" : "Ascending");
+        });
+        // Saved sort (default Title ascending) once the first ItemsSource has landed.
+        Dispatcher.UIThread.Post(ApplySavedListSort, DispatcherPriority.Loaded);
         list.DoubleTapped += (_, _) => OpenSelectedDetail();   // list rows: double-click → open detail
         list.KeyDown += (_, e) =>
         {
@@ -334,6 +351,38 @@ public partial class MainWindow : Window
         this.FindControl<ToggleButton>("ViewGrid")!.IsChecked = !list;
         this.FindControl<ToggleButton>("ViewList")!.IsChecked = list;
         ApplyCurrentViewMode(_vm?.IsShowingFavorites == true);
+    }
+
+    // ── List-view sort persistence (upstream ApplyListSort/HeaderToSortMember) ────────────────
+    private static readonly IBrush RowFillEven = new SolidColorBrush(Color.Parse("#FF161616"));
+    private static readonly IBrush RowFillOdd  = new SolidColorBrush(Color.Parse("#FF1E1E1E"));
+
+    private static string HeaderToSortMember(string label) => label switch
+    {
+        "Name" or "Title" => "Title",
+        "Rating"          => "Rating",
+        "Last Played" or "LastPlayed" => "LastPlayed",
+        "System" or "Console"         => "Console",
+        _ => label,
+    };
+
+    // Re-applies the persisted list sort (default Title ascending) by driving the column's own
+    // Sort() — keeps the header chevron in sync, same end state as upstream's SortDescription.
+    private void ApplySavedListSort()
+    {
+        try
+        {
+            var list = this.FindControl<DataGrid>("GameListView");
+            if (list == null || list.ItemsSource == null) return;
+            string member = HeaderToSortMember(App.Configuration?.GetValue("listSortColumn", "Title") ?? "Title");
+            var dir = (App.Configuration?.GetValue("listSortDirection", "Ascending")) == "Descending"
+                ? System.ComponentModel.ListSortDirection.Descending
+                : System.ComponentModel.ListSortDirection.Ascending;
+            foreach (var col in list.Columns)
+                if (HeaderToSortMember(col.SortMemberPath ?? (col.Header as string ?? "")) == member)
+                { col.Sort(dir); break; }
+        }
+        catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"[ListSort] apply failed: {ex.Message}"); }
     }
 
     // Upstream ApplyCurrentViewMode — single source of truth for the three content panels:
