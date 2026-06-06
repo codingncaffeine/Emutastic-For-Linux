@@ -372,6 +372,10 @@ namespace Emutastic.Emulator
         // a few non-game scancodes drive the session (quit / fullscreen / pause).
         private void OnGlKey(int scancode, bool down)
         {
+            // Disk-swap keyboard chord held-state — tracked before the game-button dispatch so a
+            // chord half that doubles as a game key (e.g. Enter=Start) still registers.
+            if (scancode == _diskSwapKeySCa) _diskSwapKeyAHeld = down;
+            if (scancode == _diskSwapKeySCb) _diskSwapKeyBHeld = down;
             if (_glKeyMap.TryGetValue(scancode, out int id)) { _input.SetKeyboardButton(id, down); return; }
             if (!down) return;
             switch (scancode)
@@ -482,6 +486,7 @@ namespace Emutastic.Emulator
             {
                 _input.Initialize();
                 _input.LoadConfiguration(_console, App.Configuration);   // honor the Controls-panel bindings
+                LoadDiskSwapChord();                                     // P1 "Disk Swap" chord (or L3+Start default)
                 // In-game controller hot-plug feedback: named connect/disconnect in the same
                 // transient OSD slot as disc swaps — mirrors upstream EmulatorWindow's status-tick
                 // diff (be69750). Fires on the emu thread; ShowDiskMessage only sets volatile fields.
@@ -2349,6 +2354,80 @@ namespace Emutastic.Emulator
             return v;
         }
 
+        // ── Disk Swap chord (upstream EmulatorWindow): consoles whose cores expose the libretro
+        //    disk control interface. Excluded by upstream after testing: TurboGrafx16/PCECD/TG16
+        //    (Beetle PCE/PCE Fast lack registration), 3DO (Opera has no disk-control code). ─────
+        private static readonly HashSet<string> DiskCapableConsoles =
+            new(StringComparer.OrdinalIgnoreCase) { "FDS", "PS1", "Saturn", "SegaCD", "Amiga" };
+        public static bool ConsoleSupportsDiskSwap(string console)
+            => !string.IsNullOrEmpty(console) && DiskCapableConsoles.Contains(console);
+
+        // User-configured chord halves (Preferences → Controls → FRONTEND → Disk Swap).
+        // Controller: panel raw-id space; -1 = unbound → fall back to the L3+Start default.
+        // Keyboard: SDL scancodes resolved from the stored Avalonia Key names ("KeyA+KeyB").
+        private int _diskSwapCtrlA = -1, _diskSwapCtrlB = -1;
+        private int _diskSwapKeySCa = -1, _diskSwapKeySCb = -1;
+        private volatile bool _diskSwapKeyAHeld, _diskSwapKeyBHeld;
+
+        // Parse the P1 "Disk Swap" chord from config (upstream loads it alongside the keyboard
+        // mappings; same "A+B" identifier format both sides). Called from Start() after
+        // LoadConfiguration so prefs edits apply at next launch like every other binding.
+        private void LoadDiskSwapChord()
+        {
+            _diskSwapCtrlA = _diskSwapCtrlB = -1;
+            _diskSwapKeySCa = _diskSwapKeySCb = -1;
+            _diskSwapKeyAHeld = _diskSwapKeyBHeld = false;
+            var cfg = App.Configuration;
+            if (cfg == null) return;
+            var p1 = cfg.GetInputConfiguration($"{_console}_P1");
+            if (p1.ControllerMappings.Count == 0 && p1.KeyboardMappings.Count == 0)
+                p1 = cfg.GetInputConfiguration(_console);   // legacy single-player saves
+
+            foreach (var m in p1.ControllerMappings)
+                if (string.Equals(m.ButtonName, "Disk Swap", StringComparison.OrdinalIgnoreCase))
+                {
+                    var parts = (m.InputIdentifier ?? "").Split('+', 2);
+                    if (parts.Length == 2 && int.TryParse(parts[0].Trim(), out int a)
+                                          && int.TryParse(parts[1].Trim(), out int b))
+                    { _diskSwapCtrlA = a; _diskSwapCtrlB = b; }
+                    break;
+                }
+            foreach (var m in p1.KeyboardMappings)
+                if (string.Equals(m.ButtonName, "Disk Swap", StringComparison.OrdinalIgnoreCase))
+                {
+                    var parts = (m.InputIdentifier ?? "").Split('+', 2);
+                    if (parts.Length == 2)
+                    {
+                        _diskSwapKeySCa = KeyNameToScancode(parts[0].Trim());
+                        _diskSwapKeySCb = KeyNameToScancode(parts[1].Trim());
+                        if (_diskSwapKeySCa < 0 || _diskSwapKeySCb < 0)
+                            _diskSwapKeySCa = _diskSwapKeySCb = -1;
+                    }
+                    break;
+                }
+            if (_diskSwapCtrlA >= 0 || _diskSwapKeySCa >= 0)
+                Trace.WriteLine($"[Emu] disk swap chord: ctrl {_diskSwapCtrlA}+{_diskSwapCtrlB}, key sc {_diskSwapKeySCa}+{_diskSwapKeySCb}");
+        }
+
+        // Avalonia Key enum name → SDL scancode for the chord-capturable set. -1 = unmappable
+        // (the chord is then ignored rather than half-matched).
+        private static int KeyNameToScancode(string name)
+        {
+            if (name.Length == 1 && name[0] >= 'A' && name[0] <= 'Z') return 4 + (name[0] - 'A');
+            if (name.Length == 2 && name[0] == 'D' && char.IsDigit(name[1]))
+                return name[1] == '0' ? 39 : 30 + (name[1] - '1');
+            if (name.Length is 2 or 3 && name[0] == 'F'
+                && int.TryParse(name.AsSpan(1), out int fn) && fn >= 1 && fn <= 12) return 58 + fn - 1;
+            return name switch
+            {
+                "Up" => 82, "Down" => 81, "Left" => 80, "Right" => 79,
+                "Space" => 44, "Enter" or "Return" => 40, "Back" => 42, "Tab" => 43,
+                "LeftShift" => 225, "RightShift" => 229, "LeftCtrl" => 224, "RightCtrl" => 228,
+                "LeftAlt" => 226, "RightAlt" => 230,
+                _ => -1,
+            };
+        }
+
         // Called once per emu frame (after input poll). Detects the disc-swap chord (rising edge) and
         // ticks the FDS-injection + deferred-reinsert countdowns.
         private void ServiceDiskSwap()
@@ -2360,10 +2439,15 @@ namespace Emutastic.Emulator
                 try { _setEjectState?.Invoke(false); } catch (Exception ex) { Trace.WriteLine($"[Emu] disk deferred insert failed: {ex.Message}"); }
             }
 
-            // Chord = L3 + Start on controller 0, read raw so it works regardless of the per-console
-            // mapping (NES/FDS etc. don't map L3). Rising edge so a held chord fires once.
-            bool held = _input.IsRawButtonDown(SdlInput.SdlButtonLeftStick)
-                     && _input.IsRawButtonDown(SdlInput.SdlButtonStart);
+            // Chord on controller 0, read raw so it works regardless of the per-console mapping
+            // (NES/FDS etc. don't map L3). User-configured chord (Preferences → Controls →
+            // FRONTEND) wins; L3 + Start is the unbound default. A configured keyboard chord
+            // (held flags fed by OnGlKey) also triggers. Rising edge so a held chord fires once.
+            bool held = _diskSwapCtrlA >= 0 && _diskSwapCtrlB >= 0
+                ? _input.IsRawControlDown(_diskSwapCtrlA) && _input.IsRawControlDown(_diskSwapCtrlB)
+                : _input.IsRawButtonDown(SdlInput.SdlButtonLeftStick)
+                  && _input.IsRawButtonDown(SdlInput.SdlButtonStart);
+            held |= _diskSwapKeySCa >= 0 && _diskSwapKeyAHeld && _diskSwapKeyBHeld;
             if (held && !_diskSwapPrevHeld) SwapToNextDisk();
             _diskSwapPrevHeld = held;
         }

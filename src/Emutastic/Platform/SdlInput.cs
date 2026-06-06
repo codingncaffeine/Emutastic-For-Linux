@@ -284,6 +284,16 @@ namespace Emutastic.Platform
             return h != IntPtr.Zero && SDL_GetGamepadButton(h, sdlButton);
         }
 
+        /// <summary>Raw read in the panel's full id space (0..20 SDL button, 100/101 trigger,
+        /// 110..117 stick dir) — for the user-configured Disk Swap chord, which may bind any
+        /// capturable control, not just plain buttons.</summary>
+        public bool IsRawControlDown(int rawId, int port = 0)
+        {
+            if (port < 0 || port >= _pads.Count) return false;
+            var h = _pads[port].handle;
+            return h != IntPtr.Zero && ReadRawControl(h, rawId);
+        }
+
         /// <summary>libretro retro_input_state_t backend.</summary>
         public short GetInputState(uint port, uint device, uint index, uint id)
         {

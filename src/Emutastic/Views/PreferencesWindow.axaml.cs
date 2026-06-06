@@ -2341,7 +2341,8 @@ public partial class PreferencesWindow : Window
 
     // ════════════════════════════════════════════════════════════════════════
     //  Controls panel (CI3) — per-console input mapping with live key/gamepad capture.
-    //  Disk-swap chord deferred; keyboard capture stores the Avalonia Key enum name.
+    //  Keyboard capture stores the Avalonia Key enum name. Disk Swap captures a CHORD
+    //  (two sequential presses → "A+B"), mirroring upstream's CommitChordMapping flow.
     // ════════════════════════════════════════════════════════════════════════
 
     private Services.ControllerManager? _ctrl;
@@ -2350,6 +2351,10 @@ public partial class PreferencesWindow : Window
     private int _currentPlayer = 1;             // 1-based (matches upstream + the runtime config key)
     private bool _isKeyboardMode = true;
     private int _waitingRowIndex = -1;
+    // Chord capture state (Disk Swap): first half pending until a DIFFERENT second press commits.
+    private Key? _chordFirstKey;
+    private uint? _chordFirstCtrl;
+    private string? _chordFirstDisplay;
     private bool _suppressControlsAutoSave;
     // null until the user picks (or the first populate runs) — so a connected controller,
     // not Keyboard, wins the default when the Controls tab first opens.
@@ -2482,6 +2487,16 @@ public partial class PreferencesWindow : Window
             panel.Children.Add(new Avalonia.Controls.Shapes.Rectangle { Height = 1, Fill = Brush("BorderNormalBrush"), Margin = new Thickness(0, 0, 0, 6) });
             foreach (var btn in group) panel.Children.Add(BuildMappingRow(btn.Name));
         }
+
+        // Frontend-only Disk Swap action (upstream parity) — for consoles whose cores expose the
+        // libretro disk control interface. Captured as a chord; unbound default is L3 + Start.
+        if (Emulator.EmulatorSession.ConsoleSupportsDiskSwap(_currentConsole))
+        {
+            panel.Children.Add(new TextBlock { Text = "FRONTEND", FontSize = 10, FontWeight = FontWeight.SemiBold,
+                FontFamily = Font("PrimaryFont"), Foreground = Brush("TextMutedBrush"), Margin = new Thickness(0, 12, 0, 4) });
+            panel.Children.Add(new Avalonia.Controls.Shapes.Rectangle { Height = 1, Fill = Brush("BorderNormalBrush"), Margin = new Thickness(0, 0, 0, 6) });
+            panel.Children.Add(BuildMappingRow("Disk Swap"));
+        }
         RefreshAllRows();
     }
 
@@ -2532,6 +2547,7 @@ public partial class PreferencesWindow : Window
         if (saveBtn != null) saveBtn.Content = "Save";   // clear a prior "Saved" once the user edits again
         int prev = _waitingRowIndex;
         _waitingRowIndex = rowIndex;
+        _chordFirstKey = null; _chordFirstCtrl = null; _chordFirstDisplay = null;   // drop a half-captured chord
         if (_ctrl != null) _ctrl.RawMode = true;
         if (prev >= 0) RefreshRow(prev);
         RefreshRow(rowIndex);
@@ -2541,8 +2557,30 @@ public partial class PreferencesWindow : Window
     {
         int prev = _waitingRowIndex;
         _waitingRowIndex = -1;
+        _chordFirstKey = null; _chordFirstCtrl = null; _chordFirstDisplay = null;
         if (_ctrl != null) _ctrl.RawMode = false;
         if (prev >= 0) RefreshRow(prev);
+    }
+
+    // Chord commit (upstream CommitChordMapping): both halves packed into ChordIdentifier as
+    // "A+B" — Avalonia Key names for keyboard, panel raw ids for controller. SaveMappingsToConfig
+    // already serializes ChordIdentifier when present.
+    private void CommitChordMapping(string buttonName, string display,
+        Key keyA = Key.None, Key keyB = Key.None, uint ctrlA = uint.MaxValue, uint ctrlB = uint.MaxValue)
+    {
+        _ctrlMappings[buttonName] = new Services.InputMapping
+        {
+            ConsoleName = _currentConsole, ButtonName = buttonName,
+            InputType = _isKeyboardMode ? Services.InputType.Keyboard : Services.InputType.Controller,
+            Key = keyA, ControllerButtonId = ctrlA == uint.MaxValue ? 0 : ctrlA,
+            DisplayText = display,
+            ChordIdentifier = _isKeyboardMode ? $"{keyA}+{keyB}" : $"{ctrlA}+{ctrlB}",
+        };
+        _chordFirstKey = null; _chordFirstCtrl = null; _chordFirstDisplay = null;
+        int cur = _waitingRowIndex;
+        _waitingRowIndex = -1;
+        RefreshRow(cur);
+        if (_ctrl != null) _ctrl.RawMode = false;   // Disk Swap is the last row — no auto-advance
     }
 
     private void CommitMapping(string buttonName, string displayText, Key key = Key.None, uint controllerId = 0)
@@ -2564,16 +2602,53 @@ public partial class PreferencesWindow : Window
     {
         if (!_isKeyboardMode || _waitingRowIndex < 0) return;
         if (e.Key == Key.Escape) { StopWaiting(); e.Handled = true; return; }
-        CommitMapping(_ctrlRows[_waitingRowIndex].ButtonName, KeyToDisplayString(e.Key), key: e.Key);
+        string btnName = _ctrlRows[_waitingRowIndex].ButtonName;
+        string display = KeyToDisplayString(e.Key);
+
+        // Disk Swap is captured as a CHORD: first press becomes the candidate first half,
+        // a second DIFFERENT press commits both as "KeyA+KeyB" (upstream parity).
+        if (string.Equals(btnName, "Disk Swap", StringComparison.OrdinalIgnoreCase))
+        {
+            e.Handled = true;
+            if (_chordFirstKey == null)
+            {
+                _chordFirstKey = e.Key; _chordFirstDisplay = display;
+                _ctrlRows[_waitingRowIndex].BoxLabel.Text = $"{display} + …";
+                return;
+            }
+            if (e.Key == _chordFirstKey.Value) return;   // ignore repeat of the same key
+            CommitChordMapping(btnName, $"{_chordFirstDisplay} + {display}",
+                keyA: _chordFirstKey.Value, keyB: e.Key);
+            return;
+        }
+
+        CommitMapping(btnName, display, key: e.Key);
         e.Handled = true;
     }
 
     private void OnControllerButtonChanged(uint rawId, bool isPressed)
     {
         if (_isKeyboardMode || !isPressed || _waitingRowIndex < 0) return;
+        string btnName = _ctrlRows[_waitingRowIndex].ButtonName;
         string display = rawId >= 110 ? StickDirToString(rawId)
             : rawId == 100 ? "L2" : rawId == 101 ? "R2" : $"Button {rawId}";
-        CommitMapping(_ctrlRows[_waitingRowIndex].ButtonName, display, controllerId: rawId);
+
+        // Disk Swap chord on the controller too: "rawA+rawB" in the panel id space.
+        if (string.Equals(btnName, "Disk Swap", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_chordFirstCtrl == null)
+            {
+                _chordFirstCtrl = rawId; _chordFirstDisplay = display;
+                _ctrlRows[_waitingRowIndex].BoxLabel.Text = $"{display} + …";
+                return;
+            }
+            if (rawId == _chordFirstCtrl.Value) return;   // ignore repeat
+            CommitChordMapping(btnName, $"{_chordFirstDisplay} + {display}",
+                ctrlA: _chordFirstCtrl.Value, ctrlB: rawId);
+            return;
+        }
+
+        CommitMapping(btnName, display, controllerId: rawId);
     }
 
     private void LoadMappingsFromConfig()
@@ -2583,8 +2658,8 @@ public partial class PreferencesWindow : Window
         var source = _isKeyboardMode ? config.KeyboardMappings : config.ControllerMappings;
         foreach (var m in source)
         {
-            // Chord mappings ("A+B") can't be authored here yet (capture deferred), but must survive a
-            // load/save round-trip — preserve the raw identifier instead of parsing it to None.
+            // Chord mappings ("A+B", authored by the Disk Swap row) keep the raw composite
+            // identifier instead of parsing it to None.
             bool isChord = !string.IsNullOrEmpty(m.InputIdentifier) && m.InputIdentifier.Contains('+');
             _ctrlMappings[m.ButtonName] = new Services.InputMapping
             {
