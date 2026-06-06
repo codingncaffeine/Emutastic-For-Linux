@@ -230,6 +230,7 @@ public partial class MainWindow : Window
     }
 
     private string _activeTab = "Library";
+    private Services.ControllerManager? _hotplugMgr;   // hotplug status toasts (disposed on close)
 
     // Live refresh: the session-end save-state ingest fires SaveStatesChanged — if the user is
     // sitting ON the Save States tab, repopulate so the new state appears without a tab switch.
@@ -687,7 +688,11 @@ public partial class MainWindow : Window
         _vm = new MainViewModel(_db);
         WireRaTab();
         Services.DatabaseService.SaveStatesChanged += OnSaveStatesChanged;
-        Closed += (_, _) => Services.DatabaseService.SaveStatesChanged -= OnSaveStatesChanged;
+        Closed += (_, _) =>
+        {
+            Services.DatabaseService.SaveStatesChanged -= OnSaveStatesChanged;
+            try { _hotplugMgr?.Dispose(); } catch { }
+        };
         _artworkFetch = new ArtworkFetchService(_db, new ArtworkService(), _vm);
         WireImportEvents();
         DataContext = _vm;
@@ -729,8 +734,55 @@ public partial class MainWindow : Window
             try { await _importer.ResumeIncompleteImportsAsync(); }
             catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"[MainWindow] resume failed: {ex.Message}"); }
             await _artworkFetch.RetryMissingArtworkAsync();
+
+            // Orphaned save states (upstream MainWindow:274): files created outside the app —
+            // or stranded by a crash — get DB rows so the Save States tab sees them.
+            try
+            {
+                int found = _db!.DiscoverOrphanedSaveStates();
+                if (found > 0)
+                    Dispatcher.UIThread.Post(() =>
+                        _vm?.SetStatus($"Discovered {found} save state(s)", autoClear: true));
+            }
+            catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"[MainWindow] orphan save-state discovery failed: {ex.Message}"); }
+
+            // Core updates (upstream's CheckCoreUpdatesAndNotifyAsync): banner for 20s.
+            try
+            {
+                var updates = await new Services.CoreDownloadService()
+                    .CheckAllForUpdatesAsync(AppPaths.GetCoresFolder());
+                if (updates.Count > 0)
+                    Dispatcher.UIThread.Post(() => _vm?.SetStatus(updates.Count == 1
+                        ? "1 core update available — Preferences → Cores"
+                        : $"{updates.Count} core updates available — Preferences → Cores", 20_000));
+            }
+            catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"[CoreUpdateCheck] {ex.Message}"); }
+
             Services.StartupTrace.Mark("deferred_startup_work_done");
         });
+
+        // Controller hotplug status (upstream MainWindow:626 + the named poll at :1529): a
+        // long-lived manager just for connection events — the Controls panel makes its own
+        // short-lived one for capture (SDL init is refcounted). MUST be built on the UI thread:
+        // it polls itself on a DispatcherTimer. Events arrive on the UI thread; diffing the name
+        // list gives upstream's per-device "Controller connected: <name>" messages.
+        try
+        {
+            _hotplugMgr = new Services.ControllerManager();
+            var prevPads = _hotplugMgr.GetDeviceNames();
+            _hotplugMgr.ConnectionChanged += _ =>
+            {
+                var now = _hotplugMgr!.GetDeviceNames();
+                var added = now.Except(prevPads).ToList();
+                var removed = prevPads.Except(now).ToList();
+                prevPads = now;
+                foreach (var n in added) _vm?.SetStatus($"Controller connected: {n}", 5000);
+                foreach (var n in removed) _vm?.SetStatus($"Controller disconnected: {n}", 5000);
+                if (added.Count == 0 && removed.Count == 0)
+                    _vm?.SetStatus(now.Count > 0 ? "Controller connected" : "Controller disconnected", 5000);
+            };
+        }
+        catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"[MainWindow] controller hotplug watch failed: {ex.Message}"); }
 
         // Warm LibVLC off the UI thread so the first detail-card snap video doesn't
         // pay the multi-second native init on the dispatcher.
