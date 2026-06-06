@@ -225,8 +225,17 @@ public partial class MainWindow : Window
             var tab = this.FindControl<ToggleButton>(name)!;
             tab.IsChecked = (tab.Tag as string) == tag;
         }
+        _activeTab = tag;
         ShowTab(tag);
     }
+
+    private string _activeTab = "Library";
+
+    // Live refresh: the session-end save-state ingest fires SaveStatesChanged — if the user is
+    // sitting ON the Save States tab, repopulate so the new state appears without a tab switch.
+    // (Wired from the ctor; the event had no subscribers before — fired into the void.)
+    private void OnSaveStatesChanged(object? sender, EventArgs e)
+        => Dispatcher.UIThread.Post(() => { if (_activeTab == "SaveStates") PopulateSaveStatesView(); });
 
     private bool _suppressSearchTextChanged;
     private System.Threading.CancellationTokenSource? _tabSearchCts;
@@ -677,6 +686,8 @@ public partial class MainWindow : Window
         };
         _vm = new MainViewModel(_db);
         WireRaTab();
+        Services.DatabaseService.SaveStatesChanged += OnSaveStatesChanged;
+        Closed += (_, _) => Services.DatabaseService.SaveStatesChanged -= OnSaveStatesChanged;
         _artworkFetch = new ArtworkFetchService(_db, new ArtworkService(), _vm);
         WireImportEvents();
         DataContext = _vm;
@@ -1254,6 +1265,17 @@ public partial class MainWindow : Window
                 }, autoClear: true);
                 // Backfill missing artwork for the console (the user expects a full refresh).
                 try { await _artworkFetch!.FetchMissingArtworkForConsoleAsync(console, display); } catch { }
+                // Metadata pass (upstream MainWindow:1697): the manual Refresh click is the
+                // user's deliberate opt-in to retry games previously marked "we tried, came
+                // back empty" — reset MetadataAttempts for the console, then backfill
+                // missing Developer/Publisher/Genre/Description/Year fields.
+                try
+                {
+                    _db!.ResetMetadataAttemptsForConsole(console);
+                    await _artworkFetch!.RefreshConsoleMetadataAsync(console,
+                        s => _vm?.SetStatus(s, autoClear: true));
+                }
+                catch { }
                 _refreshInProgress = false;
             });
         };

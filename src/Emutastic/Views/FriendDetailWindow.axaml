@@ -359,7 +359,8 @@
                                       FontSize="11"
                                       Foreground="{DynamicResource TextSecondaryBrush}"
                                       VerticalAlignment="Center"
-                                      IsChecked="True"/>
+                                      IsChecked="True"
+                                      IsCheckedChanged="CompareFilter_Changed"/>
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                 <TextBlock Text="Sort:"
                                            FontFamily="{DynamicResource PrimaryFont}"
@@ -371,7 +372,8 @@
                                           Theme="{StaticResource DarkComboBox}"
                                           Width="160"
                                           FontSize="11"
-                                          SelectedIndex="0">
+                                          SelectedIndex="0"
+                                          SelectionChanged="CompareFilter_Changed">
                                     <ComboBoxItem Content="Biggest gap (catch up)"/>
                                     <ComboBoxItem Content="Biggest gap (you're ahead)"/>
                                     <ComboBoxItem Content="My progress (high → low)"/>
@@ -425,7 +427,8 @@
                         <ComboBox Name="LbGamePicker"
                                   Theme="{StaticResource DarkComboBox}"
                                   Grid.Column="1"
-                                  FontSize="12"/>
+                                  FontSize="12"
+                                  SelectionChanged="LbGamePicker_SelectionChanged"/>
                     </Grid>
 
                     <ScrollViewer Grid.Row="1"
