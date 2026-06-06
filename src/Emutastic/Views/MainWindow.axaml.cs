@@ -1867,11 +1867,16 @@ public partial class MainWindow : Window
             string newPng   = System.IO.Path.Combine(dir, safeName + ".png");
             string newJson  = System.IO.Path.Combine(dir, safeName + ".json");
             string oldJson  = System.IO.Path.ChangeExtension(s.StatePath, ".json");
+            // The rcheevos progress side-car travels with its .state — orphaning it on rename
+            // would silently drop achievement hit counts when the renamed state is loaded.
+            string newCheevos = System.IO.Path.Combine(dir, safeName + ".cheevos");
+            string oldCheevos = System.IO.Path.ChangeExtension(s.StatePath, ".cheevos");
             try
             {
                 if (System.IO.File.Exists(s.StatePath))      System.IO.File.Move(s.StatePath, newState, overwrite: true);
                 if (System.IO.File.Exists(s.ScreenshotPath)) System.IO.File.Move(s.ScreenshotPath, newPng, overwrite: true);
                 if (System.IO.File.Exists(oldJson))          System.IO.File.Move(oldJson, newJson, overwrite: true);
+                if (System.IO.File.Exists(oldCheevos))       System.IO.File.Move(oldCheevos, newCheevos, overwrite: true);
             }
             catch (Exception ex)
             {
@@ -1891,6 +1896,7 @@ public partial class MainWindow : Window
             try { if (System.IO.File.Exists(s.ScreenshotPath)) System.IO.File.Delete(s.ScreenshotPath); } catch { }
             try { string p = System.IO.Path.ChangeExtension(s.StatePath, ".png");  if (System.IO.File.Exists(p)) System.IO.File.Delete(p); } catch { }
             try { string j = System.IO.Path.ChangeExtension(s.StatePath, ".json"); if (System.IO.File.Exists(j)) System.IO.File.Delete(j); } catch { }
+            try { string c = System.IO.Path.ChangeExtension(s.StatePath, ".cheevos"); if (System.IO.File.Exists(c)) System.IO.File.Delete(c); } catch { }
             _db!.DeleteSaveState(s.Id);
             PopulateSaveStatesView();
         }));

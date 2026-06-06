@@ -2805,8 +2805,8 @@ namespace Emutastic.Emulator
             Task.Run(() => FinalizeSave(name, data, shot, sw, sh, coreName));
         }
 
-        // Heavy file work off the emu thread. Writes the upstream trio: .state / .png / .json
-        // (upstream's 4th .cheevos sidecar is RetroAchievements-only — not ported yet).
+        // Heavy file work off the emu thread. Writes the upstream quartet: .state / .png / .json
+        // / .cheevos (rcheevos runtime progress — restored by ExecuteLoadOnEmuThread).
         private void FinalizeSave(string name, byte[] data, byte[]? shot, int sw, int sh, string coreName)
         {
             try
@@ -3575,8 +3575,13 @@ namespace Emutastic.Emulator
                 };
                 client.ResetRequested += () =>
                 {
-                    Trace.WriteLine("[RA] Reset requested by rcheevos.");
+                    // rcheevos demands a reset (e.g. hardcore being enabled): reset the GAME too,
+                    // not just the achievement runtime — RA Section B requires switching into
+                    // hardcore to come with a full game reset (auto-fail otherwise). Stricter
+                    // than upstream, which resets only the client.
+                    Trace.WriteLine("[RA] Reset requested by rcheevos — resetting game + runtime.");
                     try { client.Reset(); } catch { }
+                    _resetRequested = true;   // emu loop performs retro_reset before the next frame
                 };
 
                 // Token login first, password fallback (new token rides the results file —
