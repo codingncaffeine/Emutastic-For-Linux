@@ -13,12 +13,15 @@ The goal is a **1:1 clone**: aesthetically and functionally identical to the Win
 platform plumbing swapped underneath (WPF → Avalonia, Direct3D/Vulkan → OpenGL/Vulkan, WASAPI → SDL3,
 XInput → SDL3 gamepad, Win32 core loading → `dlopen`).
 
-> **Status:** 0.6.1 — at feature parity with upstream for the systems listed below: library +
+> **Status:** 0.7.5 — at feature parity with upstream for the systems listed below: library +
 > import, hardware-rendered cores, save states, cheats, recording, manuals/notes, the full
-> RetroAchievements suite (unlocks, hardcore, Achievements tab, friends, leaderboard toasts),
-> GitHub cloud sync (shared or per-PC repositories, optional encryption — interoperates with the
-> Windows app), ROM hacks (IPS/BPS/UPS soft-patching), and in-app updates. Still in progress:
-> GameCube & Dreamcast (performance work) and slang shaders.
+> RetroAchievements suite (unlocks, hardcore, Achievements tab, friends, leaderboard toasts,
+> in-game challenge/progress indicators), GitHub cloud sync (shared or per-PC repositories,
+> optional encryption — interoperates with the Windows app), ROM hacks (IPS/BPS/UPS
+> soft-patching), in-app updates, and the complete in-game overlay: video shaders (7 built-ins +
+> the downloadable libretro GLSL pack), arcade/Neo Geo bezels, Vectrex overlays, turbo buttons,
+> DS screen layouts, flip display, and F12 screenshots at displayed resolution. Still in
+> progress: GameCube & Dreamcast (performance work).
 
 > **Legal notice:** This project is a frontend only. It does not include, distribute, or facilitate the
 > acquisition of any copyrighted software, ROM images, BIOS files, or other proprietary system files.
