@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata — consumed by Flathub / GNOME Software / KDE Discover.
+     Validate with: appstreamcli validate packaging/io.github.codingncaffeine.Emutastic.metainfo.xml -->
+<component type="desktop-application">
+  <id>io.github.codingncaffeine.Emutastic</id>
+  <name>Emutastic</name>
+  <summary>Beautiful retro game library and emulation frontend</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <developer id="io.github.codingncaffeine">
+    <name>codingncaffeine</name>
+  </developer>
+
+  <description>
+    <p>
+      Emutastic is a polished library manager and frontend for retro game emulation,
+      built on the libretro ecosystem. Import your legally-owned game backups, and
+      Emutastic identifies them, fetches box art and metadata, and presents your
+      collection as a beautiful, browsable library.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Library management with box art, metadata, video previews, collections and favorites</li>
+      <li>One-click play across dozens of classic consoles (cores download on demand)</li>
+      <li>Save states with thumbnails, screenshots, cheats, per-game notes and manuals</li>
+      <li>RetroAchievements: unlocks, hardcore mode, leaderboards, friends and challenge indicators</li>
+      <li>In-game overlay: shaders (built-in + the libretro pack), bezels, turbo buttons, recording</li>
+      <li>ROM hack soft-patching (IPS/BPS/UPS), cloud save sync, in-app updates</li>
+    </ul>
+    <p>
+      Emutastic does not include any games, BIOS files, or copyrighted system software.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.codingncaffeine.Emutastic.desktop</launchable>
+
+  <url type="homepage">https://github.com/codingncaffeine/Emutastic-For-Linux</url>
+  <url type="bugtracker">https://github.com/codingncaffeine/Emutastic-For-Linux/issues</url>
+  <url type="vcs-browser">https://github.com/codingncaffeine/Emutastic-For-Linux</url>
+
+  <!-- TODO before Flathub submission: host 2-4 screenshots (16:9 PNGs of the library,
+       game detail, in-game overlay, achievements dashboard) and reference them here. -->
+  <!--
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/codingncaffeine/Emutastic-For-Linux/main/docs/screenshots/library.png</image>
+      <caption>The game library</caption>
+    </screenshot>
+  </screenshots>
+  -->
+
+  <categories>
+    <category>Game</category>
+    <category>Emulator</category>
+  </categories>
+
+  <content_rating type="oars-1.1"/>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+    <control>gamepad</control>
+  </supports>
+
+  <releases>
+    <release version="0.7.5" date="2026-06-05">
+      <description>
+        <p>Selection indicators, Delete-key removal, DS screen layouts, achievement
+           challenge indicators, and a round of wiring fixes.</p>
+      </description>
+    </release>
+    <release version="0.7.0" date="2026-06-05">
+      <description>
+        <p>The in-game menu grows up: shaders, bezels, turbo buttons, Vectrex
+           overlays, displayed-resolution screenshots, per-game window memory.</p>
+      </description>
+    </release>
+    <release version="0.5.0" date="2026-06-05">
+      <description><p>First public release.</p></description>
+    </release>
+  </releases>
+</component>

@@ -27,6 +27,8 @@ cp -f src/Emutastic/Assets/Sounds/Notification1.mp3 "$PUB/Assets/Sounds/"
 cp -f "src/Emutastic/Assets/buttons/powerbutton.png" "$PUB/" 2>/dev/null || true
 
 cp packaging/README.txt "$PUB/README.txt"
+cp LICENSE "$PUB/LICENSE"
+cp LICENSE-CONTROLLER-ART.txt "$PUB/LICENSE-CONTROLLER-ART.txt"
 
 echo "── tarball"
 tar -C "$PUB" -czf "$OUT/Emutastic-$VER-linux-x64.tar.gz" .
@@ -40,6 +42,9 @@ mkdir -p "$DEB/DEBIAN" "$DEB/usr/lib/emutastic" "$DEB/usr/bin" \
 cp -a "$PUB/." "$DEB/usr/lib/emutastic/"
 rm -f "$DEB/usr/lib/emutastic/README.txt"
 cp packaging/README.txt "$DEB/usr/share/doc/emutastic/README.txt"
+cp LICENSE "$DEB/usr/share/doc/emutastic/copyright"
+mkdir -p "$DEB/usr/share/metainfo"
+cp packaging/io.github.codingncaffeine.Emutastic.metainfo.xml "$DEB/usr/share/metainfo/"
 cat > "$DEB/usr/bin/emutastic" <<'WRAP'
 #!/bin/sh
 exec /usr/lib/emutastic/Emutastic "$@"
