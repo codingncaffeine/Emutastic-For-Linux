@@ -2251,7 +2251,9 @@ public partial class PreferencesWindow : Window
         ToolTip.SetTip(name, dll);
         Grid.SetColumn(name, 1);
 
-        var btnPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
+        // Right inset pulls the ⟳/↓ buttons clear of the overlay scrollbar, which floats over the
+        // content's right edge — flush buttons were getting mis-clicked as scrollbar drags.
+        var btnPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 22, 0) };
         if (entry != null)
         {
             var pill = new TextBlock { Text = "Update available", FontSize = 10, FontWeight = FontWeight.SemiBold, Foreground = Brush("AccentBrush"), VerticalAlignment = VerticalAlignment.Center, IsVisible = false };
