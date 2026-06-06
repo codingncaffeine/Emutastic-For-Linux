@@ -905,8 +905,18 @@ public partial class MainWindow : Window
         _vm.ViewSwapping += () =>
         {
             _selectionAnchor = null;
-            this.FindControl<ListBox>("GameGridView")?.SelectedItems?.Clear();
+            var grid = this.FindControl<ListBox>("GameGridView");
+            grid?.SelectedItems?.Clear();
             this.FindControl<DataGrid>("GameListView")?.SelectedItems?.Clear();
+            // THE ghost-card root cause: Avalonia's VirtualizingStackPanel NEVER recycles the
+            // FOCUSED container. A clicked card keeps keyboard focus, so its container survives
+            // every ItemsSource swap as a painted orphan showing the old view's game (also why
+            // re-seating the collection couldn't heal it — the orphan is exempt from recycling
+            // by design). Pull focus up to the window before the swap so the container is
+            // recyclable like any other. (ghost-diag.log: every ghost was the last-clicked card.)
+            if (grid != null && FocusManager?.GetFocusedElement() is Avalonia.Visual fc
+                && Avalonia.VisualTree.VisualExtensions.GetVisualAncestors(fc).Contains(grid))
+                Focus();
         };
         _artworkFetch.BoxArt3DFetched += () => Dispatcher.UIThread.Post(() =>
         {
