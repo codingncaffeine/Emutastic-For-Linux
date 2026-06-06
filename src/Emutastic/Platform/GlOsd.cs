@@ -173,6 +173,42 @@ namespace Emutastic.Platform
             return SKColor.TryParse(hex.Trim(), out var c) ? c : fallback;
         }
 
+        /// <summary>True when the family can draw plain text. Used by the toast font picker to
+        /// hide symbol/dingbat families (no Latin glyphs → every character renders as a box).</summary>
+        public static bool FontFamilyRendersText(string family)
+        {
+            try
+            {
+                using var tf = SKTypeface.FromFamilyName(family);
+                if (tf == null) return false;
+                foreach (var g in tf.GetGlyphs("ABCabc123"))
+                    if (g == 0) return false;
+                return true;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>Resolve a user-picked toast font family, falling back to the default when the
+        /// family doesn't exist or can't render plain text (symbol/dingbat fonts have no Latin
+        /// glyphs — the picked font drew every character as a box). Result cached per family.</summary>
+        private static readonly Dictionary<string, SKTypeface> _safeTypefaceCache = new();
+        private static SKTypeface SafeTypeface(string? family, SKFontStyle style)
+        {
+            if (string.IsNullOrWhiteSpace(family)) return SKTypeface.FromFamilyName(null, style);
+            string key = $"{family}|{style}";
+            if (_safeTypefaceCache.TryGetValue(key, out var cached)) return cached;
+            var tf = SKTypeface.FromFamilyName(family, style);
+            if (tf != null)
+            {
+                var glyphs = tf.GetGlyphs("ABCabc123");
+                foreach (var g in glyphs)
+                    if (g == 0) { tf.Dispose(); tf = null; break; }
+            }
+            tf ??= SKTypeface.FromFamilyName(null, style);
+            _safeTypefaceCache[key] = tf;
+            return tf;
+        }
+
         private static void DrawRaToast(SKCanvas c, int w, int h,
             (string Header, string Title, string Desc, string Points, SKBitmap? Badge) t, float alpha)
         {
@@ -181,10 +217,8 @@ namespace Emutastic.Platform
             var accent = new SKColor(0xE0, 0x35, 0x35, 0xFF);
 
             using var headerFont = new SKFont(SKTypeface.FromFamilyName(null, SKFontStyle.Bold), (float)st.HeaderSize);
-            using var titleFont  = new SKFont(SKTypeface.FromFamilyName(
-                string.IsNullOrWhiteSpace(st.TitleFont) ? null : st.TitleFont, SKFontStyle.Bold), (float)st.TitleSize);
-            using var descFont   = new SKFont(SKTypeface.FromFamilyName(
-                string.IsNullOrWhiteSpace(st.DescFont) ? null : st.DescFont), (float)st.DescSize);
+            using var titleFont  = new SKFont(SafeTypeface(st.TitleFont, SKFontStyle.Bold), (float)st.TitleSize);
+            using var descFont   = new SKFont(SafeTypeface(st.DescFont, SKFontStyle.Normal), (float)st.DescSize);
             using var pointsFont = new SKFont(SKTypeface.FromFamilyName(null, SKFontStyle.Bold), (float)st.PointsSize);
 
             const float pad = 14, badgeSize = 48, gap = 12, edge = 20;

@@ -32,7 +32,11 @@ public partial class PreferencesWindow
     private List<string>? _systemFontNamesCache;
     private List<string> SystemFontNames =>
         _systemFontNamesCache ??= FontManager.Current.SystemFonts
-            .Select(f => f.Name).Distinct().OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+            .Select(f => f.Name).Distinct()
+            // Hide families that can't render plain text (symbol/dingbat fonts) — picking one
+            // made every toast character a box. Same glyph test the in-game renderer guards with.
+            .Where(Platform.GlOsd.FontFamilyRendersText)
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
 
     // Dependent rows shown/hidden based on current selections.
     private Control? _rowGradStart, _rowGradEnd, _rowSolidColor,
