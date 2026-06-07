@@ -28,6 +28,13 @@ namespace Emutastic.Services.ConsoleHandlers
             // Right-stick emulated pointer ON by default (upstream 8308053). A user's saved
             // Core Options choice still wins — EmulatorSession applies the store on top.
             ["desmume_pointer_device_r"] = "emulated",
+            // Performance: the core defaults are interpreter + single-threaded SoftRasterizer,
+            // which caps high internal resolutions on CPU rendering. A/B (Mario Kart DS attract
+            // race at 4x/1024x768, 2026-06-07): defaults 48-51fps @ ~20.5ms core.Run →
+            // jit + 4 raster threads locked 60 @ ~8.6ms. Same config-archaeology class as the
+            // GameCube dual-core+fastmem win; candidate to suggest upstream.
+            ["desmume_cpu_mode"]  = "jit",
+            ["desmume_num_cores"] = "4",
         };
 
         // DeSmuME renders on the CPU (SoftRasterizer), and both of these
