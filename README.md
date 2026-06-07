@@ -13,6 +13,9 @@ The goal is a **1:1 clone**: aesthetically and functionally identical to the Win
 platform plumbing swapped underneath (WPF → Avalonia, Direct3D/Vulkan → OpenGL/Vulkan, WASAPI → SDL3,
 XInput → SDL3 gamepad, Win32 core loading → `dlopen`).
 
+**[Visit emutastic.com →](https://www.emutastic.com/emutasticapp.html)** for a visual tour of the app, or grab the
+[latest release](https://github.com/codingncaffeine/Emutastic-For-Linux/releases) directly.
+
 For current status and per-release changes, see the
 [releases page](https://github.com/codingncaffeine/Emutastic-For-Linux/releases).
 
