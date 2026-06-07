@@ -29,6 +29,13 @@ namespace Emutastic.Platform
         [DllImport(LIB)] static extern IntPtr wlp_hw_info();
         [DllImport(LIB)] static extern void wlp_hw_readback_times(out double issueMs, out double mapMs);
         [DllImport(LIB)] static extern void wlp_hw_readback_times2(out double mapcallMs, out double copyMs);
+        [DllImport(LIB)] static extern void wlp_hw_set_present_target(int w, int h);
+
+        /// <summary>Downscale-before-readback hint: when the core's FBO is much larger than the
+        /// presented window, the native side blits it down to (at most) this size before the PBO
+        /// read, making the per-frame memcpy window-sized regardless of internal resolution.
+        /// (0,0) disables. Safe from any thread (plain int stores).</summary>
+        public static void SetPresentTarget(int w, int h) => wlp_hw_set_present_target(w, h);
 
         /// <summary>Create the offscreen GL context + FBO (call on the emu thread, after retro_load_game).
         /// useGlx: create the context via GLX/XWayland instead of surfaceless EGL — required by

@@ -225,6 +225,10 @@ namespace Emutastic.Emulator
         // EMUTASTIC_FPS_LOG=1 mirrors the per-second HUD stats line to emulator-host.log.
         private static readonly bool FpsLogEnabled =
             Environment.GetEnvironmentVariable("EMUTASTIC_FPS_LOG") == "1";
+        // EMUTASTIC_FULLRES_READBACK=1 disables the HW downscale-before-readback stage.
+        private static readonly bool FullresReadback =
+            Environment.GetEnvironmentVariable("EMUTASTIC_FULLRES_READBACK") == "1";
+        private int _lastTargetW, _lastTargetH;   // present-target last pushed to the native side
         private long _coreRunTicks, _coreRunCalls; // accumulated retro_run time + call count for avg ms
         private double _coreRunMsEma;              // smoothed per-frame retro_run cost (decoupled loop diag)
         private double _paceWaitMsEma, _cushionWaitMsEma; // where the rest of the frame goes (diag)
@@ -1582,6 +1586,13 @@ namespace Emutastic.Emulator
                 }
                 _wlTop.GetSize(out int ww, out int wh);
                 if (ww <= 0) { ww = 960; wh = 720; }   // pre-first-configure fallback (size unknown yet)
+                // Feed the window size to the HW readback's downscale stage (no-op for SW cores;
+                // EMUTASTIC_FULLRES_READBACK=1 keeps full-internal-res readback for quality recording).
+                if (_hwRenderActive && !FullresReadback && (ww != _lastTargetW || wh != _lastTargetH))
+                {
+                    Platform.HwGlContext.SetPresentTarget(ww, wh);
+                    _lastTargetW = ww; _lastTargetH = wh;
+                }
                 hudVisible = IsPaused || nowMs < hudHideAtMs || cogMenu != null;   // cog menu pins the pill
                 float tgt = hudVisible ? 1f : 0f;                       // 150ms fade-in / 300ms fade-out
                 if (hudAlpha < tgt) hudAlpha = (float)Math.Min(tgt, hudAlpha + dt / 150.0);

@@ -88,6 +88,7 @@ void wlp_hw_destroy(void);
 const char* wlp_hw_info(void);
 void wlp_hw_readback_times(double* issue_ms, double* map_ms);
 void wlp_hw_readback_times2(double* mapcall_ms, double* copy_ms);  // map_ms split: GPU sync vs pixel copy
+void wlp_hw_set_present_target(int w, int h);  // downscale-before-readback hint (0,0 = full res)
 
 // Current window size (pixels).
 void wlp_size(void* h, int* w, int* hh);

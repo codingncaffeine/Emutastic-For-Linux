@@ -68,6 +68,11 @@ typedef unsigned char (*unmap_buf_t)(GLenum);
 typedef void* (*fence_sync_t)(GLenum, GLbitfield);
 typedef GLenum (*client_wait_t)(void*, GLbitfield, unsigned long long);
 typedef void (*del_sync_t)(void*);
+typedef void (*blit_fb_t)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum);
+
+#ifndef GL_DRAW_FRAMEBUFFER
+#define GL_DRAW_FRAMEBUFFER 0x8CA9
+#endif
 
 static struct {
     EGLDisplay dpy; EGLContext ctx; EGLConfig cfg;
@@ -88,6 +93,14 @@ static struct {
     void *pbo_sync[WLP_PBO_RING];                 // NULL = slot free
     unsigned long long pbo_seq[WLP_PBO_RING], seq; // issue order, to pick the newest completed
     int pbo_ok;
+    // GPU downscale-before-readback: when the core's FBO is much larger than the presented
+    // window (3DS 8x internal res ⇒ ~43MB/frame), blit it into a window-bounded scale FBO
+    // first and read THAT back — the mapped-PBO memcpy cost becomes window-sized regardless
+    // of internal resolution. tgt_* is written from the present thread (plain int store; the
+    // emu thread reads it on the next readback — staleness is harmless).
+    blit_fb_t BlitFramebuffer;
+    GLuint sfbo, stex; int sfbo_w, sfbo_h;
+    volatile int tgt_w, tgt_h;
     // diagnostics: which device/driver the surfaceless context actually landed on (llvmpipe vs
     // real GPU flips readback cost ~1ms ↔ ~11ms), and where readback time goes (issue vs map).
     char info[256];
@@ -226,6 +239,7 @@ int wlp_hw_init(int ctx_type, int major, int minor, int want_depth, int want_ste
     H.DeleteSync     = (del_sync_t)   hw_gpa("glDeleteSync");
     H.pbo_ok = H.GenBuffers && H.BindBuffer && H.BufferData && H.MapBuffer && H.UnmapBuffer
             && H.FenceSync && H.ClientWaitSync && H.DeleteSync;
+    H.BlitFramebuffer = (blit_fb_t)hw_gpa("glBlitFramebuffer");   // missing → full-res readback
     if (H.pbo_ok) {
         H.GenBuffers(WLP_PBO_RING, H.pbo);
         for (int i = 0; i < WLP_PBO_RING; i++) {
@@ -248,6 +262,10 @@ int wlp_hw_init(int ctx_type, int major, int minor, int want_depth, int want_ste
 const char* wlp_hw_info(void) { return H.info; }
 void wlp_hw_readback_times(double* issue, double* map) { if (issue) *issue = H.issue_ms; if (map) *map = H.map_ms; }
 void wlp_hw_readback_times2(double* mapcall, double* copy) { if (mapcall) *mapcall = H.mapcall_ms; if (copy) *copy = H.copy_ms; }
+
+// Present-target hint for downscale-before-readback (0,0 disables). Called from the present
+// thread whenever the window size changes; plain stores, read by the emu thread next readback.
+void wlp_hw_set_present_target(int w, int h) { H.tgt_w = w; H.tgt_h = h; }
 
 void wlp_hw_make_current(void) {
     if (GX.active) { glXMakeContextCurrent(GX.xdpy, GX.pbuf, GX.pbuf, GX.ctx); return; }
@@ -332,11 +350,44 @@ int wlp_hw_readback(void* out, int cur_w, int cur_h, int bottom_left, int* out_w
     int free_slot = -1;
     for (int i = 0; i < WLP_PBO_RING; i++) if (!H.pbo_sync[i]) { free_slot = i; break; }
     if (free_slot >= 0) {
+        // Downscale-before-readback: at high internal res the FBO dwarfs the window (3DS 8x =
+        // ~43MB/frame → ~8ms of mapped-PBO memcpy on the emu thread). Blit (GPU, ~free) into a
+        // window-bounded scale FBO and read THAT. Uniform scale preserves the frame's aspect;
+        // the present path is dimension-agnostic (it gets rw/rh with the pixels). Only engages
+        // when meaningfully smaller (s < 0.85) so ~1:1 cases keep the direct read.
+        int rw = cur_w, rh = cur_h;
+        if (H.BlitFramebuffer && H.tgt_w > 0 && H.tgt_h > 0) {
+            double s = (double)H.tgt_w / cur_w;
+            double sy = (double)H.tgt_h / cur_h;
+            if (sy < s) s = sy;
+            if (s < 0.85) {
+                if (s < 0.05) s = 0.05;
+                rw = (int)(cur_w * s + 0.5); rh = (int)(cur_h * s + 0.5);
+                if (rw < 16) rw = 16; if (rh < 16) rh = 16;
+                if (!H.sfbo) { H.GenFramebuffers(1, &H.sfbo); glGenTextures(1, &H.stex); }
+                if (rw != H.sfbo_w || rh != H.sfbo_h) {
+                    glBindTexture(GL_TEXTURE_2D, H.stex);
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, rw, rh, 0, GL_BGRA, GL_UNSIGNED_BYTE, NULL);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                    glBindTexture(GL_TEXTURE_2D, 0);
+                    H.BindFramebuffer(GL_DRAW_FRAMEBUFFER, H.sfbo);
+                    H.FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, H.stex, 0);
+                    H.sfbo_w = rw; H.sfbo_h = rh;
+                } else {
+                    H.BindFramebuffer(GL_DRAW_FRAMEBUFFER, H.sfbo);
+                }
+                H.BlitFramebuffer(0, 0, cur_w, cur_h, 0, 0, rw, rh, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+                H.BindFramebuffer(GL_READ_FRAMEBUFFER, H.sfbo);
+                H.BindFramebuffer(GL_DRAW_FRAMEBUFFER, H.fbo);   // core expects its FBO bound for draw
+            } else { rw = cur_w; rh = cur_h; }
+        }
         H.BindBuffer(GL_PIXEL_PACK_BUFFER, H.pbo[free_slot]);
-        glReadPixels(0, 0, cur_w, cur_h, GL_BGRA, GL_UNSIGNED_BYTE, 0);
+        glReadPixels(0, 0, rw, rh, GL_BGRA, GL_UNSIGNED_BYTE, 0);
         H.pbo_sync[free_slot] = H.FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
         glFlush();
-        H.pbo_w[free_slot] = cur_w; H.pbo_h[free_slot] = cur_h; H.pbo_seq[free_slot] = ++H.seq;
+        H.pbo_w[free_slot] = rw; H.pbo_h[free_slot] = rh; H.pbo_seq[free_slot] = ++H.seq;
+        if (rw != cur_w) H.BindFramebuffer(GL_READ_FRAMEBUFFER, H.fbo);   // restore for the core
     }
     H.BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     // "map" = fence scan + map + copy of the completed frame; "issue" = readPixels + fence + flush.
