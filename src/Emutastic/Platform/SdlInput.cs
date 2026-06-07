@@ -89,6 +89,12 @@ namespace Emutastic.Platform
         private readonly int[]?[] _ctrlMap = new int[4][];
         private readonly Dictionary<string, int> _kbdRetro = new(StringComparer.OrdinalIgnoreCase);
 
+        // EMUTASTIC_INPUT_DIAG=1: NDS-touch input tracing (R2 wire edges + right-stick reach).
+        private static readonly bool _inputDiag =
+            Environment.GetEnvironmentVariable("EMUTASTIC_INPUT_DIAG") == "1";
+        private bool _r2WireLast;
+        private uint _rsLastId = 99; private short _rsLastVal;
+
         // Per-port analog-direction map (LibretroInput.ANALOG_* ids 16..23 → raw control id),
         // from the Controls panel. Slot = id - 16: [LU, LD, LL, LR, RU, RD, RL, RR]; -1 unbound.
         // When present, RETRO_DEVICE_ANALOG values are COMPOSED from the two per-direction
@@ -354,6 +360,20 @@ namespace Emutastic.Platform
             // keyboard fallback only for player 1
             if (port == 0 && _kbd[(int)id]) pressed = true;
 
+            // EMUTASTIC_INPUT_DIAG=1: log the JOYPAD_R2 wire (NDS Touch tap) on each edge so we
+            // can see whether a bound button is actually driving the wire the core reads.
+            if (_inputDiag && device == RETRO_DEVICE_JOYPAD && (int)id == RJ_R2 && port == 0)
+            {
+                bool now = pressed;
+                if (now != _r2WireLast)
+                {
+                    _r2WireLast = now;
+                    int mapped = (_ctrlMap[0] != null) ? _ctrlMap[0]![RJ_R2] : -2;  // -2 = no custom map (default trigger path)
+                    Services.ControllerDiagLog.Write(
+                        $"[nds-touch] JOYPAD_R2 wire -> {(now ? "DOWN" : "up")}  (map[R2]={mapped}; -1=unbound, -2=defaults)");
+                }
+            }
+
             return pressed ? (short)1 : (short)0;
         }
 
@@ -373,6 +393,18 @@ namespace Emutastic.Platform
                     13u => SDL_GetGamepadAxis(h, AXIS_RTRIG),   // JOYPAD_R2
                     _   => (short)0
                 };
+
+            // EMUTASTIC_INPUT_DIAG: log right-stick magnitude reaching the core (the NDS emulated
+            // pointer) so we can tell a dead pointer from a dead tap. Throttled to meaningful motion.
+            if (_inputDiag && index == 1 && port == 0)
+            {
+                short ax = SDL_GetGamepadAxis(h, id == 0 ? AXIS_RIGHTX : AXIS_RIGHTY);
+                if (System.Math.Abs(ax) > 8000 && (id != _rsLastId || System.Math.Abs(ax - _rsLastVal) > 6000))
+                {
+                    _rsLastId = id; _rsLastVal = ax;
+                    Services.ControllerDiagLog.Write($"[nds-touch] right-stick {(id==0?"X":"Y")} -> {ax} reaching core (pointer should move)");
+                }
+            }
             // Compose from the Controls panel's per-direction bindings when present
             // (slot order: LU, LD, LL, LR, RU, RD, RL, RR; id 0 = X → left/right pair,
             // id 1 = Y → up/down pair; libretro wants +X = right, +Y = down).
