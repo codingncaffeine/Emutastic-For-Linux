@@ -3622,16 +3622,9 @@ namespace Emutastic.Emulator
             try
             {
                 var raConfig = App.Configuration?.GetRetroAchievementsConfiguration();
-                if (raConfig == null || !raConfig.Enabled)
+                if (raConfig == null || !raConfig.IsConfigured)
                 {
-                    Trace.WriteLine("[RA] Disabled — skipping.");
-                    return;
-                }
-                if (string.IsNullOrWhiteSpace(raConfig.Username) ||
-                    (string.IsNullOrWhiteSpace(raConfig.Password) && string.IsNullOrWhiteSpace(raConfig.Token)))
-                {
-                    Trace.WriteLine("[RA] Missing credentials — skipping.");
-                    ShowDiskMessage("RetroAchievements: credentials missing", 5);
+                    Trace.WriteLine("[RA] Not signed in — skipping.");
                     return;
                 }
 

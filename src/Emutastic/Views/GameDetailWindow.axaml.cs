@@ -478,7 +478,7 @@ public partial class GameDetailWindow : Window
     private async Task LoadRetroAchievementsAsync()
     {
         var raConfig = App.Configuration?.GetRetroAchievementsConfiguration();
-        if (raConfig == null || !raConfig.Enabled)
+        if (raConfig == null || !raConfig.IsConfigured)
         {
             Get<StackPanel>("RASection").IsVisible = false;
             return;

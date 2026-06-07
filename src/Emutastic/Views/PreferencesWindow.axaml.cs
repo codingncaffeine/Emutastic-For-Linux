@@ -794,7 +794,6 @@ public partial class PreferencesWindow : Window
 
     private void WireAchievements()
     {
-        this.FindControl<ToggleSwitch>("RAEnabledToggle")!.IsCheckedChanged += (_, _) => SaveAchievementsSettings();
         this.FindControl<ToggleSwitch>("RAHardcoreToggle")!.IsCheckedChanged += (_, _) => SaveAchievementsSettings();
         this.FindControl<ToggleSwitch>("RASyncFollowsToggle")!.IsCheckedChanged += (_, _) => SaveAchievementsSettings();
         this.FindControl<TextBox>("RAUsernameBox")!.LostFocus += (_, _) => SaveAchievementsSettings();
@@ -807,7 +806,6 @@ public partial class PreferencesWindow : Window
     {
         var ra = App.Configuration?.GetRetroAchievementsConfiguration() ?? new Configuration.RetroAchievementsConfiguration();
         _suppressRaSave = true;
-        this.FindControl<ToggleSwitch>("RAEnabledToggle")!.IsChecked = ra.Enabled;
         this.FindControl<TextBox>("RAUsernameBox")!.Text = ra.Username;
         this.FindControl<TextBox>("RAPasswordBox")!.Text = ra.Password;
         this.FindControl<TextBox>("RAApiKeyBox")!.Text = ra.ApiKey;
@@ -831,7 +829,6 @@ public partial class PreferencesWindow : Window
         if (_suppressRaSave || !_achievementsLoaded) return;
         var ra = App.Configuration?.GetRetroAchievementsConfiguration();
         if (ra == null) return;
-        ra.Enabled      = this.FindControl<ToggleSwitch>("RAEnabledToggle")!.IsChecked == true;
         ra.Username     = (this.FindControl<TextBox>("RAUsernameBox")!.Text ?? "").Trim();
         ra.Password     = this.FindControl<TextBox>("RAPasswordBox")!.Text ?? "";
         ra.ApiKey       = (this.FindControl<TextBox>("RAApiKeyBox")!.Text ?? "").Trim();

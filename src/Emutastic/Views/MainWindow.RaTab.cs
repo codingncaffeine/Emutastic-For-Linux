@@ -63,7 +63,7 @@ public partial class MainWindow
         {
             if (App.Configuration == null) return;
             var ra = App.Configuration.GetRetroAchievementsConfiguration();
-            if (ra == null || !ra.Enabled
+            if (ra == null || !ra.IsConfigured
                 || !ra.SyncFollowsOnLaunch
                 || string.IsNullOrWhiteSpace(ra.Username)
                 || string.IsNullOrWhiteSpace(ra.ApiKey))

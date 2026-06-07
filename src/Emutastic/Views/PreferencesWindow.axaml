@@ -529,16 +529,15 @@
                                        FontSize="12" FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextSecondaryBrush}"
                                        TextWrapping="Wrap" Margin="0,0,0,24"/>
 
-                            <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,20">
-                                <StackPanel Grid.Column="0">
-                                    <TextBlock Text="RetroAchievements" FontSize="15" FontWeight="SemiBold"
-                                               FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextPrimaryBrush}"/>
-                                    <TextBlock Text="Create a free account at retroachievements.org. Your password is used to obtain a login token — it is not stored."
-                                               FontSize="11" FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextSecondaryBrush}"
-                                               TextWrapping="Wrap" Margin="0,4,0,0"/>
-                                </StackPanel>
-                                <ToggleSwitch Name="RAEnabledToggle" Grid.Column="1" OnContent="" OffContent="" VerticalAlignment="Center"/>
-                            </Grid>
+                            <!-- Signing in (entering credentials below) is all that's needed —
+                                 there is no separate enable toggle. -->
+                            <StackPanel Margin="0,0,0,20">
+                                <TextBlock Text="RetroAchievements" FontSize="15" FontWeight="SemiBold"
+                                           FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextPrimaryBrush}"/>
+                                <TextBlock Text="Create a free account at retroachievements.org, then sign in below — that's all it takes. Your password is used to obtain a login token; it is not stored."
+                                           FontSize="11" FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextSecondaryBrush}"
+                                           TextWrapping="Wrap" Margin="0,4,0,0"/>
+                            </StackPanel>
 
                             <TextBlock Text="Username" FontSize="12" FontFamily="{DynamicResource PrimaryFont}"
                                        Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,6"/>
