@@ -317,9 +317,6 @@ the latest release. When a new version is available, click "Update Now":
 
 LINUX NOTES
 -----------
-GameCube and Dreamcast are temporarily unavailable in this build while
-performance work completes — they'll return in a future release.
-
 The game window uses native Wayland when available (X11 works too).
 
 
