@@ -20,7 +20,7 @@ optdepends=('vlc-plugins-video-output: hardware-accelerated snap previews on som
 options=('!strip')   # self-contained .NET bundle — stripping breaks it
 source=("$url/releases/download/v$pkgver/Emutastic-$pkgver-linux-x64.tar.gz"
         "$url/raw/v$pkgver/LICENSE")
-sha256sums=('SKIP'   # fill with: sha256sum Emutastic-<ver>-linux-x64.tar.gz
+sha256sums=('73ef918f4a71853da8d421ad4270ce9a3989e0120667d806f7013cd19ebcb280'
             'SKIP')
 
 package() {
