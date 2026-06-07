@@ -59,7 +59,9 @@ namespace Emutastic.Views.PauseEffects
             else if (fx is IPauseEffect v)
             {
                 _vector = v;
-                v.Init(new SKSize(width, height), intensity);
+                // _w/_h are the (possibly capped) render size set by Resize above — init the
+                // effect to THAT, not the raw window size, or it lays out off the canvas.
+                v.Init(new SKSize(_w, _h), intensity);
             }
             _fade = 0; _fadeTarget = 1; _stopping = false;
         }
@@ -67,12 +69,29 @@ namespace Emutastic.Views.PauseEffects
         /// <summary>(Re)size the output frame; re-seeds vector effects like the upstream runner.</summary>
         public void Resize(int width, int height)
         {
-            if (width <= 0 || height <= 0 || (width == _w && height == _h && _bmp != null)) return;
+            if (width <= 0 || height <= 0) return;
+            // GlOsd composites this frame SCALED to the full window (DrawBitmap to the window
+            // rect), so rendering the effect at native window resolution is wasted CPU. At
+            // fullscreen (up to 4K) the window-sized SaveLayer + software raster per tick can't
+            // keep up — ticks blow past the 0.1s clamp in TickInto and the animation crawls /
+            // runs in slow motion. Cap the longest side and let GlOsd upscale; aspect ratio is
+            // preserved so the stretch stays uniform, and the soft upscale is imperceptible for a
+            // translucent overlay (the pixel effects already render at 320x240). Cost becomes
+            // resolution-independent — the windowed default (≤1280) is unaffected.
+            const int MaxDim = 1280;
+            int rw = width, rh = height, longest = Math.Max(width, height);
+            if (longest > MaxDim)
+            {
+                double s = (double)MaxDim / longest;
+                rw = Math.Max(1, (int)Math.Round(width * s));
+                rh = Math.Max(1, (int)Math.Round(height * s));
+            }
+            if (rw == _w && rh == _h && _bmp != null) return;
             _canvas?.Dispose(); _bmp?.Dispose();
-            _bmp = new SKBitmap(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Unpremul));
+            _bmp = new SKBitmap(new SKImageInfo(rw, rh, SKColorType.Rgba8888, SKAlphaType.Unpremul));
             _canvas = new SKCanvas(_bmp);
-            _w = width; _h = height;
-            _vector?.Init(new SKSize(width, height), _intensity);
+            _w = rw; _h = rh;
+            _vector?.Init(new SKSize(rw, rh), _intensity);
         }
 
         /// <summary>Begin the fade-out; the effect stays Active until the envelope reaches zero.</summary>
