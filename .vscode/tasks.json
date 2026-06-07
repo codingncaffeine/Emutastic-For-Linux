@@ -3,15 +3,19 @@
   "tasks": [
     {
       "label": "build",
-      "command": "${userHome}/.dotnet/dotnet",
+      "command": "dotnet",
       "type": "process",
       "args": [
         "build",
         "${workspaceFolder}/src/Emutastic/Emutastic.csproj",
-        "-c", "Debug"
+        "-c",
+        "Debug"
       ],
       "problemMatcher": "$msCompile",
-      "group": { "kind": "build", "isDefault": true }
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
     }
   ]
 }

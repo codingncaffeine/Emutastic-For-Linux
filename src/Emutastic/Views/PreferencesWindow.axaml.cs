@@ -1815,8 +1815,8 @@ public partial class PreferencesWindow : Window
 
     private static readonly (string Category, string[] Consoles)[] ConsoleCategories =
     {
-        ("Nintendo", new[] { "NES", "FDS", "SNES", "N64", "GB", "GBC", "GBA", "NDS", "3DS", "VirtualBoy" }),
-        ("Sega",     new[] { "Genesis", "SegaCD", "Sega32X", "Saturn", "SMS", "GameGear", "SG1000" }),
+        ("Nintendo", new[] { "NES", "FDS", "SNES", "N64", "GameCube", "GB", "GBC", "GBA", "NDS", "3DS", "VirtualBoy" }),
+        ("Sega",     new[] { "Genesis", "SegaCD", "Sega32X", "Saturn", "SMS", "GameGear", "SG1000", "Dreamcast" }),
         ("Sony",     new[] { "PS1", "PSP" }),
         ("NEC",      new[] { "TG16", "TGCD" }),
         ("Atari",    new[] { "Atari2600", "Atari7800", "Jaguar" }),
