@@ -228,6 +228,7 @@ namespace Emutastic.Emulator
         private long _coreRunTicks, _coreRunCalls; // accumulated retro_run time + call count for avg ms
         private double _coreRunMsEma;              // smoothed per-frame retro_run cost (decoupled loop diag)
         private double _paceWaitMsEma, _cushionWaitMsEma; // where the rest of the frame goes (diag)
+        private double _audioAddedMsEma;                  // smoothed audio-ms one retro_run produces (the game's clock)
 
         public string CoreName => _core?.CoreName ?? "?";
         public SdlInput Input => _input;
@@ -877,6 +878,7 @@ namespace Emutastic.Emulator
                 if (_cheatsApplyPending) ExecuteCheatsApplyOnEmuThread();
                 _audio?.ApplyDrc();
 
+                long audioBefore = _audio?.FramesWrittenTotal ?? 0;
                 long runT0 = frameTimer.ElapsedTicks;
                 try { _core!.Run(); } catch (Exception ex) { Trace.WriteLine($"[Emu] retro_run threw: {ex}"); break; }
                 ApplyFrontendArToRam();   // hold AR-cheat values every frame (post-run, like upstream)
@@ -886,29 +888,51 @@ namespace Emutastic.Emulator
                 double coreRunMs = runTicks * 1000.0 / Stopwatch.Frequency;
                 _coreRunMsEma = _coreRunMsEma <= 0 ? coreRunMs : _coreRunMsEma + 0.05 * (coreRunMs - _coreRunMsEma);
 
-                // PACE TO THE TARGET RATE (Phase 0.2): targetFrameMs comes from _fps, which is the console
-                // handler's HardwareTargetFps or the core's reported fps. Pace the emu to that fixed content
-                // rate — RetroArch's model (slave the loop to a rate, DRC resamples audio to match) — rather
-                // than free-running on audio drain, which drifted to ~61fps and beat against the ~60Hz
-                // display. Production-timing jitter here is harmless: the present thread is vsync-paced
-                // SEPARATELY and shows the latest frame, so a loose emu tick can't judder the display.
+                // THE GAME'S INTERNAL CLOCK: how much audio did THIS retro_run produce? A 30fps-content
+                // Dreamcast title (Hydro Thunder) emits ~33ms per run even though the console outputs
+                // 60Hz — pacing such a run to the nominal 16.7ms floods the queue at 2× realtime and
+                // turns the cushion backstop into multi-second drain stalls (the burst/starve bug:
+                // 18fps bursts, 3-4s gaps, coreRun ~9ms — upstream paces HW cores by audio progress
+                // for exactly this reason, see upstream EmulatorWindow "advanced N game frames").
+                // Smoothed (EMA) so cores that batch audio irregularly don't jitter the pace; silent
+                // scenes (no audio added) fall back to the nominal target.
+                if (_audio != null)
+                {
+                    double addedMs = (_audio.FramesWrittenTotal - audioBefore) * 1000.0 / _sampleRate;
+                    if (addedMs > 0.5)
+                        _audioAddedMsEma = _audioAddedMsEma <= 0 ? addedMs : _audioAddedMsEma + 0.1 * (addedMs - _audioAddedMsEma);
+                }
+                double paceMs = _audioAddedMsEma > 0.5
+                    ? Math.Clamp(_audioAddedMsEma, targetFrameMs * 0.5, targetFrameMs * 4)
+                    : targetFrameMs;
+
+                // PACE TO THE CONTENT RATE (Phase 0.2 + audio-progress correction): the budget is the
+                // audio each run actually adds (the game's clock), bounded around the handler/core
+                // nominal rate. RetroArch's model (slave the loop to a rate, DRC resamples audio to
+                // match) — rather than free-running on audio drain, which drifted to ~61fps and beat
+                // against the ~60Hz display. Production-timing jitter here is harmless: the present
+                // thread is vsync-paced SEPARATELY and shows the latest frame.
                 double tPaceStart = frameTimer.Elapsed.TotalMilliseconds;
                 int guard = 0;
-                while (_running && frameTimer.Elapsed.TotalMilliseconds < targetFrameMs && guard++ < 8000)
+                while (_running && frameTimer.Elapsed.TotalMilliseconds < paceMs && guard++ < 8000)
                 {
-                    double remaining = targetFrameMs - frameTimer.Elapsed.TotalMilliseconds;
+                    double remaining = paceMs - frameTimer.Elapsed.TotalMilliseconds;
                     if (remaining > 1.5) Thread.Sleep(1); else Thread.SpinWait(40);
                 }
                 double tCushionStart = frameTimer.Elapsed.TotalMilliseconds;
                 int cushionIters = 0;
                 // Audio cushion cap (secondary): if the core ran ahead and the buffer overfilled well past
                 // the cushion, drain before the next frame so audio can't run away. DRC handles the ±0.5%
-                // trim. Use the SMOOTHED occupancy (not raw QueuedMsReal) so a single device gulp can't fire
-                // a spurious drain-stall — matches SdlAudio's "coarse guards use the smoothed value" rule.
-                if (_audio != null && _audio.IsOpen)
+                // trim. ENTER on the SMOOTHED occupancy (a single device gulp can't fire a spurious
+                // drain-stall) but EXIT on the LIVE queue: the smoothed value is only refreshed by
+                // ApplyDrc at the loop top, so polling it inside this wait reads a FROZEN number — the
+                // loop then always ran its full 4000-iteration guard (~4s of Thread.Sleep(1)) while the
+                // real queue drained to empty underneath. That frozen-estimate spin WAS the transition
+                // stall / burst-starve bug (Dreamcast tab entry; ~207ms/frame drain on the old box).
+                if (_audio != null && _audio.IsOpen && _audio.QueuedMsSmoothed > cushionMs + 40)
                 {
                     guard = 0;
-                    while (_running && _audio.QueuedMsSmoothed > cushionMs + 40 && guard++ < 4000) Thread.Sleep(1);
+                    while (_running && _audio.QueuedMsReal > cushionMs + 40 && guard++ < 4000) Thread.Sleep(1);
                     cushionIters = guard;
                 }
                 double tEnd = frameTimer.Elapsed.TotalMilliseconds;

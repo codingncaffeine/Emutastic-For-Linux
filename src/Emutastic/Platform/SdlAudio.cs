@@ -157,6 +157,13 @@ namespace Emutastic.Platform
             underruns = _underruns;
         }
 
+        // Monotonic total of sample-frames ever enqueued (never reset by Clear) — lets the
+        // emu loop measure how much audio ONE retro_run produced: the game's own clock.
+        // A 30fps-content Dreamcast title emits 2× a 60Hz frame's audio per run; pacing by
+        // this delta (not the nominal console rate) is what keeps the cushion stable.
+        private long _framesWrittenTotal;
+        public long FramesWrittenTotal => _framesWrittenTotal;
+
         /// <summary>Queue a batch of interleaved S16 stereo samples (libretro audio_sample_batch).</summary>
         public void QueueBatch(IntPtr data, int frames)
         {
@@ -164,6 +171,7 @@ namespace Emutastic.Platform
             SDL_PutAudioStreamData(_stream, data, frames * 4); // 2 channels * 2 bytes
             if (!_playClock.IsRunning) _playClock.Start();     // playback clock starts at first audio
             _framesQueued += frames;
+            _framesWrittenTotal += frames;
         }
 
         /// <summary>Queue a single stereo sample pair (libretro audio_sample).</summary>
@@ -175,6 +183,7 @@ namespace Emutastic.Platform
             SDL_PutAudioStreamData(_stream, (IntPtr)pair, 4);
             if (!_playClock.IsRunning) _playClock.Start();
             _framesQueued++;
+            _framesWrittenTotal++;
         }
 
         public void Clear()
