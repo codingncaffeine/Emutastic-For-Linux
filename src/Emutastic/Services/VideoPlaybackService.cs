@@ -49,7 +49,24 @@ namespace Emutastic.Services
                 // --quiet: snaps stopped mid-decode (hover moves off a card) spam h264 'no frame!' +
                 // 'Failed to create video converter' to stderr — harmless, but it buries real output
                 // when running from a terminal.
-                var lib = new LibVLC("--no-audio", "--no-osd", "--no-snapshot-preview", "--avcodec-hw=none", "--quiet");
+                LibVLC lib;
+                try
+                {
+                    lib = new LibVLC("--no-audio", "--no-osd", "--no-snapshot-preview", "--avcodec-hw=none", "--quiet");
+                }
+                catch (VLCException)
+                {
+                    // --avcodec-hw belongs to the avcodec *plugin*, and an unknown option fails
+                    // the whole libvlc_new. Distros that split VLC into per-plugin packages
+                    // (Arch: vlc-plugin-ffmpeg) may not have it installed — retry without the
+                    // flag so snaps still work for whatever codecs are present. h264 snaps need
+                    // the avcodec plugin anyway, so dropping its option loses nothing here; if
+                    // the plugin appears later, the no-flag instance risks VAAPI decode (see
+                    // hang note above) — hence the loud log.
+                    Trace.WriteLine("[VideoPlayback] LibVLC rejected --avcodec-hw=none (avcodec " +
+                                    "plugin missing? Arch/Fedora: install vlc-plugin-ffmpeg) — retrying without it");
+                    lib = new LibVLC("--no-audio", "--no-osd", "--no-snapshot-preview", "--quiet");
+                }
                 sw.Stop();
                 Trace.WriteLine($"[VideoPlayback] LibVLC warmed in {sw.ElapsedMilliseconds}ms");
                 return lib;
