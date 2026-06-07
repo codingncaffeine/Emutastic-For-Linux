@@ -507,6 +507,36 @@ public partial class GameDetailWindow : Window
 
     /// <summary>Pushes the cached typed views into the UI. Safe to call repeatedly;
     /// hides sub-sections piece by piece rather than the whole pane.</summary>
+    /// <summary>
+    /// Console-aware message for the "rcheevos couldn't identify this ROM" case
+    /// (port of upstream's UnrecognizedHashMessage). A universal "Redump" hint only
+    /// makes sense for disc systems — arcade ZIPs and cartridge ROMs get their own.
+    /// </summary>
+    private static string UnrecognizedHashMessage(string console)
+    {
+        switch (console)
+        {
+            case "Arcade":
+            case "NeoGeo":
+                return "RetroAchievements doesn't recognize this ROM set — RA usually targets one specific parent or clone; check retroachievements.org to confirm the title is on RA and which set is supported";
+            case "PS1":
+            case "PS2":
+            case "PSP":
+            case "Saturn":
+            case "Dreamcast":
+            case "GameCube":
+            case "SegaCD":
+            case "TGCD":
+            case "3DO":
+            case "NeoCD":
+            case "CDi":
+            case "3DS":
+                return "RetroAchievements doesn't recognize this disc image — try a Redump-matching dump";
+            default:
+                return "RetroAchievements doesn't recognize this ROM hash — try a No-Intro matching dump";
+        }
+    }
+
     private void RenderRetroAchievements()
     {
         var prog = _game.RAProgressionTyped;
@@ -528,7 +558,7 @@ public partial class GameDetailWindow : Window
                 (true,  true,  _,    _)                 => "This ROM dump isn't on the RetroAchievements database — try a different release",
                 (true,  false, true, _)                 => "No achievements authored for this game yet",
                 (true,  false, false, _)                => "Fetching achievement data…",
-                (false, _,     _,    "not_in_database") => $"This {_game.Console} ROM isn't in the RetroAchievements database — try a different dump",
+                (false, _,     _,    "not_in_database") => UnrecognizedHashMessage(_game.Console),
                 (false, _,     _,    "load_failed")     => "RetroAchievements identification failed — try relaunching",
                 _                                        => "Not checked yet — launch this game with RetroAchievements enabled",
             };
