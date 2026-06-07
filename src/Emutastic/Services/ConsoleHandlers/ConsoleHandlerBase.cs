@@ -17,6 +17,16 @@ namespace Emutastic.Services.ConsoleHandlers
         public virtual Dictionary<string, string> GetDefaultCoreOptions()
             => new Dictionary<string, string>();
 
+        /// <summary>
+        /// Option keys that must NOT be visible to the core during retro_load_game — they're
+        /// held back and applied through the live variables-dirty path right after the first
+        /// frame instead (exactly what a cog-menu change does). For cores whose load-time init
+        /// mis-sizes state when an option is pre-seeded (azahar: citra_resolution_factor
+        /// pre-seeded at 10 → av_info max geometry comes out 640x480 → 10x render clipped to a
+        /// corner sliver; deferred → full 7200x4800 buffer, applies cleanly at frame 1).
+        /// </summary>
+        public virtual IReadOnlyCollection<string> DeferUntilAfterLoad => System.Array.Empty<string>();
+
         public virtual void ConfigureControllerPorts(LibretroCore core)
         {
             for (uint port = 0; port < 4; port++)

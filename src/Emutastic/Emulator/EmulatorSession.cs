@@ -233,6 +233,7 @@ namespace Emutastic.Emulator
         private double _coreRunMsEma;              // smoothed per-frame retro_run cost (decoupled loop diag)
         private double _paceWaitMsEma, _cushionWaitMsEma; // where the rest of the frame goes (diag)
         private double _audioAddedMsEma;                  // smoothed audio-ms one retro_run produces (the game's clock)
+        private readonly Dictionary<string, string> _deferredOptions = new();  // applied at frame 1 (DeferUntilAfterLoad)
 
         public string CoreName => _core?.CoreName ?? "?";
         public SdlInput Input => _input;
@@ -470,6 +471,11 @@ namespace Emutastic.Emulator
             _coreName = System.IO.Path.GetFileNameWithoutExtension(corePath);
             foreach (var kv in _coreOptionsStore.LoadValues(_coreName))
                 _coreOptions[kv.Key] = kv.Value;
+            // Hold back load-fragile options (handler-declared): invisible during retro_load_game
+            // (GET_VARIABLE misses -> core default), applied via the live path at frame 1 below.
+            foreach (var k in _handler.DeferUntilAfterLoad)
+                if (_coreOptions.Remove(k, out var deferredVal))
+                    _deferredOptions[k] = deferredVal;
             _input = new SdlInput
             {
                 UsesAnalogStick = _handler.UsesAnalogStick,
@@ -891,6 +897,20 @@ namespace Emutastic.Emulator
                 System.Threading.Interlocked.Increment(ref _coreRunCalls); RaDoFrame();
                 double coreRunMs = runTicks * 1000.0 / Stopwatch.Frequency;
                 _coreRunMsEma = _coreRunMsEma <= 0 ? coreRunMs : _coreRunMsEma + 0.05 * (coreRunMs - _coreRunMsEma);
+
+                // Deferred options (DeferUntilAfterLoad): now that the core booted with its own
+                // defaults, push the held-back values through the live variables-dirty path —
+                // identical to a cog-menu change one frame in.
+                if (_deferredOptions.Count > 0)
+                {
+                    foreach (var kv in _deferredOptions)
+                    {
+                        _coreOptions[kv.Key] = kv.Value;
+                        Trace.WriteLine($"[Emu] core option (deferred post-load) {kv.Key} = {kv.Value}");
+                    }
+                    _deferredOptions.Clear();
+                    _coreOptionsDirty = true;
+                }
 
                 // THE GAME'S INTERNAL CLOCK: how much audio did THIS retro_run produce? A 30fps-content
                 // Dreamcast title (Hydro Thunder) emits ~33ms per run even though the console outputs

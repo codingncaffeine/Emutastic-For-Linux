@@ -28,6 +28,10 @@ namespace Emutastic.Services.ConsoleHandlers
         /// <summary>Core options to pre-seed before the core announces its variable list.</summary>
         Dictionary<string, string> GetDefaultCoreOptions();
 
+        /// <summary>Option keys hidden from the core during retro_load_game and applied via the
+        /// live variables-dirty path at frame 1 (load-fragile options; see ConsoleHandlerBase).</summary>
+        IReadOnlyCollection<string> DeferUntilAfterLoad { get; }
+
         /// <summary>
         /// Called after retro_load_game to configure controller ports.
         /// Default: sets port 0 to JOYPAD. GameCube overrides to set all 4 ports.
