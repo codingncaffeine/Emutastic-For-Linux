@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Emutastic.Services.ConsoleHandlers
 {
@@ -8,6 +9,8 @@ namespace Emutastic.Services.ConsoleHandlers
     /// sequences etc.). The core's emulated pointer moves a crosshair with the RIGHT analog
     /// stick and taps on the JOYPAD_R2 wire (the bindable "Touch" row in Edit Controls —
     /// upstream commits 8308053/8f0ec0e). Mouse clicks keep working alongside.
+    /// Visuals menu (upstream a540f91): DeSmuME's software-rasterizer visual options in the
+    /// overlay cog, mirroring the 3DS layout.
     /// </summary>
     public class NdsHandler : ConsoleHandlerBase
     {
@@ -26,5 +29,30 @@ namespace Emutastic.Services.ConsoleHandlers
             // Core Options choice still wins — EmulatorSession applies the store on top.
             ["desmume_pointer_device_r"] = "emulated",
         };
+
+        // DeSmuME renders on the CPU (SoftRasterizer), and both of these
+        // options work on that path. The "OpenGL:" prefixed core options
+        // (multisampling, texture smoothing, shadow polygons) require the GL
+        // rasterizer we don't enable — deliberately not exposed.
+        public override List<(string key, string label)> GetVisualOptions() => new()
+        {
+            ("desmume_internal_resolution", "Internal Resolution"),
+            ("desmume_gfx_texture_scaling", "Texture Scaling (xBrz)"),
+        };
+
+        // SoftRasterizer cost scales with pixel count and the core offers up
+        // to 10x (2560x1920) — slideshow territory for CPU rendering. Cap the
+        // picker at 4x; 2x-3x is the sweet spot for big displays.
+        private static readonly HashSet<string> AllowedResolutions = new()
+        {
+            "256x192", "512x384", "768x576", "1024x768"
+        };
+
+        public override string[] FilterCoreOptionValues(string key, string[] values)
+        {
+            if (key == "desmume_internal_resolution")
+                return values.Where(v => AllowedResolutions.Contains(v.Trim())).ToArray();
+            return values;
+        }
     }
 }
