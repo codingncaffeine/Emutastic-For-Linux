@@ -18,9 +18,14 @@ conflicts=('emutastic')
 depends=('libvlc' 'vlc-plugins-base' 'vlc-plugin-ffmpeg' 'ffmpeg' 'sdl3' 'fontconfig')
 optdepends=('vlc-plugins-video-output: hardware-accelerated snap previews on some setups')
 options=('!strip')   # self-contained .NET bundle — stripping breaks it
+# The icon ships INSIDE the .dll as an Avalonia resource (not loose in the publish
+# tarball), so fetch it from the repo at the tag — same as LICENSE. %20 = the space
+# in the "banners and icons" path.
 source=("$url/releases/download/v$pkgver/Emutastic-$pkgver-linux-x64.tar.gz"
-        "$url/raw/v$pkgver/LICENSE")
+        "$url/raw/v$pkgver/LICENSE"
+        "emutastic-logo.png::$url/raw/v$pkgver/src/Emutastic/Assets/banners%20and%20icons/emutastic-logo.png")
 sha256sums=('73ef918f4a71853da8d421ad4270ce9a3989e0120667d806f7013cd19ebcb280'
+            'SKIP'
             'SKIP')
 
 package() {
@@ -37,7 +42,7 @@ exec /usr/lib/emutastic/Emutastic "$@"
 EOF
     chmod 755 "$pkgdir/usr/bin/emutastic"
 
-    install -Dm644 "$pkgdir/usr/lib/emutastic/Assets/banners and icons/emutastic-logo.png" \
+    install -Dm644 "$srcdir/emutastic-logo.png" \
         "$pkgdir/usr/share/icons/hicolor/512x512/apps/emutastic.png"
 
     cat > "$pkgdir/usr/share/applications/emutastic.desktop" <<'EOF'
