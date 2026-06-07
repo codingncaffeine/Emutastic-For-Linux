@@ -1,9 +1,9 @@
-# Maintainer: codingncaffeine <stragee@gmail.com>
+# Maintainer: codingncaffeine <codingncaffeine@users.noreply.github.com>
 # AUR binary package for Emutastic — repackages the official GitHub release tarball.
 # Submit by pushing this (plus the generated .SRCINFO) to ssh://aur@aur.archlinux.org/emutastic-bin.git
 #   makepkg --printsrcinfo > .SRCINFO
 pkgname=emutastic-bin
-pkgver=0.7.5
+pkgver=0.8.0
 pkgrel=1
 pkgdesc="Beautiful retro game library and emulation frontend (libretro)"
 arch=('x86_64')
@@ -13,7 +13,9 @@ provides=('emutastic')
 conflicts=('emutastic')
 # libvlc = snap video previews (degrades gracefully without); ffmpeg = recording;
 # sdl3 = gamepads + audio. The publish is otherwise self-contained (.NET bundled).
-depends=('libvlc' 'vlc-plugins-base' 'ffmpeg' 'sdl3' 'fontconfig')
+# vlc-plugin-ffmpeg: snap previews need the avcodec plugin — Arch splits it out of the
+# base plugins, and without it LibVLC h264 decode (every snap video) is unavailable.
+depends=('libvlc' 'vlc-plugins-base' 'vlc-plugin-ffmpeg' 'ffmpeg' 'sdl3' 'fontconfig')
 optdepends=('vlc-plugins-video-output: hardware-accelerated snap previews on some setups')
 options=('!strip')   # self-contained .NET bundle — stripping breaks it
 source=("$url/releases/download/v$pkgver/Emutastic-$pkgver-linux-x64.tar.gz"

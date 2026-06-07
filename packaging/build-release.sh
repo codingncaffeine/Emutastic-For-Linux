@@ -15,7 +15,7 @@ PUB=$OUT/publish
 rm -rf "$OUT" && mkdir -p "$PUB"
 
 echo "── publish v$VER (self-contained linux-x64)"
-~/.dotnet/dotnet publish src/Emutastic/Emutastic.csproj -c Release -r linux-x64 \
+dotnet publish src/Emutastic/Emutastic.csproj -c Release -r linux-x64 \
     --self-contained true -o "$PUB" -v q
 
 # Native libs + loose assets ride OutDir during build; make sure they're in the publish set.
