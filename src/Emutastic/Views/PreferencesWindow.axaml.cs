@@ -1547,7 +1547,7 @@ public partial class PreferencesWindow : Window
         bs.Children.Add(new TextBlock { Text = "Where to place BIOS files", FontSize = 12, FontWeight = FontWeight.SemiBold, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextPrimaryBrush"), Margin = new Thickness(0, 0, 0, 4) });
         bs.Children.Add(new TextBlock { Text = $"System folder (recommended):  {sysDir}", FontSize = 11, FontFamily = "monospace", Foreground = Brush("TextMutedBrush"), TextWrapping = TextWrapping.Wrap });
         bs.Children.Add(new TextBlock { Text = "Alternatively, place a BIOS file in the same folder as the ROMs for that system — it will be found automatically.", FontSize = 11, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextMutedBrush"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) });
-        bs.Children.Add(new TextBlock { Text = "Or just drag and drop BIOS / MT-32 ROM / .sf2 SoundFont files anywhere on this panel — they're identified by hash/size and copied here automatically.", FontSize = 11, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextMutedBrush"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) });
+        bs.Children.Add(new TextBlock { Text = "Or just drag and drop BIOS files anywhere on this panel — they're identified by hash/size and copied here automatically.", FontSize = 11, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextMutedBrush"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) });
         banner.Child = bs;
         panel.Children.Add(banner);
 
@@ -1776,7 +1776,6 @@ public partial class PreferencesWindow : Window
         var fileMatch = MatchKnownBios(srcName, size, fileMd5);
         string destPath; string label;
         if (fileMatch != null) { destPath = System.IO.Path.Combine(sysDir, fileMatch.Filename); label = $"{System.IO.Path.GetFileName(fileMatch.Filename)} → {fileMatch.ConsoleDisplay}"; }
-        else if (srcExt.Equals(".sf2", StringComparison.OrdinalIgnoreCase)) { destPath = System.IO.Path.Combine(sysDir, srcName); label = $"{srcName} → SoundFont"; }
         else { messages.Add($"• {srcName}: not a recognized BIOS"); skipped++; return; }
         try
         {
