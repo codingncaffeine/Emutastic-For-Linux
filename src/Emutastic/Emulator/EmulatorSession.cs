@@ -221,7 +221,14 @@ namespace Emutastic.Emulator
         /// 0 = use the default. The host can't read per-game config rows itself.</summary>
         public int RestoreWinW, RestoreWinH;
         private long _frameSeq;
-        private int _frameCountSample;            // frames produced since the last SampleStats (real fps)
+        private int _frameCountSample;            // frames the core PRODUCED since last sample (emulation rate)
+        // Display cadence: unique game frames actually presented to screen since the last HUD
+        // sample, counted on the present thread when _frameSeq advances between presents. Below
+        // the emulation rate when presentation (compositor / GPU / busy UI) is the bottleneck;
+        // that gap is what the HUD's "emu N" suffix surfaces. (Port of upstream's display-vs-emu
+        // split — on Linux the present thread is already decoupled, so this is the natural place.)
+        private int _displayFrameSample;
+        private long _lastPresentedSeq = -1;
         // EMUTASTIC_FPS_LOG=1 mirrors the per-second HUD stats line to emulator-host.log.
         private static readonly bool FpsLogEnabled =
             Environment.GetEnvironmentVariable("EMUTASTIC_FPS_LOG") == "1";
@@ -1593,14 +1600,21 @@ namespace Emutastic.Emulator
                     if (IsPaused) { statusText = $"Paused  (target {TargetFps:F0} fps)"; zeroFpsSeconds = 0; }
                     else
                     {
-                        SampleStats(out int fr, out double avgRunMs);
-                        if (fr == 0) zeroFpsSeconds++; else zeroFpsSeconds = 0;
-                        // Exact Windows format (two-space separators); stall hint when no frame for ≥2s.
-                        statusText = $"{fr} fps  (target {TargetFps:F0})  core.Run avg {avgRunMs:F1}ms";
-                        // EMUTASTIC_FPS_LOG=1: mirror the per-second HUD stats to emulator-host.log
-                        // (benchmarking hook — e.g. the GameCube/Dreamcast unhide decision).
+                        SampleStats(out int emuFps, out double avgRunMs);
+                        int displayFps = _displayFrameSample; _displayFrameSample = 0;
+                        // Stall hint keys on the CORE (emuFps): a compile/load hitch is the core
+                        // not producing, distinct from presentation falling behind.
+                        if (emuFps == 0) zeroFpsSeconds++; else zeroFpsSeconds = 0;
+                        // Headline is display cadence (frames actually shown); "target" is always
+                        // the goal rate. When the core steps faster than the screen presents, append
+                        // "emu N" — that gap means presentation (compositor/GPU/UI), not the core,
+                        // is the bottleneck. (Upstream's display-vs-emu split; two-space separators.)
+                        statusText = (emuFps - displayFps > 2 && displayFps > 0)
+                            ? $"{displayFps} fps  (target {TargetFps:F0}, emu {emuFps})  core.Run avg {avgRunMs:F1}ms"
+                            : $"{displayFps} fps  (target {TargetFps:F0})  core.Run avg {avgRunMs:F1}ms";
+                        // EMUTASTIC_FPS_LOG=1: mirror to emulator-host.log (benchmarking hook).
                         if (FpsLogEnabled)
-                            Trace.WriteLine($"[fps] {fr} fps  (target {TargetFps:F0})  core.Run avg {avgRunMs:F1}ms");
+                            Trace.WriteLine($"[fps] display={displayFps} emu={emuFps} target={TargetFps:F0} core.Run={avgRunMs:F1}ms");
                         if (zeroFpsSeconds >= 2) statusText += $"    ⏳ Working… ({zeroFpsSeconds}s with no frame)";
                     }
                 }
@@ -1696,6 +1710,10 @@ namespace Emutastic.Emulator
                         if (_presentBuf == null || _presentBuf.Length != need) _presentBuf = new byte[need];
                         System.Buffer.BlockCopy(_frame, 0, _presentBuf, 0, need);
                         buf = _presentBuf;
+                        // Display cadence: this present shows a NEW game frame only when the seq
+                        // advanced since the last one we presented (the loop re-presents the latest
+                        // frame every vsync for the OSD, so most iterations are duplicates).
+                        if (_frameSeq != _lastPresentedSeq) { _lastPresentedSeq = _frameSeq; _displayFrameSample++; }
                     }
                 }
                 if (buf == null) { Thread.Sleep(1); continue; }   // no frame yet — input already pumped above
