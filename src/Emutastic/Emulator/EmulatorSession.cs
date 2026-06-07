@@ -222,6 +222,9 @@ namespace Emutastic.Emulator
         public int RestoreWinW, RestoreWinH;
         private long _frameSeq;
         private int _frameCountSample;            // frames produced since the last SampleStats (real fps)
+        // EMUTASTIC_FPS_LOG=1 mirrors the per-second HUD stats line to emulator-host.log.
+        private static readonly bool FpsLogEnabled =
+            Environment.GetEnvironmentVariable("EMUTASTIC_FPS_LOG") == "1";
         private long _coreRunTicks, _coreRunCalls; // accumulated retro_run time + call count for avg ms
         private double _coreRunMsEma;              // smoothed per-frame retro_run cost (decoupled loop diag)
         private double _paceWaitMsEma, _cushionWaitMsEma; // where the rest of the frame goes (diag)
@@ -1546,6 +1549,10 @@ namespace Emutastic.Emulator
                         if (fr == 0) zeroFpsSeconds++; else zeroFpsSeconds = 0;
                         // Exact Windows format (two-space separators); stall hint when no frame for ≥2s.
                         statusText = $"{fr} fps  (target {TargetFps:F0})  core.Run avg {avgRunMs:F1}ms";
+                        // EMUTASTIC_FPS_LOG=1: mirror the per-second HUD stats to emulator-host.log
+                        // (benchmarking hook — e.g. the GameCube/Dreamcast unhide decision).
+                        if (FpsLogEnabled)
+                            Trace.WriteLine($"[fps] {fr} fps  (target {TargetFps:F0})  core.Run avg {avgRunMs:F1}ms");
                         if (zeroFpsSeconds >= 2) statusText += $"    ⏳ Working… ({zeroFpsSeconds}s with no frame)";
                     }
                 }

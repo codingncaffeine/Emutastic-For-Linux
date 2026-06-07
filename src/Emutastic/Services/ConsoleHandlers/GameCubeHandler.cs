@@ -39,12 +39,16 @@ namespace Emutastic.Services.ConsoleHandlers
 
         public override Dictionary<string, string> GetDefaultCoreOptions() => new()
         {
-            // Single-threaded: CPU runs on retro_run thread, no shared GL context needed
-            ["dolphin_main_cpu_thread"]        = "disabled",
-            // No VEH-based MMIO tricks
-            ["dolphin_fastmem"]                = "disabled",
-            // No 4 GB arena reservation inside a .NET process
-            ["dolphin_fastmem_arena"]          = "disabled",
+            // Dual-core + fastmem: the original single-core/no-fastmem safety config was a
+            // Windows-era caution (SEH/VEH conflicts with .NET) that does NOT apply on Linux —
+            // Dolphin's SIGSEGV fastmem handler chains cleanly with CoreCLR's, and the CPU
+            // thread never touches GL so it needs no shared context. A/B on Mario Kart DD
+            // attract race (RTX 3080 Ti, 2026-06-07): single-core no-fastmem 42-46fps →
+            // dual-core 54-58 → dual-core+fastmem locked 60. If a game crashes on launch,
+            // flip these three in Preferences → Core Options (values store overrides these).
+            ["dolphin_main_cpu_thread"]        = "enabled",
+            ["dolphin_fastmem"]                = "enabled",
+            ["dolphin_fastmem_arena"]          = "enabled",
             // dolphin_cpu_core: NOT pre-seeded — OnVariableAnnounced picks the safest
             // non-JIT value from the core's own valid list at runtime
             ["dolphin_dsp_jit"]                = "disabled",
@@ -111,8 +115,8 @@ namespace Emutastic.Services.ConsoleHandlers
 
         /// <summary>
         /// When true, selects JIT64 for full-speed emulation.
-        /// JIT64 requires fastmem=disabled and fastmem_arena=disabled (already set above)
-        /// to avoid SEH chain conflicts with .NET's own exception handling.
+        /// (The old "JIT64 requires fastmem=disabled" note was the Windows SEH concern;
+        /// on Linux JIT64 + fastmem chain signals cleanly — see the A/B note above.)
         /// If the game crashes on launch, set this back to false.
         /// </summary>
         public bool UseJit { get; set; } = true;

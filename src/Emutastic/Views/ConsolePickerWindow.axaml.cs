@@ -19,8 +19,10 @@ public partial class ConsolePickerWindow : Window
     };
 
     // Consoles hidden from the UI (handlers/cores remain in the backend, but these are
-    // not offered as import targets). See FINDINGS-SO-FAR.md.
-    private static readonly HashSet<string> Hidden = new() { "GameCube", "Dreamcast" };
+    // not offered as import targets). GameCube + Dreamcast were hidden while the old dev
+    // box's wedged GPU couldn't run them; un-hidden 2026-06-07 after the new-box benchmark
+    // hit locked 60fps (see GameCubeHandler's dual-core+fastmem A/B note).
+    private static readonly HashSet<string> Hidden = new();
 
     // Parameterless ctor for the XAML designer.
     public ConsolePickerWindow() : this("game", new[] { "PS1", "SegaCD" }) { }
