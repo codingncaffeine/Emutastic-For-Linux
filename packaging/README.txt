@@ -245,12 +245,14 @@ RETROACHIEVEMENTS
 -----------------
 RetroAchievements (https://retroachievements.org) is a community-run
 service that tracks achievement unlocks across hundreds of supported
-games. Enable in Preferences -> Achievements:
+games. Just sign in under Preferences -> Achievements -- that's all it
+takes; there is no separate "enable" switch. Once you're signed in,
+achievements track automatically in every supported game.
 
   1. Username + Password
-     Used for the unlocks themselves. After your first successful
-     login the password is replaced by a session token, so you only
-     enter it once.
+     Sign in here -- this is the only required step. After your first
+     successful login the password is replaced by a session token, so
+     you only enter it once.
 
   2. Web API Key  (separate from your password)
      Unlocks the per-game stats on the library detail card and the
@@ -265,11 +267,35 @@ games. Enable in Preferences -> Achievements:
   3. Hardcore Mode  (default ON)
      Disables save state LOADING (creating states is still allowed)
      and cheat codes during gameplay. Required by RA for "hardcore"
-     achievement unlocks. Switching mid-session is not allowed by RA,
-     so the change takes effect on the next game launch.
+     achievement unlocks, which are worth more points and count
+     toward the mastery badge.
+
+     Emutastic ships with Hardcore Mode ON to align with RA's
+     recommendation for new accounts. Flip the toggle off in
+     Preferences -> Achievements -> Hardcore Mode any time if you
+     want to use save state loading or cheats -- note that any
+     achievement unlocks earned with hardcore off won't count toward
+     hardcore points or the mastery badge. Switching mid-session is
+     not allowed by RA, so the change takes effect on the next game
+     launch.
 
      Hardcore Mode is temporarily disabled for PSP titles regardless
-     of the toggle setting.
+     of the toggle setting -- see the Hardcore Compliance wiki page
+     for the technical reason.
+
+     NOTE: With Hardcore Mode on, RetroAchievements pops a toast that
+     reads "Unknown emulator" at game start. This is EXPECTED, not a
+     bug -- RA only approves an emulator for hardcore after it has been
+     publicly available for six months, and Emutastic's earliest
+     application date is October 14, 2026, so the server doesn't yet
+     recognize it as an approved hardcore client.
+
+     If you want to unlock standard achievements and stop the message,
+     turn Hardcore Mode OFF (Preferences -> Achievements). We'll let
+     everyone know once Emutastic is approved for hardcore.
+
+     For the full line-by-line compliance audit:
+        https://github.com/codingncaffeine/Emutastic/wiki/Hardcore-Compliance
 
 In-game, achievements appear as toast notifications the moment you
 unlock them — the toast's look is fully customizable in Preferences →
