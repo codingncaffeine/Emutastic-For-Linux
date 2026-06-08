@@ -934,8 +934,14 @@ namespace Emutastic.Emulator
                     if (addedMs > 0.5)
                         _audioAddedMsEma = _audioAddedMsEma <= 0 ? addedMs : _audioAddedMsEma + 0.1 * (addedMs - _audioAddedMsEma);
                 }
+                // Lower bound is the NOMINAL frame time, not half of it: audio-progress pacing only
+                // ever EXTENDS a run's budget (a run that advanced N>1 game frames produces N frames
+                // of audio and should wait longer), never SHORTENS it below the content rate. A core
+                // that emits less audio per run than a frame's worth (parallel_n64 reports ~14ms vs the
+                // 16.6ms frame — sample-rate/AI quirk) must still pace to its av_info rate, or it free-
+                // runs fast (N64 hit ~72fps). Upper bound 4× still allows the Dreamcast 30fps case.
                 double paceMs = _audioAddedMsEma > 0.5
-                    ? Math.Clamp(_audioAddedMsEma, targetFrameMs * 0.5, targetFrameMs * 4)
+                    ? Math.Clamp(_audioAddedMsEma, targetFrameMs, targetFrameMs * 4)
                     : targetFrameMs;
 
                 // PACE TO THE CONTENT RATE (Phase 0.2 + audio-progress correction): the budget is the
