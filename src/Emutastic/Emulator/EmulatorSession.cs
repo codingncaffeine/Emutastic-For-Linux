@@ -229,6 +229,7 @@ namespace Emutastic.Emulator
         // split — on Linux the present thread is already decoupled, so this is the natural place.)
         private int _displayFrameSample;
         private long _lastPresentedSeq = -1;
+        private bool _fxLayerShown;   // pause-effect GPU layer currently uploaded (cleared once on resume)
         // EMUTASTIC_FPS_LOG=1 mirrors the per-second HUD stats line to emulator-host.log.
         private static readonly bool FpsLogEnabled =
             Environment.GetEnvironmentVariable("EMUTASTIC_FPS_LOG") == "1";
@@ -1664,6 +1665,25 @@ namespace Emutastic.Emulator
                     pauseFx.Resize(ww, wh);
                     if (pauseFx.TickInto(dt / 1000.0)) fxFrame = pauseFx.Frame;
                 }
+                // On a presenter with a GPU fx layer (Wayland shim), the pause effect rides its OWN
+                // capped-res layer the shim stretches full-window — NOT the window-sized software OSD,
+                // which would otherwise re-render + re-upload at full window res every frame while paused
+                // (the fullscreen slow-motion bug). Upload the capped frame each tick; clear it once on
+                // resume. Presenters without the layer (X11/SDL) keep the effect baked into the OSD below.
+                bool fxOnGpuLayer = _wlTop.SupportsFxLayer;
+                if (fxOnGpuLayer)
+                {
+                    if (fxFrame != null)
+                    {
+                        var px = fxFrame.GetPixels();
+                        if (px != IntPtr.Zero) { _wlTop.SetFxOverlay(px, fxFrame.Width, fxFrame.Height); _fxLayerShown = true; }
+                    }
+                    else if (_fxLayerShown)
+                    {
+                        _wlTop.SetFxOverlay(IntPtr.Zero, 0, 0);
+                        _fxLayerShown = false;
+                    }
+                }
 
                 // A transient disc-swap message ("Disk N / M") preempts the fps line while it's active.
                 string shownStatus = ActiveDiskMessage ?? statusText;
@@ -1694,7 +1714,7 @@ namespace Emutastic.Emulator
                 var (raChallenges, raProgress, raIndVer) = RaIndicatorsForPresent();
                 if (osd.Build(ww, wh, shownStatus, title, winStyle, _wlTop.IsMaximized, titleHover, hudAlpha, hover, IsPaused,
                               pickerItems, pickerHover, statusHover,
-                              cogItems, cogHover, cogMenu != null ? CoreName : "", fxFrame, IsRecording,
+                              cogItems, cogHover, cogMenu != null ? CoreName : "", fxOnGpuLayer ? null : fxFrame, IsRecording,
                               raToast, raToastAlpha, RaHardcoreActive,
                               raChallenges, raProgress, raIndVer))
                     _wlTop.SetOverlay(osd.Pixels, osd.Width, osd.Height);

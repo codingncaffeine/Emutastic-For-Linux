@@ -60,6 +60,7 @@ typedef struct {
     int configured, closed;
     GLuint tex; int texw, texh;
     GLuint ov_tex; int ov_w, ov_h, ov_on;   // RGBA OSD overlay (FPS + HUD), composited over the game quad
+    GLuint fx_tex; int fx_w, fx_h, fx_on;    // RGBA pause-effect layer — capped-res, GPU-stretched full-window
     GLuint gov_tex; int gov_w, gov_h, gov_on;  // RGBA game overlay (Vectrex art) — stretched over the GAME rect
     GLuint bez_tex; int bez_w, bez_h, bez_on;  // RGBA bezel frame (The Bezel Project) — aspect-fit in the content area
     // One-shot displayed-frame capture (screenshots): armed by wlp_request_capture, filled during
@@ -634,6 +635,23 @@ int wlp_present(void *h, const void *bgra, int fw, int fh) {
         }
     }
 
+    // Pause-effect layer: capped-res texture stretched over the WHOLE window, alpha-blended over
+    // the game and UNDER the OSD chrome (drawn after the screenshot capture so shots stay clean).
+    // The capped texture + GPU stretch is what keeps fullscreen pause animation cheap.
+    if (s->fx_on && s->fx_tex) {
+        glViewport(0, 0, s->w, s->h);
+        glBindTexture(GL_TEXTURE_2D, s->fx_tex);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glBegin(GL_QUADS);
+            glTexCoord2f(0, 0); glVertex2f(-1,  1);
+            glTexCoord2f(1, 0); glVertex2f( 1,  1);
+            glTexCoord2f(1, 1); glVertex2f( 1, -1);
+            glTexCoord2f(0, 1); glVertex2f(-1, -1);
+        glEnd();
+        glDisable(GL_BLEND);
+    }
+
     // OSD overlay (FPS + HUD): full-window RGBA quad, alpha-blended over the game.
     if (s->ov_on && s->ov_tex) {
         glViewport(0, 0, s->w, s->h);
@@ -725,6 +743,15 @@ static void deco_upload(GLuint *tex, int *tw, int *th, int *on, const void *rgba
 void wlp_set_gameoverlay(void *h, const void *rgba, int w, int hh) {
     wlp *s = h; if (!s) return;
     deco_upload(&s->gov_tex, &s->gov_w, &s->gov_h, &s->gov_on, rgba, w, hh);
+}
+
+// Upload (or clear with NULL) the pause-effect layer: straight-alpha RGBA8 at a CAPPED resolution
+// (the effect is soft; the GPU stretches it to the whole window each present, so the CPU never
+// composites it at window size). Uploaded every frame while paused, cleared (NULL) on resume.
+// MUST be called on the present (GL) thread. LINEAR filter for the upscale (deco_upload).
+void wlp_set_fxoverlay(void *h, const void *rgba, int w, int hh) {
+    wlp *s = h; if (!s) return;
+    deco_upload(&s->fx_tex, &s->fx_w, &s->fx_h, &s->fx_on, rgba, w, hh);
 }
 
 // Show/hide the already-uploaded game overlay without touching the texture (cog toggle).

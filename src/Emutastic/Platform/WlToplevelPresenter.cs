@@ -46,6 +46,7 @@ namespace Emutastic.Platform
         [DllImport(LIB)] static extern int wlp_poll_event(IntPtr h, out int type, out int a, out int b);
         [DllImport(LIB)] static extern void wlp_set_overlay(IntPtr h, IntPtr rgba, int w, int hh);
         [DllImport(LIB)] static extern void wlp_set_gameoverlay(IntPtr h, IntPtr rgba, int w, int hh);
+        [DllImport(LIB)] static extern void wlp_set_fxoverlay(IntPtr h, IntPtr rgba, int w, int hh);
         [DllImport(LIB)] static extern void wlp_show_gameoverlay(IntPtr h, int on);
         [DllImport(LIB)] static extern void wlp_set_bezel(IntPtr h, IntPtr rgba, int w, int hh);
         [DllImport(LIB)] static extern void wlp_show_bezel(IntPtr h, int on);
@@ -156,6 +157,15 @@ namespace Emutastic.Platform
             fixed (byte* p = rgba) wlp_set_gameoverlay(_h, (IntPtr)p, w, h);
         }
         public void ShowGameOverlay(bool on) { if (_h != IntPtr.Zero) wlp_show_gameoverlay(_h, on ? 1 : 0); }
+
+        public bool SupportsFxLayer => true;
+
+        /// <summary>Upload the pause-effect layer (capped-res straight-alpha RGBA8, GPU-stretched to the
+        /// whole window), or clear it with a null pointer on resume. Present thread only (GL context).</summary>
+        public void SetFxOverlay(IntPtr rgba, int w, int h)
+        {
+            if (_h != IntPtr.Zero) wlp_set_fxoverlay(_h, rgba, w, h);
+        }
 
         /// <summary>Upload the bezel frame (straight-alpha RGBA8, aspect-fit in the content area),
         /// then show/hide via <see cref="ShowBezel"/>. Present thread only (GL context).</summary>

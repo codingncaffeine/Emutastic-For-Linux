@@ -37,6 +37,7 @@ void wlp_set_overlay(void* h, const void* rgba, int w, int hh);
 // Both take straight-alpha RGBA8 (row 0 = top) and MUST be called on the present (GL) thread.
 // Game overlay (Vectrex art): stretched over the game rect, alpha-blended. NULL clears.
 void wlp_set_gameoverlay(void* h, const void* rgba, int w, int hh);
+void wlp_set_fxoverlay(void* h, const void* rgba, int w, int hh);   // pause-effect layer (capped, GPU-stretched)
 void wlp_show_gameoverlay(void* h, int on);   // toggle visibility without re-uploading
 // Bezel frame (transparent-center art): aspect-fit at its own ratio in the content area. NULL clears.
 void wlp_set_bezel(void* h, const void* rgba, int w, int hh);

@@ -46,6 +46,14 @@ namespace Emutastic.Platform
 
         // ── OSD overlay (window-sized straight-alpha RGBA8, row 0 = top; IntPtr.Zero hides) ─────
         void SetOverlay(IntPtr rgba, int w, int h);
+
+        /// <summary>True if the presenter composites the pause effect on its own GPU layer
+        /// (capped-res, GPU-stretched) instead of having it baked into the window-sized OSD —
+        /// avoids re-rendering the whole OSD every frame while paused. Wayland shim only.</summary>
+        bool SupportsFxLayer => false;
+        /// <summary>Upload the capped pause-effect frame to the GPU fx layer, or IntPtr.Zero to
+        /// clear it. No-op unless <see cref="SupportsFxLayer"/>. Present thread only.</summary>
+        void SetFxOverlay(IntPtr rgba, int w, int h) { }
         /// <summary>Reserve top/bottom strips (title/status chrome) out of the game fit-rect.</summary>
         void SetInsets(int top, int bottom);
         void SetAspect(double dar);
