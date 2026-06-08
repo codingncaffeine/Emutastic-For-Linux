@@ -2,7 +2,26 @@
   "version": "2.0.0",
   "tasks": [
     {
+      // Default build (Ctrl+Shift+B). RELEASE — this is what the desktop shortcut runs and
+      // what the project tests against, so a normal build updates the app you actually launch.
       "label": "build",
+      "command": "dotnet",
+      "type": "process",
+      "args": [
+        "build",
+        "${workspaceFolder}/src/Emutastic/Emutastic.csproj",
+        "-c",
+        "Release"
+      ],
+      "problemMatcher": "$msCompile",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      // Debug build — used by F5 (the launch configs' preLaunchTask) for breakpoint debugging.
+      "label": "build-debug",
       "command": "dotnet",
       "type": "process",
       "args": [
@@ -12,10 +31,7 @@
         "Debug"
       ],
       "problemMatcher": "$msCompile",
-      "group": {
-        "kind": "build",
-        "isDefault": true
-      }
+      "group": "build"
     }
   ]
 }

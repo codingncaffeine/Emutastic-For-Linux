@@ -5,7 +5,7 @@
       "name": "Run Emutastic",
       "type": "coreclr",
       "request": "launch",
-      "preLaunchTask": "build",
+      "preLaunchTask": "build-debug",
       "program": "${workspaceFolder}/src/Emutastic/bin/Debug/net10.0/Emutastic.dll",
       "cwd": "${workspaceFolder}/src/Emutastic",
       "console": "internalConsole",
@@ -15,7 +15,7 @@
       "name": "Run Emutastic (ROM via args)",
       "type": "coreclr",
       "request": "launch",
-      "preLaunchTask": "build",
+      "preLaunchTask": "build-debug",
       "program": "${workspaceFolder}/src/Emutastic/bin/Debug/net10.0/Emutastic.dll",
       "args": [
         "${workspaceFolder}/../emutastic-linux/spike/cores/nestopia_libretro.so",
