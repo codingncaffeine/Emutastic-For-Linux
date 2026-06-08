@@ -1,5 +1,3 @@
-# Emutastic for Linux 0.5.0
-
 First public release of the Linux port — a native Avalonia frontend with the
 RetroArch-style game host, ported feature-for-feature from the Windows app.
 

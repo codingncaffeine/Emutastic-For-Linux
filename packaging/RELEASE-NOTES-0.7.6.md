@@ -1,5 +1,3 @@
-# Emutastic for Linux 0.7.6
-
 Polish, hardening, and project housekeeping.
 
 ## What's New

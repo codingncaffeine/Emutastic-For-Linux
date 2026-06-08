@@ -1,5 +1,3 @@
-# Emutastic for Linux 0.7.5
-
 Library quality-of-life and a round of "it was wired up wrong" fixes.
 
 ## What's New

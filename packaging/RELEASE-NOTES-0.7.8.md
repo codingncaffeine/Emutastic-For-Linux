@@ -1,5 +1,3 @@
-# Emutastic for Linux 0.7.8
-
 A focused release: full in-game UI on X11 sessions, plus library polish.
 
 ## What's New

@@ -1,5 +1,3 @@
-# Emutastic for Linux 0.8.1
-
 A polish release on top of 0.8.0: smoother pause effects in fullscreen, a
 simpler RetroAchievements sign-in, faster box-art downloads for paid
 ScreenScraper accounts, and a clearer in-game FPS readout.

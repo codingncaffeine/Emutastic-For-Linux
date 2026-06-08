@@ -1,5 +1,3 @@
-# Emutastic for Linux 0.7.0
-
 The in-game menu grows up: shaders, bezels, turbo, and real screenshots.
 
 ## What's New

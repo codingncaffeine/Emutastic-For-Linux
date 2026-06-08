@@ -1,5 +1,3 @@
-# Emutastic for Linux 0.8.0
-
 The big one: **GameCube and Dreamcast arrive**, and the emulation loop got a
 deep tune-up — smoother pacing, cleaner audio, and high internal resolutions
 that no longer cost you frames. Every change below was verified with

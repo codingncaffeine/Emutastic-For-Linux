@@ -1,5 +1,3 @@
-# Emutastic for Linux 0.7.7
-
 A big batch: controller rumble, in-app update notifications, a grouped
 Favorites view, and an important stability fix for context menus.
 
