@@ -139,8 +139,21 @@ namespace Emutastic.Platform
                 c.DrawText(label, x + 14, ry + MenuRowH - 10, SKTextAlign.Left, font, enabled ? on : off);
                 if (!string.IsNullOrEmpty(value))
                 {
-                    float vw = valueFont.MeasureText(value);
-                    c.DrawText(value, x + mw - 14 - vw, ry + MenuRowH - 10, SKTextAlign.Left, valueFont, val);
+                    // Right-aligned value, but never let it run into the label or off the box: cap
+                    // it to the gap after the label and ellipsize if a long value (e.g. a texture-
+                    // filter name) wouldn't fit. Short values (resolutions, On/Off) are unaffected.
+                    float labelW = font.MeasureText(label);
+                    float maxValW = mw - 14 - (x + 14 + labelW + 8 - x);   // box right pad → end of label + gap
+                    string vtext = value!;
+                    float vw = valueFont.MeasureText(vtext);
+                    if (maxValW > 12 && vw > maxValW)
+                    {
+                        while (vtext.Length > 1 && valueFont.MeasureText(vtext + "…") > maxValW)
+                            vtext = vtext.Substring(0, vtext.Length - 1);
+                        vtext += "…";
+                        vw = valueFont.MeasureText(vtext);
+                    }
+                    c.DrawText(vtext, x + mw - 14 - vw, ry + MenuRowH - 10, SKTextAlign.Left, valueFont, val);
                 }
             }
             if (!string.IsNullOrEmpty(footer))

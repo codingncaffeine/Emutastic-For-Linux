@@ -39,12 +39,12 @@ namespace Emutastic.Services.ConsoleHandlers
                 // max geometry, hence our HW-render FBO, hence the resolution we read back. (Native-
                 // res-factor only scales GLideN64's internal render, not the libretro framebuffer, so
                 // it does nothing through our readback.) Sized at init → ⚠ restart to take effect.
-                ("mupen64plus-43screensize", "Internal Resolution ⚠ restart"),
+                ("mupen64plus-43screensize", "Resolution (restart)"),
                 ("mupen64plus-txFilterMode", "Texture Filter"),
             }
             : new()
             {
-                ("parallel-n64-parallel-rdp-upscaling", "Upscaling ⚠ restart"),
+                ("parallel-n64-parallel-rdp-upscaling", "Upscaling (restart)"),
             };
 
         public override Dictionary<string, string> GetDefaultCoreOptions() => IsMupen
