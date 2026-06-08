@@ -470,13 +470,14 @@ namespace Emutastic.Emulator
             _corePath = corePath;
             _romPath = romPath;
             _console = console;
+            _coreName = System.IO.Path.GetFileNameWithoutExtension(corePath);
             _handler = ConsoleHandlerFactory.Create(console);
+            _handler.CoreFileName = _coreName;   // so the handler can return core-specific options (N64: parallel vs mupen)
             foreach (var kv in _handler.GetDefaultCoreOptions())   // pre-seed this console's curated options
                 _coreOptions[kv.Key] = kv.Value;
             // User choices from the Preferences "Core Options" tab override the handler's curated
             // defaults (upstream priority order). Values the core won't accept are repaired against
             // its valid list in ParseSetVariables.
-            _coreName = System.IO.Path.GetFileNameWithoutExtension(corePath);
             foreach (var kv in _coreOptionsStore.LoadValues(_coreName))
                 _coreOptions[kv.Key] = kv.Value;
             // Hold back load-fragile options (handler-declared): invisible during retro_load_game

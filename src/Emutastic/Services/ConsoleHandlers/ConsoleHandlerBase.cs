@@ -14,6 +14,11 @@ namespace Emutastic.Services.ConsoleHandlers
         public virtual bool UsesAnalogStick => false;
         public virtual bool PromoteAnalogStickToDpad => false;
 
+        /// <summary>The loaded core's file stem (e.g. "mupen64plus_next_libretro"), set by
+        /// EmulatorSession before GetDefaultCoreOptions/GetVisualOptions. Lets a console with
+        /// multiple cores (N64: parallel_n64 vs mupen64plus_next) return core-specific options.</summary>
+        public string CoreFileName { get; set; } = "";
+
         public virtual Dictionary<string, string> GetDefaultCoreOptions()
             => new Dictionary<string, string>();
 

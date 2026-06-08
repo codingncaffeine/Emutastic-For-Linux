@@ -25,6 +25,10 @@ namespace Emutastic.Services.ConsoleHandlers
         /// </summary>
         bool PromoteAnalogStickToDpad { get; }
 
+        /// <summary>Loaded core file stem (set by EmulatorSession) — for core-specific options
+        /// on consoles with more than one core. See ConsoleHandlerBase.</summary>
+        string CoreFileName { get; set; }
+
         /// <summary>Core options to pre-seed before the core announces its variable list.</summary>
         Dictionary<string, string> GetDefaultCoreOptions();
 

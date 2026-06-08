@@ -1,16 +1,20 @@
+using System;
 using System.Collections.Generic;
 
 namespace Emutastic.Services.ConsoleHandlers
 {
     /// <summary>
-    /// Handler for N64 / Parallel N64.
-    /// glide64 (OpenGL GPU-accelerated) is the default for playable performance.
-    /// User can switch to angrylion (software, accurate) or rice (fast) via preferences.
+    /// Handler for N64 — supports two cores with different option namespaces:
+    ///  - parallel_n64 (parallel-n64-*): glide64 GL plugin, the original default.
+    ///  - mupen64plus_next (mupen64plus-*): standard core; clean audio on the SDL3 path
+    ///    where parallel_n64 under-produces. Visuals + defaults switch on CoreFileName.
     /// </summary>
     public class N64Handler : ConsoleHandlerBase
     {
         public override string ConsoleName => "N64";
         public override bool UsesAnalogStick => true;
+
+        private bool IsMupen => CoreFileName.IndexOf("mupen", StringComparison.OrdinalIgnoreCase) >= 0;
 
         // Request Vulkan context for ParaLLEl-RDP (GPU-accelerated LLE renderer).
         // If the core doesn't support Vulkan, it will fall back to its own preferred context.
@@ -28,12 +32,29 @@ namespace Emutastic.Services.ConsoleHandlers
         // context_reset's GL objects (FBOs etc.) aren't visible there → black screen.
         public override bool AllowHwSharedContext => false;
 
-        public override List<(string key, string label)> GetVisualOptions() => new()
-        {
-            ("parallel-n64-parallel-rdp-upscaling", "Upscaling ⚠ restart"),
-        };
+        public override List<(string key, string label)> GetVisualOptions() => IsMupen
+            ? new()
+            {
+                ("mupen64plus-EnableNativeResFactor", "Internal Resolution"),
+                ("mupen64plus-txFilterMode",         "Texture Filter"),
+            }
+            : new()
+            {
+                ("parallel-n64-parallel-rdp-upscaling", "Upscaling ⚠ restart"),
+            };
 
-        public override Dictionary<string, string> GetDefaultCoreOptions() => new()
+        public override Dictionary<string, string> GetDefaultCoreOptions() => IsMupen
+            // mupen64plus_next: its own defaults render + sound correctly on Linux (verified), so
+            // pre-seed only the essentials — GLideN64 GL renderer, dynarec CPU, controller pak for
+            // saves. The parallel-n64-* keys below would be ignored (unknown to this core) anyway.
+            ? new Dictionary<string, string>
+            {
+                ["mupen64plus-rdp-plugin"]   = "gliden64",
+                ["mupen64plus-rsp-plugin"]   = "hle",
+                ["mupen64plus-cpucore"]      = "dynamic_recompiler",
+                ["mupen64plus-pak1"]         = "memory",
+            }
+            : new Dictionary<string, string>
         {
             // GL HLE plugin (GPU-accelerated) — the Phase-1 GL HW-render path. NOT "parallel" (ParaLLEl-RDP
             // is Vulkan-only; with no Vulkan yet the core falls back to SOFTWARE angrylion → slow). Switch
