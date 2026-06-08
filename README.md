@@ -50,7 +50,7 @@ The published `.deb` bundles the .NET 10 runtime (self-contained), so no separat
 | NES | NES | nestopia → quicknes → fceumm | No |
 | Famicom Disk System | FDS | nestopia | `disksys.rom` |
 | SNES | SNES | snes9x → bsnes | No |
-| Nintendo 64 | N64 | parallel_n64 → mupen64plus_next | No |
+| Nintendo 64 | N64 | mupen64plus_next → parallel_n64 | No |
 | GameCube | GameCube | dolphin | No |
 | Game Boy | GB | mgba → gambatte → sameboy | No |
 | Game Boy Color | GBC | mgba → gambatte → sameboy | No |
