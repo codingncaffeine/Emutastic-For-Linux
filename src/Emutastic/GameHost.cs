@@ -28,6 +28,13 @@ namespace Emutastic
         private static extern int prctl(int option, ulong arg2, ulong arg3, ulong arg4, ulong arg5);
         private const int PR_SET_PDEATHSIG = 1, SIGTERM = 15;
 
+        // .NET's Environment.SetEnvironmentVariable does NOT reliably reach native getenv() on Linux, so
+        // SDL (which reads SDL_VIDEODRIVER / SDL_VIDEO_X11_FORCE_EGL via getenv) never sees values set that
+        // way — it silently falls back to its default Wayland/EGL driver. setenv() writes the real C
+        // environment SDL reads. overwrite=0 → respect a value the user exported.
+        [DllImport("libc", SetLastError = true)]
+        private static extern int setenv([MarshalAs(UnmanagedType.LPUTF8Str)] string name, [MarshalAs(UnmanagedType.LPUTF8Str)] string value, int overwrite);
+
         // Longer default pre-warm budget (s). The warm loop exits EARLY once shader-cache growth
         // stalls, so this is an upper bound, not a fixed wait — covers menu/intro shaders without
         // making the common already-warm case sit idle.
@@ -101,13 +108,33 @@ namespace Emutastic
             // succeeds). Only override on a Wayland session when the user hasn't forced a driver.
             bool onWayland = string.Equals(Environment.GetEnvironmentVariable("XDG_SESSION_TYPE"), "wayland", StringComparison.OrdinalIgnoreCase)
                 || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY"));
-            if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SDL_VIDEODRIVER")) && onWayland)
-                Environment.SetEnvironmentVariable("SDL_VIDEODRIVER", "wayland");
+
+            // Cores that force a GLX/XWayland HW context (PPSSPP: glewInit needs a GLX dispatch table, see
+            // PspHandler.ForceCompatibilityGlProfile) must keep their WHOLE present pipeline on XWayland/GLX.
+            // Mixing that GLX context with a native-Wayland EGL present surface in one process never maps the
+            // surface on NVIDIA (eglSwapBuffers never throttles → no window, present thread spins). Mesa shares
+            // the two stacks fine, which is why it only bites on NVIDIA. So for these cores: SDL on the x11
+            // driver (present via XWayland/GLX, the GlPresenter x11 path) and NO native xdg_toplevel.
+            bool forceX11Gl = onWayland && Emutastic.Services.ConsoleHandlers.ConsoleHandlerFactory.Create(console).ForceCompatibilityGlProfile;
+            if (forceX11Gl)
+                Trace.WriteLine("[Host] GLX-compat core on Wayland: pinning present to XWayland/GLX (SDL x11, no xdg_toplevel) to avoid the NVIDIA GLX⇄EGL-Wayland unmapped-surface bug");
+
+            // Via native setenv (see the DllImport note) so SDL's getenv actually sees it. overwrite=0
+            // keeps any driver the user exported.
+            if (onWayland)
+                setenv("SDL_VIDEODRIVER", forceX11Gl ? "x11" : "wayland", 0);
+
+            // SDL3 3.4's x11 backend defaults to EGL, which still collides with the core's NVIDIA GLX context
+            // (SDL_GL_CreateContext → eglMakeCurrent fails). Pin SDL to GLX so the present shares the core's
+            // GL stack. Without this the window throws on context creation; with it, x11/GLX + SDL vsync maps.
+            if (forceX11Gl)
+                setenv("SDL_VIDEO_X11_FORCE_EGL", "0", 0);
 
             // Default to OUR OWN xdg_toplevel (the proven windowed-60 fix) on Wayland — SDL's surface caps at
             // ~55 windowed; a bare own top-level (RetroArch's model) hits 60. SDL stays for gamepad + audio.
-            // EMUTASTIC_GL_TOPLEVEL=0 reverts to the SDL-window present path for A/B.
-            if (onWayland && Environment.GetEnvironmentVariable("EMUTASTIC_GL_TOPLEVEL") == null)
+            // EMUTASTIC_GL_TOPLEVEL=0 reverts to the SDL-window present path for A/B. Skipped for forceX11Gl
+            // cores (the toplevel is the very thing that won't map alongside their GLX context).
+            if (onWayland && !forceX11Gl && Environment.GetEnvironmentVariable("EMUTASTIC_GL_TOPLEVEL") == null)
                 Environment.SetEnvironmentVariable("EMUTASTIC_GL_TOPLEVEL", "1");
 
             var session = new EmulatorSession(core, rom, console)

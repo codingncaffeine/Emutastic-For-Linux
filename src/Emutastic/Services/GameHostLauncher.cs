@@ -174,10 +174,25 @@ namespace Emutastic.Services
             // Native Wayland for the game window (RetroArch's backend — the smooth path). The parent Avalonia
             // app runs on X11/Xwayland, so without forcing this the child also picks x11/Xwayland → no EGL
             // FIFO → unsynced/juddery present. Only on a Wayland session, and don't override an explicit pick.
-            if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SDL_VIDEODRIVER"))
-                && (string.Equals(Environment.GetEnvironmentVariable("XDG_SESSION_TYPE"), "wayland", StringComparison.OrdinalIgnoreCase)
-                    || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY"))))
-                psi.Environment["SDL_VIDEODRIVER"] = "wayland";
+            // EXCEPTION: a core that forces a GLX/XWayland HW context (PPSSPP — ForceCompatibilityGlProfile)
+            // must keep its WHOLE present pipeline on XWayland/GLX; native Wayland EGL can't coexist with that
+            // GLX context on NVIDIA (the surface never maps → no PSP window). Pin those to x11+GLX here — we
+            // MUST set it on the child env, because GameHost's own setenv() can't override a value the parent
+            // already injected (this is exactly why the Play-button path didn't get the fix). Mirrors GameHost.cs.
+            bool onWayland = string.Equals(Environment.GetEnvironmentVariable("XDG_SESSION_TYPE"), "wayland", StringComparison.OrdinalIgnoreCase)
+                || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY"));
+            bool forceX11Gl = ConsoleHandlers.ConsoleHandlerFactory.Create(console).ForceCompatibilityGlProfile;
+            if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SDL_VIDEODRIVER")) && onWayland)
+            {
+                if (forceX11Gl)
+                {
+                    psi.Environment["SDL_VIDEODRIVER"] = "x11";
+                    if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SDL_VIDEO_X11_FORCE_EGL")))
+                        psi.Environment["SDL_VIDEO_X11_FORCE_EGL"] = "0";   // SDL3 x11 defaults to EGL → force GLX
+                }
+                else
+                    psi.Environment["SDL_VIDEODRIVER"] = "wayland";
+            }
 
             // Never-evict shader cache. The per-scene freeze on 3D cores (esp. flycast/Dreamcast)
             // is one-time GPU shader COMPILATION; Mesa persists each compiled shader to

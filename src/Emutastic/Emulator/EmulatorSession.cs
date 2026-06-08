@@ -586,6 +586,7 @@ namespace Emutastic.Emulator
                 _sampleRate = _core.AvInfo.timing.sample_rate > 0 ? _core.AvInfo.timing.sample_rate : 44100;
                 // DIAGNOSTIC ONLY (EMUTASTIC_NO_AUDIO=1): skip opening the sound device to test whether the
                 // audio subsystem is what's dragging the present off a clean 60. Never a shipping setting.
+                Trace.WriteLine($"[Emu] av_info: fps={_fps:F4} sample_rate={_sampleRate:F1} → target={1000.0 / _fps:F2}ms/frame, {_sampleRate / _fps:F1} audio-frames/frame");
                 if (Environment.GetEnvironmentVariable("EMUTASTIC_NO_AUDIO") != "1")
                     _audio = new SdlAudio((int)Math.Round(_sampleRate));
                 else
@@ -886,6 +887,8 @@ namespace Emutastic.Emulator
 
             var frameTimer = Stopwatch.StartNew();
             long drcLogTick = 0;
+            // RetroArch audio-backpressure pacing for self-pacing cores (PPSSPP) — see PspHandler.
+            bool backpressurePace = _handler.PaceByAudioBackpressure;
             while (_running)
             {
                 if (_resetRequested) { _resetRequested = false; try { _core!.Reset(); } catch (Exception ex) { Trace.WriteLine($"[Emu] reset threw: {ex}"); } }
@@ -941,22 +944,49 @@ namespace Emutastic.Emulator
                 // that emits less audio per run than a frame's worth (parallel_n64 reports ~14ms vs the
                 // 16.6ms frame — sample-rate/AI quirk) must still pace to its av_info rate, or it free-
                 // runs fast (N64 hit ~72fps). Upper bound 4× still allows the Dreamcast 30fps case.
-                double paceMs = _audioAddedMsEma > 0.5
-                    ? Math.Clamp(_audioAddedMsEma, targetFrameMs, targetFrameMs * 4)
-                    : targetFrameMs;
-
-                // PACE TO THE CONTENT RATE (Phase 0.2 + audio-progress correction): the budget is the
-                // audio each run actually adds (the game's clock), bounded around the handler/core
-                // nominal rate. RetroArch's model (slave the loop to a rate, DRC resamples audio to
-                // match) — rather than free-running on audio drain, which drifted to ~61fps and beat
-                // against the ~60Hz display. Production-timing jitter here is harmless: the present
-                // thread is vsync-paced SEPARATELY and shows the latest frame.
                 double tPaceStart = frameTimer.Elapsed.TotalMilliseconds;
                 int guard = 0;
-                while (_running && frameTimer.Elapsed.TotalMilliseconds < paceMs && guard++ < 8000)
+                if (backpressurePace && _audio != null && _audio.IsOpen)
                 {
-                    double remaining = paceMs - frameTimer.Elapsed.TotalMilliseconds;
-                    if (remaining > 1.5) Thread.Sleep(1); else Thread.SpinWait(40);
+                    // RETRO-ARCH AUDIO-BACKPRESSURE PACING (runloop_iterate audio_sync path): the device
+                    // drains at realtime, so blocking until the queue falls back to the cushion setpoint
+                    // (cushionMs == DrcTargetMs == prefill level) paces the core to its NATURAL fps — no
+                    // Thread.Sleep-to-a-computed-budget on top. For a core that self-paces its CPU to wall
+                    // clock (PPSSPP), the audio-progress budget below double-paces into a feedback loop
+                    // that drifts off 60 (~50fps), and the Sleep granularity overshoots and drains the
+                    // queue (DRC pinned, audio pops). Holding the queue at the DRC setpoint keeps DRC near
+                    // zero-error (ratio ~1, no fight) and the drain rate is the clock.
+                    // Block until BOTH: (a) the queue drained to the cushion (audio realtime), AND (b) at
+                    // least one refresh has elapsed since this frame started (minimum spacing). Without (b)
+                    // the emu can BURST several retro_runs when the queue briefly dips below cushion (after
+                    // any present hitch), and the decoupled present — which only ever shows the LATEST frame
+                    // — drops the intermediates, so visible cadence collapses to ~35 while emu still reads 60.
+                    // The spacing floor equals the audio period in steady state, so it only bites on bursts.
+                    while (_running && guard++ < 8000 &&
+                           (_audio.QueuedMsReal > cushionMs || frameTimer.Elapsed.TotalMilliseconds < targetFrameMs))
+                    {
+                        double remaining = Math.Max(_audio.QueuedMsReal - cushionMs,
+                                                    targetFrameMs - frameTimer.Elapsed.TotalMilliseconds);
+                        if (remaining > 1.5) Thread.Sleep(1); else Thread.SpinWait(40);
+                    }
+                }
+                else
+                {
+                    double paceMs = _audioAddedMsEma > 0.5
+                        ? Math.Clamp(_audioAddedMsEma, targetFrameMs, targetFrameMs * 4)
+                        : targetFrameMs;
+
+                    // PACE TO THE CONTENT RATE (Phase 0.2 + audio-progress correction): the budget is the
+                    // audio each run actually adds (the game's clock), bounded around the handler/core
+                    // nominal rate. RetroArch's model (slave the loop to a rate, DRC resamples audio to
+                    // match) — rather than free-running on audio drain, which drifted to ~61fps and beat
+                    // against the ~60Hz display. Production-timing jitter here is harmless: the present
+                    // thread is vsync-paced SEPARATELY and shows the latest frame.
+                    while (_running && frameTimer.Elapsed.TotalMilliseconds < paceMs && guard++ < 8000)
+                    {
+                        double remaining = paceMs - frameTimer.Elapsed.TotalMilliseconds;
+                        if (remaining > 1.5) Thread.Sleep(1); else Thread.SpinWait(40);
+                    }
                 }
                 double tCushionStart = frameTimer.Elapsed.TotalMilliseconds;
                 int cushionIters = 0;
@@ -998,7 +1028,7 @@ namespace Emutastic.Emulator
                         var (issueMs, mapMs, mapcallMs, copyMs) = Platform.HwGlContext.ReadbackTimes();
                         hwRb = $" hwReadback={_hwReadbackMs:F2}ms(issue={issueMs:F2} map={mapMs:F2}=sync{mapcallMs:F2}+copy{copyMs:F2})";
                     }
-                    Trace.WriteLine($"[Emu] DECOUPLED emu={_frameMsEma:F2}ms(~{fps:F1}fps) target={targetFrameMs:F1}ms coreRun={_coreRunMsEma:F2}ms paceWait={_paceWaitMsEma:F1}ms cushionWait={_cushionWaitMsEma:F1}ms DRC q={qms:F0}ms ratio={ratio:F5} underruns={underruns}{hwRb} vid(valid={_vidValid} dupe={_vidDupes})");
+                    Trace.WriteLine($"[Emu] DECOUPLED emu={_frameMsEma:F2}ms(~{fps:F1}fps) target={targetFrameMs:F1}ms coreRun={_coreRunMsEma:F2}ms audioAdded={_audioAddedMsEma:F2}ms paceWait={_paceWaitMsEma:F1}ms cushionWait={_cushionWaitMsEma:F1}ms DRC q={qms:F0}ms ratio={ratio:F5} underruns={underruns}{hwRb} vid(valid={_vidValid} dupe={_vidDupes})");
                 }
                 if (!_paused && (++_srmAutoSaveTick % 600) == 0) SaveSram();
             }
@@ -1612,8 +1642,10 @@ namespace Emutastic.Emulator
 
             double prevNowMs = clock.Elapsed.TotalMilliseconds;
             var pt = Stopwatch.StartNew();
+            long presentIters = 0;   // diag: present-loop spins/sec vs unique frames picked up (displayFps)
             while (_running && !_wlTop.CloseRequested)
             {
+                presentIters++;
                 _wlTop.PumpEvents();   // drain input first so a click/hover affects THIS frame's HUD
 
                 double nowMs = clock.Elapsed.TotalMilliseconds;
@@ -1638,7 +1670,8 @@ namespace Emutastic.Emulator
                             : $"{displayFps} fps  (target {TargetFps:F0})  core.Run avg {avgRunMs:F1}ms";
                         // EMUTASTIC_FPS_LOG=1: mirror to emulator-host.log (benchmarking hook).
                         if (FpsLogEnabled)
-                            Trace.WriteLine($"[fps] display={displayFps} emu={emuFps} target={TargetFps:F0} core.Run={avgRunMs:F1}ms");
+                            Trace.WriteLine($"[fps] display={displayFps} emu={emuFps} target={TargetFps:F0} core.Run={avgRunMs:F1}ms presentLoop={presentIters}/s");
+                        presentIters = 0;
                         if (zeroFpsSeconds >= 2) statusText += $"    ⏳ Working… ({zeroFpsSeconds}s with no frame)";
                     }
                 }

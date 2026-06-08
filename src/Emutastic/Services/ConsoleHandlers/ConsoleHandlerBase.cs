@@ -62,6 +62,9 @@ namespace Emutastic.Services.ConsoleHandlers
         // always compatibility profile; Mesa's compat profile carries GL 4.6 so the core
         // still gets every feature it would have had on core.
         public virtual bool ForceCompatibilityGlProfile => false;
+        // RetroArch-style audio-backpressure pacing (see IConsoleHandler). Default off: most cores
+        // pace fine on the audio-progress budget. PPSSPP self-paces to wall clock and needs this.
+        public virtual bool PaceByAudioBackpressure => false;
         public virtual bool AllowHwSharedContext => false;
         public virtual bool UseEmbeddedWindow => false;
 

@@ -87,6 +87,16 @@ namespace Emutastic.Services.ConsoleHandlers
         bool ForceCompatibilityGlProfile { get; }
 
         /// <summary>
+        /// Pace the decoupled emu loop by AUDIO BACKPRESSURE (block until the audio queue drains to
+        /// the target cushion) instead of by Thread.Sleep to a computed per-frame budget. RetroArch's
+        /// model (runloop_iterate audio_sync path): the device drains at realtime, so blocking on it
+        /// paces the core to its natural fps. Required for cores that self-pace their CPU to wall clock
+        /// (PPSSPP) — Sleep-to-audio-progress on top of that double-paces into a feedback loop that
+        /// drifts off 60 and stutters audio.
+        /// </summary>
+        bool PaceByAudioBackpressure { get; }
+
+        /// <summary>
         /// Whether to return true for RETRO_ENVIRONMENT_SET_HW_SHARED_CONTEXT.
         /// Dolphin and parallel-n64 both need this — their EmuThreads create shared GL contexts.
         /// </summary>
