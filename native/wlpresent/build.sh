@@ -25,7 +25,7 @@ gcc -shared -fPIC -O2 \
     cursor-shape-v1-protocol.c \
     tablet-unstable-v2-protocol.c \
     -o libwlpresent.so \
-    $(pkg-config --cflags --libs wayland-client wayland-egl egl gl x11) -lm
+    $(pkg-config --cflags --libs wayland-client wayland-egl egl gl x11 libpng) -lm
 
 echo "built libwlpresent.so ($(stat -c %s libwlpresent.so) bytes)"
 

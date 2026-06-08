@@ -527,6 +527,9 @@ int wlp_present(void *h, const void *bgra, int fw, int fh) {
     // ratio — consoles like CD-i output a frame whose pixel ratio differs from its 4:3 display aspect.
     // Fall back to the frame's pixel ratio when no DAR was set.
     double dar = s->dar > 0.0 ? s->dar : (double)fw / fh;
+    // A console-border .glslp chain (gameboy shell etc.) composes into its own fixed aspect — size the
+    // game rect to that so the overlay scales uniformly instead of stretching when the window AR differs.
+    if (s->glslp) { double oar = sc_aspect(s->glslp); if (oar > 0.0) dar = oar; }
     // Bezel rect first (when active): it becomes the game's fit CONTAINER, so the game keeps ITS
     // aspect and lands in the art's transparent cutout whatever shape the window is. (The Windows
     // app resizes the whole window to the bezel AR instead; fitting the game within the drawn
