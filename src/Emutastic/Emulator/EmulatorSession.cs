@@ -1248,17 +1248,31 @@ namespace Emutastic.Emulator
             // Row keys: "\x04<index>" built-in, "\x05<cat>:<page>" open category, "\x06<relpath>"
             // pick a downloaded preset. Category pages are capped (the GL menu doesn't scroll).
             const int ShaderPageSize = 12;
-            Func<List<(string, bool, string?, string?)>> buildCogShader = () =>
+            // The top shader menu lists the built-in presets first, then one row per downloaded
+            // GLSL-pack category. The full libretro pack is ~28 categories, so the combined list
+            // overflows the non-scrolling cog menu (it grows upward from the HUD pill and runs off
+            // the top of the screen) — which hid the built-ins (Game Boy etc.) and the early-
+            // alphabet categories. Paginate it like the category submenu so every row stays
+            // reachable; built-ins always land on page 0. "\x0e<page>" turns the page (wraps).
+            Func<int, List<(string, bool, string?, string?)>> buildCogShader = (page) =>
             {
-                var m = new List<(string, bool, string?, string?)> { ("‹ Back", true, null, "\x01BACK") };
+                var all = new List<(string, bool, string?, string?)>();
                 for (int i = 0; i < ShaderPresets.Length; i++)
-                    m.Add((ShaderPresets[i].Display, true,
-                           _glslpRel == null && i == _shaderPreset ? "✓" : null, $"\x04{i}"));
+                    all.Add((ShaderPresets[i].Display, true,
+                             _glslpRel == null && i == _shaderPreset ? "✓" : null, $"\x04{i}"));
                 var downloaded = Services.ShaderCatalog.GetDownloaded();
                 foreach (var cat in downloaded.Select(d => d.Category).Distinct())
-                    m.Add(($"{cat} ›", true,
-                           _glslpRel != null && _glslpRel.StartsWith(cat + "/", StringComparison.OrdinalIgnoreCase) ? "✓" : null,
-                           $"\x05{cat}:0"));
+                    all.Add(($"{cat} ›", true,
+                             _glslpRel != null && _glslpRel.StartsWith(cat + "/", StringComparison.OrdinalIgnoreCase) ? "✓" : null,
+                             $"\x05{cat}:0"));
+
+                int pages = Math.Max(1, (all.Count + ShaderPageSize - 1) / ShaderPageSize);
+                page = Math.Clamp(page, 0, pages - 1);
+                var m = new List<(string, bool, string?, string?)> { ("‹ Back", true, null, "\x01BACK") };
+                foreach (var it in all.Skip(page * ShaderPageSize).Take(ShaderPageSize))
+                    m.Add(it);
+                if (pages > 1)
+                    m.Add(($"more… ({page + 1}/{pages})", true, "›", $"\x0e{(page + 1) % pages}"));
                 return m;
             };
             Func<string, int, List<(string, bool, string?, string?)>> buildCogShaderCat = (cat, page) =>
@@ -1439,7 +1453,9 @@ namespace Emutastic.Emulator
                         }
                         else if (key == "\x01TURBO") { turboPage = 0; cogMenu = buildCogTurbo(); }
                         else if (key == "\x07") { turboPage++; cogMenu = buildCogTurbo(); }   // next turbo page (builder wraps)
-                        else if (key == "\x01SHADER") cogMenu = buildCogShader();
+                        else if (key == "\x01SHADER") cogMenu = buildCogShader(0);
+                        else if (key.Length > 1 && key[0] == '\x0e' && int.TryParse(key.AsSpan(1), out int shMenuPage))
+                            cogMenu = buildCogShader(shMenuPage);   // turn the shader-menu page
                         else if (key.Length > 1 && key[0] == '\x04' && int.TryParse(key.AsSpan(1), out int shaderIdx)
                                  && shaderIdx >= 0 && shaderIdx < ShaderPresets.Length)
                         {
@@ -1450,7 +1466,7 @@ namespace Emutastic.Emulator
                             _wlTop!.SetShader(shaderIdx);
                             if (CheatGameId >= 0)
                                 EmitHostCommand?.Invoke($"save-shader {CheatGameId} {ShaderPresets[shaderIdx].EnumName}");
-                            cogMenu = buildCogShader();   // refresh the check mark
+                            cogMenu = buildCogShader(0);   // refresh the check mark (built-ins are on page 0)
                         }
                         else if (key.Length > 1 && key[0] == '\x05')
                         {
