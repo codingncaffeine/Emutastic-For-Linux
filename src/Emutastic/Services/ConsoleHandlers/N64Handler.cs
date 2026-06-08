@@ -35,8 +35,12 @@ namespace Emutastic.Services.ConsoleHandlers
         public override List<(string key, string label)> GetVisualOptions() => IsMupen
             ? new()
             {
-                ("mupen64plus-EnableNativeResFactor", "Internal Resolution"),
-                ("mupen64plus-txFilterMode",         "Texture Filter"),
+                // 43screensize is the OUTPUT resolution GLideN64 renders to — it sizes the av_info
+                // max geometry, hence our HW-render FBO, hence the resolution we read back. (Native-
+                // res-factor only scales GLideN64's internal render, not the libretro framebuffer, so
+                // it does nothing through our readback.) Sized at init → ⚠ restart to take effect.
+                ("mupen64plus-43screensize", "Internal Resolution ⚠ restart"),
+                ("mupen64plus-txFilterMode", "Texture Filter"),
             }
             : new()
             {
@@ -46,13 +50,15 @@ namespace Emutastic.Services.ConsoleHandlers
         public override Dictionary<string, string> GetDefaultCoreOptions() => IsMupen
             // mupen64plus_next: its own defaults render + sound correctly on Linux (verified), so
             // pre-seed only the essentials — GLideN64 GL renderer, dynarec CPU, controller pak for
-            // saves. The parallel-n64-* keys below would be ignored (unknown to this core) anyway.
+            // saves, plus a sharper-than-native default resolution (the downscale-before-readback path
+            // makes a larger FBO cheap). The parallel-n64-* keys below are unknown to this core.
             ? new Dictionary<string, string>
             {
                 ["mupen64plus-rdp-plugin"]   = "gliden64",
                 ["mupen64plus-rsp-plugin"]   = "hle",
                 ["mupen64plus-cpucore"]      = "dynamic_recompiler",
                 ["mupen64plus-pak1"]         = "memory",
+                ["mupen64plus-43screensize"] = "960x720",
             }
             : new Dictionary<string, string>
         {

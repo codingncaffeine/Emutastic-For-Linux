@@ -2767,6 +2767,13 @@ namespace Emutastic.Emulator
             string next = entry.ValidValues[(idx + 1) % entry.ValidValues.Length];
             _coreOptions[key] = next;
             _coreOptionsDirty = true;
+            // Persist the change to the per-core values store (upstream parity, EmulatorWindow:8235).
+            // Without this the cog change was in-memory only: live options didn't survive a restart,
+            // and "⚠ restart" options (N64 resolution, parallel upscaling) could NEVER take effect —
+            // they revert to the default before the restart that's supposed to apply them. SaveValues
+            // merges, so this updates just this key.
+            try { _coreOptionsStore.SaveValues(_coreName, new Dictionary<string, string> { [key] = next }); }
+            catch (Exception ex) { Trace.WriteLine($"[Emu] core option persist failed ({key}): {ex.Message}"); }
             Trace.WriteLine($"[Emu] core option (live, cog menu) {key} = {next}");
             return next;
         }
