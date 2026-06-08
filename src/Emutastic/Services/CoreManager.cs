@@ -20,8 +20,11 @@ namespace Emutastic.Services
             { "FDS",         new[] { "nestopia_libretro.so"            }},
             { "SNES",        new[] { "snes9x_libretro.so",
                                      "bsnes_libretro.so"               }},
-            { "N64",         new[] { "parallel_n64_libretro.so",
-                                     "mupen64plus_next_libretro.so"        }},
+            // mupen64plus_next first: parallel_n64 under-produces audio through the SDL3 path on
+            // Linux (rough/garbled at correct speed); mupen64plus_next is clean. Linux-specific
+            // default — Windows keeps parallel_n64 (its WASAPI path handles parallel_n64 fine).
+            { "N64",         new[] { "mupen64plus_next_libretro.so",
+                                     "parallel_n64_libretro.so"            }},
             { "GameCube",    new[] { "dolphin_libretro.so"             }},
             { "GB",          new[] { "mgba_libretro.so",
                                      "gambatte_libretro.so",
