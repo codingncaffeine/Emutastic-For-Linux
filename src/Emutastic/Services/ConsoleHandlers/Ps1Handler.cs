@@ -10,15 +10,20 @@ namespace Emutastic.Services.ConsoleHandlers
     /// </summary>
     public class Ps1Handler : ConsoleHandlerBase
     {
-        private const uint RETRO_DEVICE_DUALSHOCK = (2 << 8) | 5; // RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_ANALOG, 1) = 517
+        private const uint RETRO_DEVICE_JOYPAD = 1;                  // original PSX digital pad — unambiguous, works in every non-analog game
+        private const uint RETRO_DEVICE_DUALSHOCK = (2 << 8) | 5;    // RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_ANALOG, 1) = 517 (Beetle PSX DualShock)
 
         public override string ConsoleName => "PS1";
-        public override bool UsesAnalogStick => true;
+        // Default to the digital pad: with the DualShock + analog-stick path the d-pad went dead
+        // (SOTN uncontrollable on both PSX cores) while plain-JOYPAD consoles like NES worked fine.
+        // The digital controller has no analog mode to shadow the d-pad. Analog can come back as an
+        // opt-in once the stick/d-pad interaction is sorted.
+        public override bool UsesAnalogStick => false;
 
         public override void ConfigureControllerPorts(LibretroCore core)
         {
             for (uint port = 0; port < 2; port++)
-                core.SetControllerPortDevice(port, RETRO_DEVICE_DUALSHOCK);
+                core.SetControllerPortDevice(port, RETRO_DEVICE_JOYPAD);
         }
 
         // Request OpenGL Core context for Beetle PSX HW. The Vulkan path was
