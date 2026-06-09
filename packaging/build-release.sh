@@ -72,7 +72,7 @@ Section: games
 Priority: optional
 Architecture: amd64
 Installed-Size: $INSTALLED_KB
-Depends: libc6, libgcc-s1, libstdc++6, libicu76 | libicu74 | libicu72, libx11-6, libfontconfig1, libegl1, libgl1, libsdl3-0, ffmpeg
+Depends: libc6, libgcc-s1, libstdc++6, libicu76 | libicu74 | libicu72, libx11-6, libfontconfig1, libegl1, libgl1, libsdl3-0, libwayland-client0, libwayland-egl1, libpng16-16t64 | libpng16-16, ffmpeg
 Recommends: libvlc5, vlc-plugin-base
 Maintainer: Emutastic for Linux <stragee@gmail.com>
 Description: Retro game library and emulator frontend
