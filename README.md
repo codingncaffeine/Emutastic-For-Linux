@@ -228,7 +228,7 @@ ABI-check harness), and `libchdr.so` (CHD disc images, built with CMake). Buildi
 therefore needs the C toolchain + CMake + Wayland/OpenGL **development** packages:
 
 ```sh
-sudo apt install build-essential pkg-config cmake libwayland-dev libegl-dev libgl-dev
+sudo apt install build-essential pkg-config cmake libwayland-dev libegl-dev libgl-dev libx11-dev libpng-dev
 ```
 
 ```sh
