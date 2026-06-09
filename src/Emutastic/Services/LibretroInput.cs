@@ -281,6 +281,16 @@ namespace Emutastic.Services
                     {
                         "1" => JOYPAD_A, "2" => JOYPAD_B,
                         "3" => JOYPAD_X, "4" => JOYPAD_Y,
+                        // The joystick is the digital d-pad to vecx (JOYPAD directions). The panel labels
+                        // the stick "Analog Up/Down/Left/Right"; without these cases those bindings returned
+                        // uint.MaxValue and were dropped ("binding ignored"), so movement did nothing on
+                        // BOTH a mapped d-pad and the stick. Accept the "analog X" labels and plain "X" so
+                        // existing saves and future maps both resolve; the analog stick reaches the same
+                        // d-pad via VectrexHandler.PromoteAnalogStickToDpad.
+                        "analog up"    or "up"    => JOYPAD_UP,
+                        "analog down"  or "down"  => JOYPAD_DOWN,
+                        "analog left"  or "left"  => JOYPAD_LEFT,
+                        "analog right" or "right" => JOYPAD_RIGHT,
                         _ => uint.MaxValue
                     };
 

@@ -6,6 +6,11 @@ namespace Emutastic.Services.ConsoleHandlers
     {
         public override string ConsoleName => "Vectrex";
 
+        // vecx reads the joystick as the digital d-pad. Let a modern pad's LEFT ANALOG STICK drive
+        // that d-pad too (like the other digital consoles), so the stick works without binding each
+        // direction — the explicit d-pad binding and the stick both reach the same JOYPAD directions.
+        public override bool PromoteAnalogStickToDpad => true;
+
         public override Dictionary<string, string> GetDefaultCoreOptions() => new()
         {
             { "vecx_res_multi", "3" },
