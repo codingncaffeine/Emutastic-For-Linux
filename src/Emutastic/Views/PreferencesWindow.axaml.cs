@@ -2399,9 +2399,14 @@ public partial class PreferencesWindow : Window
 
         this.FindControl<Button>("RefreshDevicesBtn")!.Click += (_, _) => PopulateInputDevices();
         this.FindControl<Button>("ResetDefaultsBtn")!.Click += (_, _) => ResetControlsDefaults();
-        this.FindControl<Button>("SaveControlsBtn")!.Click += (_, _) =>
+        this.FindControl<Button>("SaveControlsBtn")!.Click += async (_, _) =>
         {
-            SaveMappingsToConfig(); App.Configuration?.ScheduleSave();
+            SaveMappingsToConfig();
+            // Persist NOW (not the 400ms debounce) so a running game host re-reads the new map, then
+            // tell it to rebind live — a Controls edit applies to the running game, like on Windows,
+            // instead of only at the next launch.
+            try { if (App.Configuration != null) await App.Configuration.SaveAsync(); } catch { }
+            Services.GameHostLauncher.BroadcastToHosts("reload-input");
             this.FindControl<Button>("SaveControlsBtn")!.Content = "Saved";
         };
 

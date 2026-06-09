@@ -188,6 +188,10 @@ namespace Emutastic
                                     Trace.WriteLine("[Host] parent requested cheat reload");
                                     session.ReloadCheats();
                                     break;
+                                case "reload-input":
+                                    Trace.WriteLine("[Host] parent requested input reload");
+                                    session.ReloadInputConfig();
+                                    break;
                                 case string l when l.StartsWith("show-ra-toast ", StringComparison.Ordinal):
                                     // Library-decided LB toast: JSON {h, s} → in-game GlOsd toast.
                                     try

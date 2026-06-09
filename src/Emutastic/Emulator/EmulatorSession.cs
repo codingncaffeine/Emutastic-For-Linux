@@ -680,6 +680,7 @@ namespace Emutastic.Emulator
                 if (_saveStatePending) ExecuteSaveOnEmuThread();   // between retro_run calls, like upstream
                 if (_loadStatePending) ExecuteLoadOnEmuThread();
                 if (_cheatsApplyPending) ExecuteCheatsApplyOnEmuThread();
+                if (_inputReloadPending) ExecuteInputReloadOnEmuThread();
 
                 // Dynamic rate control: fine-tune the resampler ratio each frame to hold the audio queue
                 // centered (RetroArch's model). This is the PRIMARY audio-sync mechanism now; the coarse
@@ -898,6 +899,7 @@ namespace Emutastic.Emulator
                 if (_saveStatePending) ExecuteSaveOnEmuThread();   // between retro_run calls, like upstream
                 if (_loadStatePending) ExecuteLoadOnEmuThread();
                 if (_cheatsApplyPending) ExecuteCheatsApplyOnEmuThread();
+                if (_inputReloadPending) ExecuteInputReloadOnEmuThread();
                 _audio?.ApplyDrc();
 
                 long audioBefore = _audio?.FramesWrittenTotal ?? 0;
@@ -2698,6 +2700,30 @@ namespace Emutastic.Emulator
                 _cheatsApplyPending = true;
             }
             Trace.WriteLine($"[Cheats] loaded {loaded.Count} ({loaded.Count(c => c.Enabled)} enabled) for game {CheatGameId}");
+        }
+
+        // ── Live input reload (Windows parity): a Controls-panel edit applies to the RUNNING game,
+        // not just the next launch. On Windows the emulator shares one process with the panel; on Linux
+        // the game runs in a separate host that loads input once at launch, so the parent saves the
+        // config then sends "reload-input" down our stdin and we rebind here. ──
+        private volatile bool _inputReloadPending;
+        /// <summary>Queue a live rebind of the input map from the (just-saved) config. Deferred to the
+        /// emu thread, where the input is polled — same contract as ReloadCheats.</summary>
+        public void ReloadInputConfig() => _inputReloadPending = true;
+
+        private void ExecuteInputReloadOnEmuThread()
+        {
+            _inputReloadPending = false;
+            try
+            {
+                // Our in-memory config was loaded at launch and is now stale; re-read the file the parent
+                // just wrote, then rebind the live input map + the disk-swap chord (both come from it).
+                App.Configuration?.LoadAsync().GetAwaiter().GetResult();
+                _input.LoadConfiguration(_console, App.Configuration);
+                LoadDiskSwapChord();
+                Trace.WriteLine("[Emu] input config reloaded live (Controls edit applied to the running game)");
+            }
+            catch (Exception ex) { Trace.WriteLine($"[Emu] live input reload failed: {ex}"); }
         }
 
         /// <summary>Current list snapshot for the cog panel.</summary>

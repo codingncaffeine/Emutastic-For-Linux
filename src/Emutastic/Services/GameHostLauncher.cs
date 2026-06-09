@@ -56,6 +56,16 @@ namespace Emutastic.Services
             catch (Exception ex) { Trace.WriteLine($"[Launcher] SendToHost failed: {ex.Message}"); }
         }
 
+        /// <summary>Send one protocol line to EVERY running host. Used for config that isn't keyed by a
+        /// specific game (e.g. "reload-input" after a Controls-panel edit — each host rebinds its own
+        /// console). Normally there's just one live host; harmless to fan out.</summary>
+        public static void BroadcastToHosts(string line)
+        {
+            foreach (var proc in _liveHosts.Values)
+                try { proc.StandardInput.WriteLine(line); proc.StandardInput.Flush(); }
+                catch (Exception ex) { Trace.WriteLine($"[Launcher] BroadcastToHosts failed: {ex.Message}"); }
+        }
+
         /// <summary>Launch a game. <paramref name="onExit"/> is invoked on the UI thread when the game
         /// ends (result is null on a crash / missing results file).</summary>
         public static void Launch(string corePath, string romPath, string console, Action<GameHostResult?>? onExit = null)
