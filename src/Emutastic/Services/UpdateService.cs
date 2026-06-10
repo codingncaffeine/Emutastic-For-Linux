@@ -58,7 +58,7 @@ namespace Emutastic.Services
             catch { return InstallKind.ReadOnly; }
         }
 
-        public sealed record ReleaseAsset(string Name, string Url, long Size);
+        public sealed record ReleaseAsset(string Name, string Url, long Size, string? Digest = null);
 
         /// <summary>A newer self-installable release found by <see cref="CheckAsync"/>.</summary>
         public sealed record AppUpdate(string Tag, ReleaseAsset Asset, InstallKind Kind);
@@ -96,7 +96,8 @@ namespace Emutastic.Services
                         assets.Add(new ReleaseAsset(
                             a.Value<string>("name") ?? "",
                             a.Value<string>("browser_download_url") ?? "",
-                            a.Value<long?>("size") ?? 0));
+                            a.Value<long?>("size") ?? 0,
+                            a.Value<string>("digest")));   // "sha256:…" once GitHub has computed it
 
                 var asset = PickAsset(kind, assets);
                 return asset == null ? null : new AppUpdate(tag, asset, kind);
@@ -158,6 +159,30 @@ namespace Emutastic.Services
                     }
                 }
 
+                // Integrity gate: verify the downloaded artifact against GitHub's
+                // published SHA-256 digest BEFORE we extract it over our own binary
+                // or hand it to `pkexec dpkg -i`. A mismatch means the download was
+                // corrupted or tampered with — abort rather than execute it.
+                if (!string.IsNullOrEmpty(asset.Digest))
+                {
+                    progress.Report((100, "Verifying…"));
+                    string expected = asset.Digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase)
+                        ? asset.Digest[7..] : asset.Digest;
+                    string actual = await Sha256HexAsync(file, ct);
+                    if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+                    {
+                        Trace.WriteLine($"[Update] digest mismatch: expected {expected}, got {actual}");
+                        return "Update integrity check failed — the download didn't match the "
+                             + "expected checksum, so nothing was installed. Try again, or update "
+                             + "from the releases page.";
+                    }
+                    Trace.WriteLine("[Update] SHA-256 digest verified");
+                }
+                else
+                {
+                    Trace.WriteLine("[Update] no SHA-256 digest published for this asset — skipping verification");
+                }
+
                 return kind switch
                 {
                     InstallKind.SelfContained => await ApplyTarballAsync(file, progress, ct),
@@ -171,6 +196,14 @@ namespace Emutastic.Services
                 Trace.WriteLine($"[Update] failed: {ex}");
                 return $"Update failed: {ex.Message}";
             }
+        }
+
+        private static async Task<string> Sha256HexAsync(string path, CancellationToken ct)
+        {
+            await using var fs = File.OpenRead(path);
+            using var sha = System.Security.Cryptography.SHA256.Create();
+            var hash = await sha.ComputeHashAsync(fs, ct);
+            return Convert.ToHexString(hash).ToLowerInvariant();
         }
 
         private static async Task<string?> ApplyTarballAsync(string tarball, IProgress<(int, string)> progress, CancellationToken ct)
