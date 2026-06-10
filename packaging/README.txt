@@ -9,10 +9,13 @@ REQUIREMENTS
 Tarball: you need these system libraries (most desktops already have them):
   SDL3 (libsdl3-0)        audio + controllers
   Mesa OpenGL/EGL         game rendering
+  Wayland (libwayland)    game window presentation
+  libpng (libpng16)       shader / overlay textures
   ffmpeg                  gameplay recording
   VLC (libvlc5)           optional — video snap previews in the library
 
-On Debian/Ubuntu:  sudo apt install libsdl3-0 ffmpeg libvlc5 vlc-plugin-base
+On Debian/Ubuntu:  sudo apt install libsdl3-0 libwayland-client0 libwayland-egl1 \
+                     libpng16-16 ffmpeg libvlc5 vlc-plugin-base
 
 No .NET installation is needed — the runtime is bundled.
 
@@ -30,9 +33,10 @@ GETTING STARTED
    - "Update All" updates installed cores to the latest libretro
      nightlies; run it occasionally.
 
-3. If any system requires a BIOS (Sega CD, Saturn, PlayStation, etc.),
-   go to Preferences → System Files to see what's needed and where to
-   place the files.
+3. If any system requires a BIOS (Sega CD, Saturn, PlayStation,
+   PlayStation 2, etc.), go to Preferences → System Files to see what's
+   needed and where to place the files. Some systems read their BIOS from
+   a subfolder — System Files shows the exact location for each.
 
 4. Drag and drop ROM, disc image, or zip files onto the library window
    to import your games, or use the Import ROMs button in the navigation
@@ -157,7 +161,9 @@ Place BIOS files in:
   PortableData/System/ next to the Emutastic executable)
 
 You can also place them in the same folder as your ROMs for that system.
-See Preferences → System Files for the exact filenames required per system.
+A few systems read their BIOS from a subfolder of System/ (for example
+PlayStation 2 uses System/pcsx2/bios/) — Preferences → System Files shows
+the exact filenames and location required for each system.
 
 
 PORTABLE MODE  (tarball installs only)
@@ -313,6 +319,9 @@ the latest release. When a new version is available, click "Update Now":
                      (and portable.txt, if present) is untouched.
   .deb installs      download the package and install it through your
                      system's authorization prompt, then relaunch.
+
+Downloads are verified against the release's published SHA-256 checksum
+before anything is installed; a mismatch cancels the update.
 
 
 LINUX NOTES
