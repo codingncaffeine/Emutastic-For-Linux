@@ -366,6 +366,15 @@ public partial class GameDetailWindow : Window
             _ = Info("File Not Found", $"ROM file not found:\n{romPath}");
             return;
         }
+        var missingBios = CoreManager.GetMissingBiosForLaunch(_game.Console ?? "", romPath, corePath);
+        if (missingBios.Count > 0)
+        {
+            // BIOS-required dialog instead of a cryptic core load failure.
+            _ = Info("BIOS Required",
+                $"{_game.Console} requires a BIOS to run.\n\nMissing: {string.Join(", ", missingBios)}\n\n" +
+                "Add it in Preferences → System Files, or place it next to your ROMs.");
+            return;
+        }
         try
         {
             // Legacy in-process EmulatorWindow, or (EMUTASTIC_PRESENT=gl) a separate --game-host process.

@@ -1452,7 +1452,7 @@ public partial class PreferencesWindow : Window
     {
         ("Nintendo", new[] { "Famicom Disk System", "Game Boy Advance" }),
         ("Sega",     new[] { "Sega CD", "Saturn" }),
-        ("Sony",     new[] { "PlayStation" }),
+        ("Sony",     new[] { "PlayStation", "PlayStation 2" }),
         ("NEC",      new[] { "TurboGrafx-CD" }),
         ("Arcade",   new[] { "Neo Geo" }),   // NeoCD entries exist for launch pre-flight only (upstream hides them here)
         ("Other",    new[] { "3DO", "Philips CD-i" }),
@@ -1570,11 +1570,24 @@ public partial class PreferencesWindow : Window
             panel.Children.Add(header);
             panel.Children.Add(nest);
 
+            // Two-level accordion (Category → Console → BIOS files), matching upstream:
+            // each console display gets its own nested sub-accordion with its own
+            // found/total badge, so multi-console categories like Sony render as
+            // clean separate "PlayStation" / "PlayStation 2" entries instead of one
+            // flat run of rows.
             foreach (var display in active)
             {
                 var entries = byDisplay[display];
+                int dFound = entries.Count(FoundFor);
+
+                var dBody = new StackPanel();
+                var dNest = MakeAccordionNest(dBody);
+                var dHeader = MakeAccordionHeader(display, $"{entries.Count} {(entries.Count == 1 ? "file" : "files")}", dFound, entries.Count, dNest, 13, $"sysfiles/{category}/{display}");
+                body.Children.Add(dHeader);
+                body.Children.Add(dNest);
+
                 foreach (var entry in entries)
-                    body.Children.Add(BuildBiosRow(entry, sysDir, romDirs, verified, FoundFor(entry)));
+                    dBody.Children.Add(BuildBiosRow(entry, sysDir, romDirs, verified, FoundFor(entry)));
             }
         }
     }
@@ -1813,7 +1826,7 @@ public partial class PreferencesWindow : Window
     {
         ("Nintendo", new[] { "NES", "FDS", "SNES", "N64", "GameCube", "GB", "GBC", "GBA", "NDS", "3DS", "VirtualBoy" }),
         ("Sega",     new[] { "Genesis", "SegaCD", "Sega32X", "Saturn", "SMS", "GameGear", "SG1000", "Dreamcast" }),
-        ("Sony",     new[] { "PS1", "PSP" }),
+        ("Sony",     new[] { "PS1", "PS2", "PSP" }),
         ("NEC",      new[] { "TG16", "TGCD" }),
         ("Atari",    new[] { "Atari2600", "Atari7800", "Jaguar" }),
         ("Arcade",   new[] { "Arcade", "NeoGeo", "NeoCD" }),
@@ -1949,6 +1962,7 @@ public partial class PreferencesWindow : Window
         ("SegaCD", "Sega CD / Mega CD", "mcd", null),
         ("Saturn", "Sega Saturn",       "ss",  null),
         ("PS1",    "PlayStation",        "psx", null),
+        ("PS2",    "PlayStation 2",      "ps2", null),
         ("TGCD",   "TurboGrafx-CD",     "pce", null),
         ("3DO",    "3DO",                "3do", null),
         ("CDi",    "Philips CD-i",       "cdi", null),
@@ -2184,6 +2198,74 @@ public partial class PreferencesWindow : Window
         panel.Children.Add(new TextBlock { Text = "Reference DAT files improve ROM identification for disc/arcade systems. Native libraries (SDL3, ffmpeg) are provided by your system packages on Linux; shader packs arrive with the shader splinter.",
             FontSize = 11, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextMutedBrush"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10) });
 
+        // Shared download routine — used by each row's button AND the "Download
+        // All" button. Each call updates its own row's bar/status so a batch run
+        // shows per-system progress.
+        async Task DownloadDatAsync(string? slug, string? directUrl, string datPath,
+            ProgressBar bar, TextBlock status, Button btn)
+        {
+            btn.IsEnabled = false; bar.IsVisible = true; bar.Value = 10; status.Text = "Downloading…"; status.Foreground = Brush("TextMutedBrush");
+            try
+            {
+                string url = directUrl ?? $"http://redump.org/datfile/{slug}/";
+                byte[] bytes = await Task.Run(async () =>
+                {
+                    using var http = new System.Net.Http.HttpClient();
+                    http.DefaultRequestHeaders.Add("User-Agent", "Emutastic");
+                    return await http.GetByteArrayAsync(url);
+                });
+                bar.Value = 90;
+
+                // redump.org serves DATs as a .zip (Content-Type: application/zip)
+                // containing a single .dat. The DAT matcher parses the saved file
+                // as raw XML, so unwrap the archive before writing — otherwise the
+                // saved "{tag}.dat" is a zip the matcher silently fails to load.
+                // Direct GitHub URLs (Arcade/NeoGeo/NGP/…) are already raw .dat/.xml.
+                if (bytes.Length > 4 && bytes[0] == (byte)'P' && bytes[1] == (byte)'K' &&
+                    bytes[2] == 0x03 && bytes[3] == 0x04)
+                {
+                    using var zipMs   = new System.IO.MemoryStream(bytes);
+                    using var archive = new System.IO.Compression.ZipArchive(zipMs, System.IO.Compression.ZipArchiveMode.Read);
+                    var entry = archive.Entries.FirstOrDefault(e =>
+                                    e.Name.EndsWith(".dat", StringComparison.OrdinalIgnoreCase) ||
+                                    e.Name.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
+                                ?? archive.Entries.FirstOrDefault();
+                    if (entry == null) throw new Exception("Downloaded archive was empty.");
+                    using var entryStream = entry.Open();
+                    using var outMs       = new System.IO.MemoryStream();
+                    await entryStream.CopyToAsync(outMs);
+                    bytes = outMs.ToArray();
+                }
+
+                await System.IO.File.WriteAllBytesAsync(datPath, bytes);
+                bar.Value = 100; bar.IsVisible = false;
+                status.Text = "Present"; status.Foreground = new SolidColorBrush(Color.Parse("#30D158"));
+                btn.Content = "Re-download";
+            }
+            catch (Exception ex) { bar.IsVisible = false; status.Text = $"Failed: {ex.Message}"; status.Foreground = Brush("AccentBrush"); }
+            finally { btn.IsEnabled = true; }
+        }
+
+        // Per-row download actions, collected for the "Download All" button.
+        var datDownloadActions = new List<Func<Task>>();
+
+        // ── Download All row ──
+        var downloadAllBtn = new Button { Content = "Download All", Theme = (Avalonia.Styling.ControlTheme?)(this.TryFindResource("PrefSecondaryBtn", out var tAll) ? tAll : null), Padding = new Thickness(10, 4), FontSize = 12, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 0, 0, 10) };
+        downloadAllBtn.Click += async (_, _) =>
+        {
+            downloadAllBtn.IsEnabled = false;
+            int n = datDownloadActions.Count;
+            for (int k = 0; k < n; k++)
+            {
+                downloadAllBtn.Content = $"Downloading… ({k + 1}/{n})";
+                // Sequential — gentle on redump.org and lets each row report its
+                // own progress as it goes.
+                await datDownloadActions[k]();
+            }
+            downloadAllBtn.Content = "Download All"; downloadAllBtn.IsEnabled = true;
+        };
+        panel.Children.Add(downloadAllBtn);
+
         foreach (var (tag, label, slug, directUrl) in KnownDats)
         {
             string datPath = System.IO.Path.Combine(datsDir, $"{tag}.dat");
@@ -2202,27 +2284,10 @@ public partial class PreferencesWindow : Window
             var btn = new Button { Content = present ? "Re-download" : "Download", Theme = (Avalonia.Styling.ControlTheme?)(this.TryFindResource("PrefSecondaryBtn", out var t2) ? t2 : null), Padding = new Thickness(10, 4), FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
             Grid.SetColumn(btn, 2);
 
-            btn.Click += async (_, _) =>
-            {
-                btn.IsEnabled = false; bar.IsVisible = true; bar.Value = 10; status.Text = "Downloading…"; status.Foreground = Brush("TextMutedBrush");
-                try
-                {
-                    string url = directUrl ?? $"http://redump.org/datfile/{slug}/";
-                    byte[] bytes = await Task.Run(async () =>
-                    {
-                        using var http = new System.Net.Http.HttpClient();
-                        http.DefaultRequestHeaders.Add("User-Agent", "Emutastic");
-                        return await http.GetByteArrayAsync(url);
-                    });
-                    bar.Value = 90;
-                    await System.IO.File.WriteAllBytesAsync(datPath, bytes);
-                    bar.Value = 100; bar.IsVisible = false;
-                    status.Text = "Present"; status.Foreground = new SolidColorBrush(Color.Parse("#30D158"));
-                    btn.Content = "Re-download";
-                }
-                catch (Exception ex) { bar.IsVisible = false; status.Text = $"Failed: {ex.Message}"; status.Foreground = Brush("AccentBrush"); }
-                finally { btn.IsEnabled = true; }
-            };
+            // slug/directUrl/datPath/bar/status/btn are per-iteration locals, so
+            // both the row button and the batch action capture this row's own set.
+            btn.Click += async (_, _) => await DownloadDatAsync(slug, directUrl, datPath, bar, status, btn);
+            datDownloadActions.Add(() => DownloadDatAsync(slug, directUrl, datPath, bar, status, btn));
 
             row.Children.Add(info); row.Children.Add(bar); row.Children.Add(btn);
             panel.Children.Add(row);

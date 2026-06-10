@@ -79,6 +79,7 @@ namespace Emutastic.Services
         public const uint RC_CONSOLE_GAMECUBE = 16;
         public const uint RC_CONSOLE_ATARI_JAGUAR = 17;
         public const uint RC_CONSOLE_NINTENDO_DS = 18;
+        public const uint RC_CONSOLE_PLAYSTATION_2 = 21;
         public const uint RC_CONSOLE_ATARI_2600 = 25;
         public const uint RC_CONSOLE_ARCADE = 27;
         public const uint RC_CONSOLE_VIRTUAL_BOY = 28;

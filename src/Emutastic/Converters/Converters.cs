@@ -351,7 +351,7 @@ namespace Emutastic.Converters
             ["GBA"] = "gba.jpg", ["3DS"] = "3ds_icon.jpg", ["NDS"] = "nds.jpg", ["VirtualBoy"] = "virtualboy.jpg",
             ["SMS"] = "sms.jpg", ["Genesis"] = "genesis.jpg", ["SegaCD"] = "genesis.jpg", ["Sega32X"] = "32x.jpg",
             ["Saturn"] = "saturn.jpg", ["GameGear"] = "sms.jpg", ["SG1000"] = "sms.jpg", ["Dreamcast"] = "dreamcast.jpg",
-            ["PS1"] = "ps1.jpg", ["PSP"] = "psp.jpg", ["TG16"] = "TG16.jpg", ["TGCD"] = "TG16.jpg",
+            ["PS1"] = "ps1.jpg", ["PS2"] = "ps2.png", ["PSP"] = "psp.jpg", ["TG16"] = "TG16.jpg", ["TGCD"] = "TG16.jpg",
             ["NeoGeo"] = "neogeo.jpg", ["NeoCD"] = "neogeo_cd.png", ["NGP"] = "neo geo pocket.jpg",
             ["NGPC"] = "neo geo pocket.jpg", ["3DO"] = "3d0.jpg", ["CDi"] = "cdi_icon.jpg",
             ["ColecoVision"] = "coleco.jpg", ["Vectrex"] = "vectrex.jpg",

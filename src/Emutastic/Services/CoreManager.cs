@@ -61,6 +61,7 @@ namespace Emutastic.Services
             // accurate native rendering.
             { "PS1",         new[] { "mednafen_psx_hw_libretro.so",
                                      "mednafen_psx_libretro.so"        }},
+            { "PS2",         new[] { "pcsx2_libretro.so"               }},
             { "PSP",         new[] { "ppsspp_libretro.so"             }},
             { "TG16",        new[] { "mednafen_pce_libretro.so",
                                      "mednafen_pce_fast_libretro.so"        }},
@@ -195,6 +196,29 @@ namespace Emutastic.Services
                 }
             }
 
+            // PlayStation 2: LRPS2 reads any valid 4 MB dump from <dir>/pcsx2/bios/,
+            // so the gate is satisfied by the presence of any such file rather than
+            // a fixed filename. Checks the system dir and any extra (ROM) dirs.
+            if (console.Equals("PS2", StringComparison.OrdinalIgnoreCase))
+            {
+                bool anyPs2Bios = searchDirs.Any(dir =>
+                {
+                    string biosDir = Path.Combine(dir, "pcsx2", "bios");
+                    try
+                    {
+                        return Directory.Exists(biosDir) &&
+                               Directory.EnumerateFiles(biosDir, "*.bin").Any(f =>
+                               {
+                                   try { return new FileInfo(f).Length >= 4 * 1024 * 1024; }
+                                   catch { return false; }
+                               });
+                    }
+                    catch { return false; }
+                });
+                return anyPs2Bios ? new List<string>()
+                                  : new List<string> { "a PS2 BIOS dump in pcsx2/bios/" };
+            }
+
             // Region-aware path: check only the files needed for this region.
             if (region != "Unknown" && RegionBiosMap.TryGetValue(console, out var regionMap))
             {
@@ -218,6 +242,24 @@ namespace Emutastic.Services
                 return new List<string>();
 
             return flat.Any(FileFound) ? new List<string>() : new List<string>(flat);
+        }
+
+        /// <summary>
+        /// Launch-time BIOS gate. Returns the missing BIOS requirement(s) for a
+        /// game about to launch, or an empty list when satisfied — the caller
+        /// shows a "BIOS required" dialog and aborts the launch rather than
+        /// letting the core fail to load. Checks the System folder and the ROM's
+        /// own directory (shallow-recursed, matching the System Files panel).
+        /// Region is left Unknown so the lenient any-one-present rule applies — we
+        /// only catch a wholly absent BIOS, never second-guess a valid regional dump.
+        /// </summary>
+        public static List<string> GetMissingBiosForLaunch(string console, string romPath, string? corePath)
+        {
+            string systemDir = AppPaths.GetFolder("System");
+            string? romDir = null;
+            try { romDir = Path.GetDirectoryName(romPath); } catch { }
+            var extra = string.IsNullOrEmpty(romDir) ? null : new[] { romDir };
+            return GetMissingBios(console, systemDir, "Unknown", extra, corePath);
         }
 
         // Lazily-constructed DAT lookup service for arcade core routing. Shared
