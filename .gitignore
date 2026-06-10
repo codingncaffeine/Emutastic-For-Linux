@@ -30,3 +30,6 @@ src/Emutastic/Secrets.cs
 
 # Internal handoff/findings notes — kept locally, not published
 FINDINGS-SO-FAR.md
+
+# Internal working docs — local only, never published
+/notes/
