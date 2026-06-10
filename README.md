@@ -43,7 +43,7 @@ The published `.deb` bundles the .NET 10 runtime (self-contained), so no separat
 ## Supported Systems
 
 <details>
-<summary><strong>35 systems across 11 manufacturers</strong> (click to expand)</summary>
+<summary><strong>36 systems across 11 manufacturers</strong> (click to expand)</summary>
 
 | System | Tag | Core (priority order) | BIOS |
 |---|---|---|---|
@@ -67,6 +67,7 @@ The published `.deb` bundles the .NET 10 runtime (self-contained), so no separat
 | SG-1000 | SG1000 | genesis_plus_gx | No |
 | Dreamcast | Dreamcast | flycast | No |
 | PlayStation | PS1 | mednafen_psx_hw → mednafen_psx | Region BIOS |
+| PlayStation 2 | PS2 | pcsx2 | Required |
 | PSP | PSP | ppsspp | No |
 | TurboGrafx-16 | TG16 | mednafen_pce → mednafen_pce_fast | No |
 | TurboGrafx-CD | TGCD | mednafen_pce → mednafen_pce_fast | `syscard3.pce` |
@@ -104,6 +105,8 @@ in portable mode). The app also checks each system's ROM folder.
 `mpr-17941.bin` (USA/EU v1.01).
 
 **PlayStation** — USA: `scph5501.bin`, `scph1001.bin`, `scph7001.bin`. Europe: `scph5502.bin`. Japan: `scph5500.bin`
+
+**PlayStation 2** — any valid 4 MB dump in the `pcsx2/bios/` subfolder (e.g. `ps2-0230a-20080220.bin` USA, `ps2-0230e-20080220.bin` Europe, `ps2-0230j-20080220.bin` Japan)
 
 **TurboGrafx-CD** — Any of: `syscard3.pce`, `syscard2.pce`, `syscard1.pce`
 
@@ -249,7 +252,7 @@ dotnet build src/Emutastic.slnx -c Release
 **Emulation** is handled by libretro cores maintained by their upstream authors — Emutastic bundles none
 of them; the in-app core manager downloads them from the libretro build servers on demand. The lineup is
 unchanged from upstream (Nestopia, snes9x, mGBA, Genesis Plus GX, Mednafen/Beetle, Dolphin, PPSSPP,
-Flycast, FBNeo, MAME 2003-Plus, and more) — see the upstream
+PCSX2 (LRPS2), Flycast, FBNeo, MAME 2003-Plus, and more) — see the upstream
 [Emutastic credits](https://github.com/codingncaffeine/Emutastic#credits) for the full per-core author
 list. Please support those projects directly.
 
