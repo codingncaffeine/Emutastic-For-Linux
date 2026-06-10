@@ -34,6 +34,10 @@ namespace Emutastic.Platform
                   RJ_LEFT = 6, RJ_RIGHT = 7, RJ_A = 8, RJ_X = 9, RJ_L = 10, RJ_R = 11,
                   RJ_L2 = 12, RJ_R2 = 13, RJ_L3 = 14, RJ_R3 = 15;
         const int JOYPAD_COUNT = 16;
+        // Cores that opt into RETRO_ENVIRONMENT_GET_INPUT_BITMASKS read the whole
+        // joypad in one call with this id instead of 16 per-button calls (LRPS2/PS2
+        // does this unconditionally). Without handling it, every button reads 0.
+        public const uint RETRO_DEVICE_ID_JOYPAD_MASK = 256;
         public const uint RETRO_DEVICE_ANALOG = 5;
         // Set per-console from the handler: analog consoles (PS1/N64/GC…) report stick values; digital
         // consoles (NES/Genesis/arcade…) instead let the left stick drive the d-pad.
@@ -94,6 +98,12 @@ namespace Emutastic.Platform
             Environment.GetEnvironmentVariable("EMUTASTIC_INPUT_DIAG") == "1";
         private bool _r2WireLast;
         private uint _rsLastId = 99; private short _rsLastVal;
+        // EMUTASTIC_INPUT_DIAG=1: per-id press-edge tracing so we can see exactly which physical
+        // control drives each RetroPad button the core reads (button-mapping audits).
+        private readonly bool[] _wireLast = new bool[JOYPAD_COUNT];
+        private static readonly string[] _rjName = {
+            "B(0)","Y(1)","SELECT(2)","START(3)","UP(4)","DOWN(5)","LEFT(6)","RIGHT(7)",
+            "A(8)","X(9)","L(10)","R(11)","L2(12)","R2(13)","L3(14)","R3(15)" };
 
         // Per-port analog-direction map (LibretroInput.ANALOG_* ids 16..23 → raw control id),
         // from the Controls panel. Slot = id - 16: [LU, LD, LL, LR, RU, RD, RL, RR]; -1 unbound.
@@ -359,6 +369,17 @@ namespace Emutastic.Platform
 
             // keyboard fallback only for player 1
             if (port == 0 && _kbd[(int)id]) pressed = true;
+
+            // Button-mapping diagnostic (EMUTASTIC_INPUT_DIAG=1): log every RetroPad-id press edge
+            // with the physical raw id it read, so a mapping bug (two ids reading the same control)
+            // is visible at a glance.
+            if (_inputDiag && port == 0 && pressed != _wireLast[(int)id])
+            {
+                _wireLast[(int)id] = pressed;
+                int raw = _ctrlMap[0] != null ? _ctrlMap[0]![(int)id] : -2;   // -2 = no custom map (default table)
+                Services.ControllerDiagLog.Write(
+                    $"[wire] {_rjName[(int)id]} -> {(pressed ? "DOWN" : "up")}  (raw={raw}; -1=unbound,-2=default-table)");
+            }
 
             // EMUTASTIC_INPUT_DIAG=1: log the JOYPAD_R2 wire (NDS Touch tap) on each edge so we
             // can see whether a bound button is actually driving the wire the core reads.

@@ -2026,6 +2026,11 @@ namespace Emutastic.Emulator
                     // save-state/hiscore support on this.
                     if (data != IntPtr.Zero) Marshal.WriteInt32(data, 0);
                     return true;
+                case 51:  // RETRO_ENVIRONMENT_GET_INPUT_BITMASKS — we honor the
+                          // RETRO_DEVICE_ID_JOYPAD_MASK read in SdlInput.GetInputState.
+                          // Cores that gate on this (LRPS2/PS2) then poll the whole pad
+                          // in one call; without it their input never reaches the core.
+                    return true;
                 case ENV_GET_OVERSCAN:
                 default:
                     return false; // unsupported / use core defaults — cores cope (incl. SET_HW_RENDER → SW)
@@ -2436,6 +2441,19 @@ namespace Emutastic.Emulator
         // change" (FDS cores don't expose the disk-control interface — they read an L press instead).
         private int InputState_cb(uint port, uint device, uint index, uint id)
         {
+            // Joypad bitmask read (LRPS2/PS2 and other GET_INPUT_BITMASKS cores poll
+            // the whole pad in one call): fold the 16 per-button results — each of
+            // which still passes through the FDS disk-inject + turbo gating below —
+            // into one value. Without this the core reads 0 for every button.
+            if (device == SdlInput.RETRO_DEVICE_JOYPAD && id == SdlInput.RETRO_DEVICE_ID_JOYPAD_MASK)
+            {
+                int mask = 0;
+                for (uint b = 0; b < 16; b++)
+                    if (InputState_cb(port, device, index, b) != 0)
+                        mask |= 1 << (int)b;
+                return mask;
+            }
+
             if (port == 0 && device == SdlInput.RETRO_DEVICE_JOYPAD
                 && id == LibretroInput.JOYPAD_L && _fdsSideChangeFrames > 0)
                 return 1;
