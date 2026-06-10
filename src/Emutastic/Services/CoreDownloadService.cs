@@ -162,6 +162,23 @@ namespace Emutastic.Services
         /// Downloads the zip, backs up the existing .dll to .dll.bak, then extracts.
         /// Reports 0–100 progress.
         /// </summary>
+        // A freshly-downloaded core must be a non-empty ELF shared object before we
+        // accept it (magic bytes 0x7F 'E' 'L' 'F'). Cheap fail-safe so a corrupt or
+        // wrong-content download is never left in place to be dlopen'd.
+        private static bool IsElfSharedObject(string path)
+        {
+            try
+            {
+                var fi = new FileInfo(path);
+                if (!fi.Exists || fi.Length < 1024) return false;   // a real core is tens of KB+
+                Span<byte> magic = stackalloc byte[4];
+                using var fs = File.OpenRead(path);
+                if (fs.Read(magic) < 4) return false;
+                return magic[0] == 0x7F && magic[1] == (byte)'E' && magic[2] == (byte)'L' && magic[3] == (byte)'F';
+            }
+            catch { return false; }
+        }
+
         public async Task DownloadAsync(CoreEntry entry, string coresFolder,
             IProgress<int>? progress = null, CancellationToken ct = default)
         {
@@ -169,6 +186,11 @@ namespace Emutastic.Services
 
             string localPath = Path.Combine(coresFolder, entry.FileName);
             string url       = ZipUrl(entry.FileName);
+            // Cores are native code we load in-process — only ever fetch them over
+            // TLS from the official libretro buildbot. Fail closed if the base URL is
+            // ever misconfigured to plain http.
+            if (!url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"Refusing to download a core over a non-HTTPS URL: {url}");
             string zipPath   = Path.Combine(Path.GetTempPath(), entry.FileName + ".zip");
             string phase     = "init";
 
@@ -250,6 +272,28 @@ namespace Emutastic.Services
                     Trace($"NO MATCHING ENTRY in zip — entries: [{contents}]");
                     throw new InvalidDataException(
                         $"Zip did not contain '{entry.FileName}'. Contents: [{contents}]");
+                }
+
+                // Semantic gate: the HTTPS transfer + zip CRC already fail safe on a
+                // corrupted download, but verify the extracted file is actually a
+                // non-empty ELF shared object before we keep it. On failure, restore
+                // the previous core from the backup we just made so a bad download
+                // never replaces a working core. (Authenticity against a buildbot
+                // compromise would need libretro-signed cores, which don't exist —
+                // HTTPS to the official buildbot is the trust anchor.)
+                phase = "validate";
+                if (!IsElfSharedObject(localPath))
+                {
+                    Trace("extracted file is not a valid ELF shared object — rejecting");
+                    try { File.Delete(localPath); } catch { }
+                    string bak = BackupPath(coresFolder, entry.FileName);
+                    if (File.Exists(bak))
+                    {
+                        try { File.Copy(bak, localPath, overwrite: true); Trace("restored previous core from backup"); }
+                        catch (Exception ex) { Trace($"backup restore failed: {ex.Message}"); }
+                    }
+                    throw new InvalidDataException(
+                        $"Downloaded '{entry.FileName}' is not a valid shared object — kept the previous version.");
                 }
 
                 // ZipArchiveEntry.ExtractToFile preserves the entry's internal
