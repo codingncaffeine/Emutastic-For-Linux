@@ -1447,6 +1447,72 @@ static int rc_hash_neogeo_cd(char hash[33], const char* path)
   return rc_hash_finalize(&md5, hash);
 }
 
+static int rc_hash_neogeo_cart(char hash[33], const char* path)
+{
+  /* The first 4096 bytes of a .neo file are a header: a magic number ("NEO\1"),
+   * the sizes of the ROM sections, and metadata text fields (name, manufacturer,
+   * genre, ...). The text fields can differ between conversion tools, so the
+   * header cannot participate in the hash. The concatenated ROM data starts at
+   * byte 4096 and is deterministic for a given romset — hash only that.
+   * https://github.com/libretro/geolith-libretro (src/geo_neo.c)
+   *
+   * Backport of rcheevos PR #517 to this (v11.6.0) tree's path-based hash API.
+   */
+  const size_t header_size = 4096;
+  uint8_t buffer[65536];
+  uint8_t header[4];
+  md5_state_t md5;
+  void* file_handle;
+  int64_t size;
+  size_t remaining, num_read;
+
+  file_handle = rc_file_open(path);
+  if (!file_handle)
+    return rc_hash_error("Could not open file");
+
+  if (rc_file_read(file_handle, header, 4) != 4 || memcmp(header, "NEO\1", 4) != 0)
+  {
+    rc_file_close(file_handle);
+    return rc_hash_error("Not a valid .neo file");
+  }
+
+  rc_file_seek(file_handle, 0, SEEK_END);
+  size = rc_file_tell(file_handle);
+  if (size <= (int64_t)header_size)
+  {
+    rc_file_close(file_handle);
+    return rc_hash_error("Not a valid .neo file");
+  }
+  size -= (int64_t)header_size;
+
+  remaining = (size > MAX_BUFFER_SIZE) ? (size_t)MAX_BUFFER_SIZE : (size_t)size;
+
+  if (verbose_message_callback)
+  {
+    char message[128];
+    snprintf(message, sizeof(message), "Hashing %s (%u bytes after 4096 byte header)",
+      rc_path_get_filename(path), (unsigned)remaining);
+    verbose_message_callback(message);
+  }
+
+  md5_init(&md5);
+  rc_file_seek(file_handle, (int64_t)header_size, SEEK_SET);
+  while (remaining > 0)
+  {
+    const size_t want = (remaining >= sizeof(buffer)) ? sizeof(buffer) : remaining;
+    num_read = rc_file_read(file_handle, buffer, (int)want);
+    if (num_read == 0)
+      break;
+    md5_append(&md5, buffer, (int)num_read);
+    remaining -= num_read;
+    if (num_read < want)
+      break;
+  }
+
+  rc_file_close(file_handle);
+  return rc_hash_finalize(&md5, hash);
+}
+
 static int rc_hash_nes(char hash[33], const uint8_t* buffer, size_t buffer_size)
 {
   /* if the file contains a header, ignore it */
@@ -3461,6 +3527,10 @@ int rc_hash_generate_from_file(char hash[33], uint32_t console_id, const char* p
       return rc_hash_3do(hash, path);
 
     case RC_CONSOLE_ARCADE:
+      /* .neo (Geolith Neo Geo cart) files carry the ROM data and are content-hashed,
+       * skipping the 4096-byte header; other arcade formats (.zip/.7z) hash by filename. */
+      if (rc_path_compare_extension(path, "neo"))
+        return rc_hash_neogeo_cart(hash, path);
       return rc_hash_arcade(hash, path);
 
     case RC_CONSOLE_ATARI_JAGUAR_CD:
@@ -3911,6 +3981,10 @@ void rc_hash_initialize_iterator(struct rc_hash_iterator* iterator, const char* 
                  rc_path_compare_extension(ext, "ndd"))
         {
           iterator->consoles[0] = RC_CONSOLE_NINTENDO_64;
+        }
+        else if (rc_path_compare_extension(ext, "neo"))
+        {
+          iterator->consoles[0] = RC_CONSOLE_ARCADE; /* Geolith Neo Geo cart format */
         }
         else if (rc_path_compare_extension(ext, "ngc"))
         {
