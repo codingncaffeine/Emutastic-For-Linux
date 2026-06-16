@@ -1270,6 +1270,11 @@ public partial class PreferencesWindow : Window
                 status.Text = $"Signed in as {svc.Username}";
                 signIn.Content = "Sign Out";
                 settings.IsVisible = true;
+
+                // Pull everything down right after first login (fresh-PC restore: battery
+                // saves, memory cards, save trees, library db), off the UI thread — progress
+                // shows in the main window's banner via SyncStateChanged.
+                svc.StartBackgroundSync(new Services.DatabaseService());
             }
             else
             {

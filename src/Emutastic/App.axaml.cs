@@ -162,6 +162,12 @@ public partial class App : Application
             desktop.Exit += (_, _) => Services.UiFreezeWatchdog.Instance.Stop();
             Services.StartupTrace.Mark("watchdog_started");
 
+            // One-time move of any flat Saves/ battery files into the per-console layout
+            // (Saves/<Console>/). MUST run before a game session resolves its save_directory,
+            // so do it synchronously here — it's marker-guarded and only does real work the
+            // first time, after which it's a single file-exists check.
+            Services.SaveLayoutMigrator.RunOnce();
+
             // Direct-launch shortcut for verification: `Emutastic <core.so> <rom>`.
             var files = args.Where(a => !a.StartsWith("--") && System.IO.File.Exists(a)).ToArray();
             var swWin = Services.StartupTrace.Start();
@@ -189,7 +195,16 @@ public partial class App : Application
                     await System.Threading.Tasks.Task.Delay(System.TimeSpan.FromSeconds(10));
                     await Services.GitHubSyncService.Instance.ValidateTokenAsync();
                     if (Services.GitHubSyncService.Instance.IsAuthenticated)
+                    {
                         await Services.GitHubSyncService.Instance.LoadManifestAsync();
+                        // Pull everything (incl. memory cards / save trees) in the background
+                        // so saves are local before any game launches — the per-game launch
+                        // hook then just does a quick check. Progress shows in MainWindow's
+                        // banner via SyncStateChanged. Fresh DatabaseService keeps this off the
+                        // UI's connection. No-op for direct-launch (files.Length >= 2).
+                        if (files.Length < 2)
+                            Services.GitHubSyncService.Instance.StartBackgroundSync(new Services.DatabaseService());
+                    }
                 });
 
             // Finish any recording encode that a crash or hard power-off interrupted — the raw
