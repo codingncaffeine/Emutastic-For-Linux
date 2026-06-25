@@ -480,6 +480,9 @@ namespace Emutastic.Emulator
             // its valid list in ParseSetVariables.
             foreach (var kv in _coreOptionsStore.LoadValues(_coreName))
                 _coreOptions[kv.Key] = kv.Value;
+            // Per-game launch overrides (e.g. PS2 region BIOS) resolved from this ROM —
+            // applied last so they win over both curated defaults and persisted values.
+            _handler.ApplyPerGameCoreOptions(_romPath, _coreOptions);
             // Hold back load-fragile options (handler-declared): invisible during retro_load_game
             // (GET_VARIABLE misses -> core default), applied via the live path at frame 1 below.
             foreach (var k in _handler.DeferUntilAfterLoad)

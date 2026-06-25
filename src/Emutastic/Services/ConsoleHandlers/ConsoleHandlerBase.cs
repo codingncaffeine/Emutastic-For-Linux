@@ -76,6 +76,7 @@ namespace Emutastic.Services.ConsoleHandlers
         public virtual bool UseGLOverlay => false;
         public virtual bool UseDefaultFramebuffer => false;
         public virtual string[] FilterCoreOptionValues(string key, string[] values) => values;
+        public virtual void ApplyPerGameCoreOptions(string romPath, Dictionary<string, string> coreOptions) { }
 
         public virtual List<(string key, string label)> GetVisualOptions() => new();
     }

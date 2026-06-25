@@ -32,6 +32,13 @@ namespace Emutastic.Services.ConsoleHandlers
         /// <summary>Core options to pre-seed before the core announces its variable list.</summary>
         Dictionary<string, string> GetDefaultCoreOptions();
 
+        /// <summary>
+        /// Per-launch core-option overrides resolved from the specific ROM (e.g. PS2
+        /// region BIOS). Applied AFTER persisted user values so they take precedence.
+        /// Default: no overrides.
+        /// </summary>
+        void ApplyPerGameCoreOptions(string romPath, Dictionary<string, string> coreOptions);
+
         /// <summary>Option keys hidden from the core during retro_load_game and applied via the
         /// live variables-dirty path at frame 1 (load-fragile options; see ConsoleHandlerBase).</summary>
         IReadOnlyCollection<string> DeferUntilAfterLoad { get; }

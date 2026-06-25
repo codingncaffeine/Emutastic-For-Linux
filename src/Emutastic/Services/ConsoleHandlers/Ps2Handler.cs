@@ -54,7 +54,22 @@ namespace Emutastic.Services.ConsoleHandlers
             if (key == "pcsx2_renderer")
                 return values.Where(v => v == "OpenGL").ToArray();
 
+            // Internal resolution: enforce a 3x Native minimum. Below 3x triggers the
+            // low-res "corner only" present bug and sits under the PS2 target. This hook
+            // feeds both the cog dropdown AND the launch-time clamp, so a stale sub-3x
+            // saved value is repaired up to the lowest allowed (3x).
+            if (key == "pcsx2_upscale_multiplier")
+                return values.Where(v => UpscaleFactor(v) >= 3).ToArray();
+
             return values;
+        }
+
+        // Parse the leading "Nx" from values like "3x Native (~1080p)" / "1x Native (PS2)".
+        // Unknown formats return a high number so they're never hidden by accident.
+        private static int UpscaleFactor(string value)
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(value ?? "", @"^(\d+)x");
+            return m.Success && int.TryParse(m.Groups[1].Value, out int n) ? n : 99;
         }
 
         // RETRO_HW_CONTEXT_OPENGL_CORE. SET_HW_RENDER creates the GL context and
@@ -91,7 +106,7 @@ namespace Emutastic.Services.ConsoleHandlers
         public override Dictionary<string, string> GetDefaultCoreOptions() => new()
         {
             ["pcsx2_renderer"]            = "OpenGL",
-            ["pcsx2_upscale_multiplier"]  = "2x Native (~720p)",   // must match the core's exact value string
+            ["pcsx2_upscale_multiplier"]  = "3x Native (~1080p)",  // 3x minimum (sub-3x = low-res corner bug); must match the core's exact value string
             ["pcsx2_fastboot"]            = "enabled",
             ["pcsx2_fastcdvd"]            = "disabled",
             ["pcsx2_shared_memory_cards"] = "enabled",
@@ -107,5 +122,68 @@ namespace Emutastic.Services.ConsoleHandlers
             ["pcsx2_dithering"]           = "Unscaled",
             ["pcsx2_anisotropic_filtering"] = "disabled",
         };
+
+        // Region BIOS is authoritative per game: resolved fresh from the ROM's region
+        // at launch and applied AFTER persisted core options, so a single saved
+        // pcsx2_bios can't be wrongly applied to games of every region.
+        public override void ApplyPerGameCoreOptions(string romPath, Dictionary<string, string> coreOptions)
+        {
+            string? bios = ResolveRegionBios(romPath);
+            if (!string.IsNullOrEmpty(bios))
+                coreOptions["pcsx2_bios"] = bios!;
+        }
+
+        /// <summary>
+        /// LRPS2 defaults <c>pcsx2_bios</c> to the first file its folder scan returns
+        /// (alphabetically the oldest Japanese dump) and ignores region. Pick a
+        /// region-appropriate, newest redump dump from System/pcsx2/bios. Returns null
+        /// when no <c>ps2-####{region}</c> dump is present so the core keeps its own
+        /// default. Recognises the redump naming convention (<c>ps2-VVVVr-date.bin</c>,
+        /// r = a/e/j region letter); other filenames (e.g. SCPH-named dumps) are left
+        /// to the core.
+        /// </summary>
+        public static string? ResolveRegionBios(string? romPath)
+        {
+            if (string.IsNullOrEmpty(romPath)) return null;
+
+            string biosDir = System.IO.Path.Combine(AppPaths.GetFolder("System"), "pcsx2", "bios");
+            if (!System.IO.Directory.Exists(biosDir)) return null;
+
+            // game region → PCSX2 BIOS region letter
+            char? want = RomService.DetectRegion(romPath) switch
+            {
+                "USA"    => 'a',
+                "Europe" => 'e',
+                "Japan"  => 'j',
+                _        => (char?)null,   // World/Unknown → newest of any region
+            };
+
+            var rx = new System.Text.RegularExpressions.Regex(
+                @"^ps2-(\d{4})([a-z])", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+            string? regionBest = null; int regionVer = -1;
+            string? anyBest    = null; int anyVer    = -1;
+
+            try
+            {
+                foreach (string path in System.IO.Directory.EnumerateFiles(biosDir, "ps2-*.bin"))
+                {
+                    string name = System.IO.Path.GetFileName(path);
+                    var m = rx.Match(name);
+                    if (!m.Success || !int.TryParse(m.Groups[1].Value, out int ver)) continue;
+
+                    if (ver > anyVer) { anyVer = ver; anyBest = name; }
+                    if (want.HasValue
+                        && char.ToLowerInvariant(m.Groups[2].Value[0]) == want.Value
+                        && ver > regionVer)
+                    { regionVer = ver; regionBest = name; }
+                }
+            }
+            catch { return null; }
+
+            // Region match wins; otherwise the newest dump of any region — still
+            // strictly better than the core's oldest-first alphabetical default.
+            return regionBest ?? anyBest;
+        }
     }
 }
