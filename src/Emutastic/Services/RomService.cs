@@ -339,7 +339,7 @@ namespace Emutastic.Services
                     @"\(Japan\)|\(Japan,", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
                 return "Japan";
             if (System.Text.RegularExpressions.Regex.IsMatch(name,
-                    @"\(USA\)|\(USA,|\(U\)", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                    @"\(USA\)|\(USA,|\(US\)|\(US,|\(U\)", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
                 return "USA";
             if (System.Text.RegularExpressions.Regex.IsMatch(name,
                     @"\(Europe\)|\(Europe,|\(E\)", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
