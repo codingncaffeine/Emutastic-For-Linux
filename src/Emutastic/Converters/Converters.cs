@@ -347,14 +347,14 @@ namespace Emutastic.Converters
         {
             ["Atari2600"] = "atari2600.jpg", ["Atari7800"] = "atari7800.jpg", ["Jaguar"] = "systemicons1_13.jpg",
             ["NES"] = "nes_icon.jpg", ["FDS"] = "famicon disk system.jpg", ["SNES"] = "snes.jpg",
-            ["N64"] = "n64.jpg", ["GameCube"] = "gamecube.jpg", ["GB"] = "gameboy.jpg", ["GBC"] = "gameboy.jpg",
+            ["N64"] = "n64.jpg", ["GameCube"] = "gamecube.jpg", ["GB"] = "gameboy.jpg", ["GBC"] = "gbc.jpeg",
             ["GBA"] = "gba.jpg", ["3DS"] = "3ds_icon.jpg", ["NDS"] = "nds.jpg", ["VirtualBoy"] = "virtualboy.jpg",
             ["SMS"] = "sms.jpg", ["Genesis"] = "genesis.jpg", ["SegaCD"] = "genesis.jpg", ["Sega32X"] = "32x.jpg",
-            ["Saturn"] = "saturn.jpg", ["GameGear"] = "sms.jpg", ["SG1000"] = "sms.jpg", ["Dreamcast"] = "dreamcast.jpg",
-            ["PS1"] = "ps1.jpg", ["PS2"] = "ps2.png", ["PSP"] = "psp.jpg", ["TG16"] = "TG16.jpg", ["TGCD"] = "TG16.jpg",
+            ["Saturn"] = "saturn.jpg", ["GameGear"] = "sms.jpg", ["SG1000"] = "sg-1000.png", ["Dreamcast"] = "dreamcast.jpg",
+            ["PS1"] = "ps1.jpg", ["PS2"] = "ps2.png", ["PSP"] = "psp.jpg", ["TG16"] = "tg16.png", ["TGCD"] = "tg16.png",
             ["NeoGeo"] = "neogeo.jpg", ["NeoCD"] = "neogeo_cd.png", ["NGP"] = "neo geo pocket.jpg",
             ["NGPC"] = "neo geo pocket.jpg", ["3DO"] = "3d0.jpg", ["CDi"] = "cdi_icon.jpg",
-            ["ColecoVision"] = "coleco.jpg", ["Vectrex"] = "vectrex.jpg",
+            ["ColecoVision"] = "coleco.jpg", ["Vectrex"] = "vectrex.jpg", ["Arcade"] = "arcade.png",
         };
 
         private static readonly ConcurrentDictionary<string, Bitmap?> _cache = new();
