@@ -45,22 +45,10 @@ namespace Emutastic.Services
                 ? PerPcRepoName
                 : SharedRepoName;
 
-        /// <summary>This machine's dedicated repo name (for UI display).</summary>
-        public static string PerPcRepoName { get; } = $"{SharedRepoName}-{MachineSuffix}";
-
-        /// <summary>The repo currently in use (for UI display).</summary>
-        public static string EffectiveRepoName => RepoName;
-
-        /// <summary>
-        /// The library.db filename THIS machine reads/writes in the sync repo.
-        /// Namespaced per machine so several OSes/boxes can share ONE repo without
-        /// ever clobbering each other's library: library.db is non-portable anyway
-        /// (it stores absolute, OS-specific ROM paths and back-/forward-slash art
-        /// paths), so each machine keeps its own. Game saves stay SHARED — they're
-        /// keyed by ROM hash and synced as an additive union, untouched by this.
-        /// </summary>
-        public static string DbRepoFileName { get; } = $"library.{MachineSuffix}.db";
-
+        // ⚠ MachineSuffix MUST be declared before PerPcRepoName / DbRepoFileName: static
+        // auto-property initializers run in TEXTUAL order, so if it came later it would
+        // still be null when they initialize → "library..db" / "emutastic-saves-" on every
+        // machine, silently defeating the per-machine namespacing. Keep it first.
         /// <summary>
         /// Stable per-machine token: the hostname squashed to repo/path-safe chars.
         /// (Environment.MachineName is the hostname on Linux.)
@@ -77,6 +65,22 @@ namespace Emutastic.Services
             string suffix = sb.ToString().Trim('-');
             return suffix.Length == 0 ? "pc" : suffix;
         }
+
+        /// <summary>This machine's dedicated repo name (for UI display).</summary>
+        public static string PerPcRepoName { get; } = $"{SharedRepoName}-{MachineSuffix}";
+
+        /// <summary>The repo currently in use (for UI display).</summary>
+        public static string EffectiveRepoName => RepoName;
+
+        /// <summary>
+        /// The library.db filename THIS machine reads/writes in the sync repo.
+        /// Namespaced per machine so several OSes/boxes can share ONE repo without
+        /// ever clobbering each other's library: library.db is non-portable anyway
+        /// (it stores absolute, OS-specific ROM paths and back-/forward-slash art
+        /// paths), so each machine keeps its own. Game saves stay SHARED — they're
+        /// keyed by ROM hash and synced as an additive union, untouched by this.
+        /// </summary>
+        public static string DbRepoFileName { get; } = $"library.{MachineSuffix}.db";
 
         /// <summary>
         /// Drops every piece of state bound to the previous repo (sha cache,
