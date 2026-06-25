@@ -86,6 +86,9 @@
     </PackageReference>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.1" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.8" />
+    <!-- Override the vulnerable SQLitePCLRaw 2.1.11 (GHSA-2m69-gcr7-jv3q) pulled in transitively by
+         Microsoft.Data.Sqlite; 3.0.x bundles a patched e_sqlite3. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
     <PackageReference Include="LibVLCSharp" Version="3.9.4" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.8" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
