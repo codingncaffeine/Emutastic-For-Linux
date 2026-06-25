@@ -46,22 +46,36 @@ namespace Emutastic.Services
                 : SharedRepoName;
 
         /// <summary>This machine's dedicated repo name (for UI display).</summary>
-        public static string PerPcRepoName { get; } = BuildPerPcRepoName();
+        public static string PerPcRepoName { get; } = $"{SharedRepoName}-{MachineSuffix}";
 
         /// <summary>The repo currently in use (for UI display).</summary>
         public static string EffectiveRepoName => RepoName;
 
-        private static string BuildPerPcRepoName()
+        /// <summary>
+        /// The library.db filename THIS machine reads/writes in the sync repo.
+        /// Namespaced per machine so several OSes/boxes can share ONE repo without
+        /// ever clobbering each other's library: library.db is non-portable anyway
+        /// (it stores absolute, OS-specific ROM paths and back-/forward-slash art
+        /// paths), so each machine keeps its own. Game saves stay SHARED — they're
+        /// keyed by ROM hash and synced as an additive union, untouched by this.
+        /// </summary>
+        public static string DbRepoFileName { get; } = $"library.{MachineSuffix}.db";
+
+        /// <summary>
+        /// Stable per-machine token: the hostname squashed to repo/path-safe chars.
+        /// (Environment.MachineName is the hostname on Linux.)
+        /// </summary>
+        private static string MachineSuffix { get; } = BuildMachineSuffix();
+
+        private static string BuildMachineSuffix()
         {
-            // GitHub repo names allow letters, digits, '-', '_', '.'; squash
-            // anything else in the machine name to '-'. (Environment.MachineName
-            // is the hostname on Linux.)
+            // GitHub repo names + path segments allow letters, digits, '-', '_', '.';
+            // squash anything else in the machine name to '-'.
             var sb = new StringBuilder();
             foreach (char c in Environment.MachineName.ToLowerInvariant())
                 sb.Append(char.IsLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '-');
             string suffix = sb.ToString().Trim('-');
-            if (suffix.Length == 0) suffix = "pc";
-            return $"{SharedRepoName}-{suffix}";
+            return suffix.Length == 0 ? "pc" : suffix;
         }
 
         /// <summary>
@@ -903,7 +917,10 @@ namespace Emutastic.Services
                 try
                 {
                     string dbPath = Path.Combine(AppPaths.DataRoot, "library.db");
-                    string dbRepoPath = "library.db" + encSuffix;
+                    // Per-machine remote filename (library.<host>.db): each OS/box owns
+                    // its own DB in the shared repo, so last-writer-wins can never clobber
+                    // another machine's library. The LOCAL path is always library.db.
+                    string dbRepoPath = DbRepoFileName + encSuffix;
                     string? lastSyncedHash = LoadLastSyncedDbHash();
                     string? myHash = null;
 
@@ -1060,9 +1077,14 @@ namespace Emutastic.Services
                 bool hasRemoteMtime = _manifestCache.Files.TryGetValue(repoPath, out var mEntry)
                     && DateTime.TryParse(mEntry.LastModifiedUtc, null,
                         System.Globalization.DateTimeStyles.RoundtripKind, out remoteMtime);
+                // Newest-wins, no clobber: pull only when we have no local save yet, or the
+                // remote is KNOWN to be strictly newer than ours. Mirrors FullSync's download
+                // rule — never overwrite a local save that's newer or equal, and never
+                // overwrite an existing local save when the remote mtime is unknown (a stale
+                // or not-yet-loaded manifest must not clobber a fresh local save). Pulling the
+                // other machine's newer save is the full sync's job (startup + periodic).
                 bool shouldDownload = !File.Exists(localPath)
-                    || !hasRemoteMtime
-                    || remoteMtime > File.GetLastWriteTimeUtc(localPath);
+                    || (hasRemoteMtime && remoteMtime > File.GetLastWriteTimeUtc(localPath));
 
                 byte[]? remote = shouldDownload ? await DownloadFileAsync(repoPath, ct).ConfigureAwait(false) : null;
                 if (remote != null && remote.Length > 0)
@@ -1101,13 +1123,29 @@ namespace Emutastic.Services
 
             try
             {
-                string repoPath = RepoPathFor(game.Console!, game.RomHash);
+                bool encrypted = cfg.EncryptionEnabled && !string.IsNullOrEmpty(cfg.PassphraseProtected);
+                string repoPath = RepoPathFor(game.Console!, game.RomHash) + (encrypted ? ".enc" : "");
+
+                // Newest-wins, no clobber: don't replace a newer (or equal) remote save with
+                // our older local one — e.g. the game was opened and closed without writing a
+                // save while the other OS had already uploaded newer progress. Mirrors the
+                // FullSync / console-managed upload rule. (After actually playing, the local
+                // .srm mtime is "now" and wins; a launch-without-save keeps the remote mtime
+                // it was stamped with on pull, so this correctly no-ops.)
+                if (_manifestCache.Files.TryGetValue(repoPath, out var existing)
+                    && DateTime.TryParse(existing.LastModifiedUtc, null,
+                        System.Globalization.DateTimeStyles.RoundtripKind, out var remoteMtime)
+                    && remoteMtime >= File.GetLastWriteTimeUtc(localPath))
+                {
+                    CloudSyncLog.Write($"Skipped save upload (remote is newer/same): {repoPath}");
+                    return;
+                }
+
                 byte[] srmBytes = File.ReadAllBytes(localPath);
-                if (cfg.EncryptionEnabled && !string.IsNullOrEmpty(cfg.PassphraseProtected))
+                if (encrypted)
                 {
                     byte[] key = DeriveKey(UnprotectString(cfg.PassphraseProtected), _username ?? "");
                     srmBytes = Encrypt(srmBytes, key);
-                    repoPath += ".enc";
                 }
                 if (await UploadFileAsync(repoPath, srmBytes, ct).ConfigureAwait(false))
                 {
