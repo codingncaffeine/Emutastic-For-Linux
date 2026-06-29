@@ -1017,6 +1017,9 @@ public partial class MainWindow : Window
         }
         catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"[MainWindow] controller hotplug watch failed: {ex.Message}"); }
 
+        // EmuTV: watch the launch chord (L3+R3+L2+R2) and hand off to the couch shell.
+        StartTvModeComboWatch();
+
         // Warm LibVLC off the UI thread so the first detail-card snap video doesn't
         // pay the multi-second native init on the dispatcher.
         VideoPlaybackService.Instance.StartWarmup();
@@ -1299,6 +1302,63 @@ public partial class MainWindow : Window
         };
         _detailOpenedAt = DateTime.Now;
         win.Show(this);
+    }
+
+    // ── EmuTV launch chord ────────────────────────────────────────────────────
+    // Watches the controller for the L3+R3+L2+R2 chord and, once it's held ~2s while the library is
+    // the foreground window, hands off to the full-screen EmuTV couch shell. Gating on IsActive keeps
+    // the chord from firing during gameplay (a game-host window is foreground then, so IsActive is false).
+    private Avalonia.Threading.DispatcherTimer? _tvComboTimer;
+    private int  _tvComboTicks;
+    private bool _tvModeOpen;
+    private const int TvComboTicksRequired = 20;   // ~2s at the 100ms cadence below
+
+    private void StartTvModeComboWatch()
+    {
+        if (_tvComboTimer != null) return;
+        // F9 opens EmuTV from the keyboard too (test path + accessibility; the chord is the couch path).
+        KeyDown += (_, e) => { if (e.Key == Avalonia.Input.Key.F9) { e.Handled = true; EnterTvMode(); } };
+        _tvComboTimer = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+        _tvComboTimer.Tick += (_, _) =>
+        {
+            if (_hotplugMgr == null || _tvModeOpen || !IsActive) { _tvComboTicks = 0; return; }
+            if (_hotplugMgr.IsTvModeChordHeld)
+            {
+                if (++_tvComboTicks >= TvComboTicksRequired) { _tvComboTicks = 0; EnterTvMode(); }
+            }
+            else _tvComboTicks = 0;
+        };
+        _tvComboTimer.Start();
+    }
+
+    /// <summary>Hands off from the desktop library to the full-screen EmuTV couch shell. The main window
+    /// is hidden (not closed) and re-shown when the shell closes. Safe to call from a future menu item.</summary>
+    public void EnterTvMode()
+    {
+        if (_tvModeOpen) return;
+        _tvModeOpen = true;
+        try
+        {
+            var tv = new Views.EmuTvWindow(_hotplugMgr, _db);
+            tv.Closed += (_, _) =>
+            {
+                _tvModeOpen = false;
+                Show();
+                Activate();
+            };
+            Hide();
+            tv.Show();
+            tv.Activate();
+            Services.ControllerDiagLog.Write("[tvchord] EmuTvWindow shown");
+        }
+        catch (Exception ex)
+        {
+            // Runtime failure building/showing the shell — log the full error, recover the library
+            // window, and clear the latch so the chord/F9 can be retried.
+            Services.ControllerDiagLog.Write($"[tvchord] EnterTvMode FAILED: {ex}");
+            _tvModeOpen = false;
+            try { Show(); Activate(); } catch { }
+        }
     }
 
     // Clicking back on the main window dismisses an open game-detail card (light dismiss). The

@@ -15,7 +15,14 @@
 
   <ItemGroup>
     <Folder Include="Models\" />
-    <AvaloniaResource Include="Assets\**" />
+    <!-- EmuTV themes are ES-DE-shaped packages read from disk by EmuTvThemeService via
+         AppContext.BaseDirectory/Assets/emutv-themes/** — they must be loose files next to the
+         app, not embedded avares resources, so exclude them from the AvaloniaResource glob and
+         ship them as Content (matches upstream's Content/CopyToOutputDirectory model). -->
+    <AvaloniaResource Include="Assets\**" Exclude="Assets\emutv-themes\**" />
+    <Content Include="Assets\emutv-themes\**\*" Link="Assets\emutv-themes\%(RecursiveDir)%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <!-- Also copy the HUD power glyph as a loose file so the game-host's own-toplevel OSD (no Avalonia
          asset loader in that process) can Skia-decode it from disk for the overlay. -->
     <None Include="Assets\buttons\powerbutton.png" Link="powerbutton.png" CopyToOutputDirectory="PreserveNewest" />
@@ -93,6 +100,9 @@
     <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.8" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="SharpCompress" Version="0.49.1" />
+    <!-- SVG rasterization for ES-DE community themes (EmuTV renderer LoadSvg). SkiaSharp-level, so it
+         rides on the same SkiaSharp as Avalonia.Skia rather than coupling to an Avalonia version. -->
+    <PackageReference Include="Svg.Skia" Version="5.1.1" />
   </ItemGroup>
 
   <!-- REMINDER (kept as a comment so builds stay warning-clean): this project pins a VENDORED

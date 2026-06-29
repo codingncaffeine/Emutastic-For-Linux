@@ -153,6 +153,45 @@ guide, with one delta: `controller-diag.log` is in `Logs/` too, not next to the 
 
 ---
 
+## EmuTV — Living-Room Mode
+
+A controller-only, 10-foot front end for the couch. Open it from the library with the
+**L3 + R3 + L2 + R2** chord (the same chord, held ~1.5s, quits a running game back to EmuTV).
+Browse consoles and games, launch with **A**, go back with **B**, and pull up save states with
+**Start** — no keyboard or mouse needed.
+
+EmuTV renders themes built for **[EmulationStation Desktop Edition (ES-DE)](https://es-de.org/)**:
+drop an ES-DE theme into your EmuTV themes folder, or download one from the built-in theme browser
+(press **Y**), which pulls from the official ES-DE themes list. Carousels (including wheel layouts),
+grids, text lists, game metadata, rating stars, favorite/completed badges, SVG logos, and WebP
+artwork all render per the ES-DE spec (WebP/SVG decode through the bundled Skia/Svg.Skia — no extra
+binaries). The bundled **EmuTV Default** theme is the known-good fallback.
+
+Optional **SteamGridDB** hi-res box art: add a free API token in **Preferences → EmuTV** to upgrade
+missing or low-res covers (your token stays on this machine).
+
+| In EmuTV | Button |
+|---|---|
+| Navigate | D-pad / left stick |
+| Open / play | **A** |
+| Back | **B** |
+| Save states | **Start** (rebindable) |
+| Theme browser | **Y** (rebindable) |
+| Fast-scroll the game list | **L1 / R1** |
+| Exit EmuTV | **B** at the console carousel |
+
+| In-game controller combos | Chord |
+|---|---|
+| Open EmuTV / quit game | **L3 + R3 + L2 + R2** (held ~1.5s) |
+| Save state | hold **L3**, then **R2** |
+| Load latest state | hold **L3**, then **L2** |
+| Swap disc (multi-disc) | **L3 + Start** |
+
+Rebind EmuTV's nav buttons and review every combo in **Preferences → EmuTV**. The save/load/disc
+combos are rebindable per system under **Preferences → Controls**.
+
+---
+
 ## Cloud Sync
 
 Sign in with your GitHub account (**Preferences → Backups** — device flow, no password stored) and

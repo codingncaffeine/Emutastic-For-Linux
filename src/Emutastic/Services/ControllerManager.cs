@@ -54,6 +54,89 @@ namespace Emutastic.Services
 
         public bool IsConnected => _pads.Count > 0;
 
+        // ── EmuTV raw-poll adapter ───────────────────────────────────────────────
+        // EmuTV polls button state continuously (it does NOT use the capture/ButtonChanged flow), so we
+        // keep an XInput-layout snapshot of the active/first pad refreshed every tick, independent of
+        // RawMode. The XInput bit layout and the RAW_*/ANALOG_* names mirror the upstream (XInput)
+        // ControllerManager so the EmuTV window's raw-input code ports across unchanged.
+        private const ushort XI_DPAD_UP = 0x0001, XI_DPAD_DOWN = 0x0002, XI_DPAD_LEFT = 0x0004, XI_DPAD_RIGHT = 0x0008,
+                             XI_START = 0x0010, XI_BACK = 0x0020, XI_LTHUMB = 0x0040, XI_RTHUMB = 0x0080,
+                             XI_LB = 0x0100, XI_RB = 0x0200, XI_A = 0x1000, XI_B = 0x2000, XI_X = 0x4000, XI_Y = 0x8000;
+
+        public const ushort RAW_A = XI_A, RAW_B = XI_B, RAW_X = XI_X, RAW_Y = XI_Y,
+                            RAW_BACK = XI_BACK, RAW_START = XI_START,
+                            RAW_DPAD_UP = XI_DPAD_UP, RAW_DPAD_DOWN = XI_DPAD_DOWN,
+                            RAW_DPAD_LEFT = XI_DPAD_LEFT, RAW_DPAD_RIGHT = XI_DPAD_RIGHT,
+                            RAW_LB = XI_LB, RAW_RB = XI_RB;
+
+        // Analog-stick direction ids for GetButtonState (aligned to the capture raw-id stick space).
+        public const uint ANALOG_LEFT_LEFT = 110, ANALOG_LEFT_RIGHT = 111, ANALOG_LEFT_UP = 112, ANALOG_LEFT_DOWN = 113,
+                          ANALOG_RIGHT_LEFT = 114, ANALOG_RIGHT_RIGHT = 115, ANALOG_RIGHT_UP = 116, ANALOG_RIGHT_DOWN = 117;
+
+        private ushort _lastRawButtons;            // XInput-layout snapshot of the polled pad
+        private short _lx, _ly, _rx, _ry;          // its live stick axes
+        private short _lt, _rt;                     // its live trigger axes (0..32767)
+
+        /// <summary>True if the given raw XInput button bit (e.g. <see cref="RAW_A"/>) is currently down on
+        /// the active/first pad. Continuous poll — used by the EmuTV couch shell, not the capture flow.</summary>
+        public bool IsRawXInputButtonDown(ushort mask) => (_lastRawButtons & mask) != 0;
+
+        /// <summary>True if the given analog-stick direction (ANALOG_* id) is currently deflected past the
+        /// threshold on the polled pad. Lets EmuTV nav accept stick input alongside the d-pad.</summary>
+        public bool GetButtonState(uint analogId) => analogId switch
+        {
+            ANALOG_LEFT_LEFT   => _lx < -STICK_THRESHOLD,
+            ANALOG_LEFT_RIGHT  => _lx >  STICK_THRESHOLD,
+            ANALOG_LEFT_UP     => _ly < -STICK_THRESHOLD,
+            ANALOG_LEFT_DOWN   => _ly >  STICK_THRESHOLD,
+            ANALOG_RIGHT_LEFT  => _rx < -STICK_THRESHOLD,
+            ANALOG_RIGHT_RIGHT => _rx >  STICK_THRESHOLD,
+            ANALOG_RIGHT_UP    => _ry < -STICK_THRESHOLD,
+            ANALOG_RIGHT_DOWN  => _ry >  STICK_THRESHOLD,
+            _ => false,
+        };
+
+        /// <summary>True while a trigger is pressed past the threshold on the polled pad.</summary>
+        public bool IsRawTriggerDown(bool rightTrigger) => (rightTrigger ? _rt : _lt) > TRIG_THRESHOLD;
+
+        /// <summary>Raw snapshot, for chord diagnostics.</summary>
+        public string RawDebug =>
+            $"pads={_pads.Count} btns=0x{_lastRawButtons:X4} L3={(_lastRawButtons & XI_LTHUMB) != 0} " +
+            $"R3={(_lastRawButtons & XI_RTHUMB) != 0} lt={_lt} rt={_rt} chord={IsTvModeChordHeld}";
+
+        /// <summary>The EmuTV launch chord — both triggers + both thumbsticks clicked (L2+R2+L3+R3).
+        /// Chosen to avoid colliding with normal in-game input and desktop gestures.</summary>
+        public bool IsTvModeChordHeld =>
+            IsRawTriggerDown(false) && IsRawTriggerDown(true) &&
+            (_lastRawButtons & XI_LTHUMB) != 0 && (_lastRawButtons & XI_RTHUMB) != 0;
+
+        // Refresh the raw snapshot from the active pad (or the first connected one) every poll tick.
+        private void UpdateRawSnapshot()
+        {
+            int dev = (_activeDevice >= 0 && _activeDevice < _pads.Count) ? _activeDevice : 0;
+            if (dev < 0 || dev >= _pads.Count) { _lastRawButtons = 0; _lx = _ly = _rx = _ry = _lt = _rt = 0; return; }
+            IntPtr h = _pads[dev].handle;
+            ushort raw = 0;
+            if (SDL_GetGamepadButton(h, 0))  raw |= XI_A;          // SOUTH
+            if (SDL_GetGamepadButton(h, 1))  raw |= XI_B;          // EAST
+            if (SDL_GetGamepadButton(h, 2))  raw |= XI_X;          // WEST
+            if (SDL_GetGamepadButton(h, 3))  raw |= XI_Y;          // NORTH
+            if (SDL_GetGamepadButton(h, 4))  raw |= XI_BACK;
+            if (SDL_GetGamepadButton(h, 6))  raw |= XI_START;
+            if (SDL_GetGamepadButton(h, 7))  raw |= XI_LTHUMB;     // LEFT_STICK
+            if (SDL_GetGamepadButton(h, 8))  raw |= XI_RTHUMB;     // RIGHT_STICK
+            if (SDL_GetGamepadButton(h, 9))  raw |= XI_LB;         // LEFT_SHOULDER
+            if (SDL_GetGamepadButton(h, 10)) raw |= XI_RB;         // RIGHT_SHOULDER
+            if (SDL_GetGamepadButton(h, 11)) raw |= XI_DPAD_UP;
+            if (SDL_GetGamepadButton(h, 12)) raw |= XI_DPAD_DOWN;
+            if (SDL_GetGamepadButton(h, 13)) raw |= XI_DPAD_LEFT;
+            if (SDL_GetGamepadButton(h, 14)) raw |= XI_DPAD_RIGHT;
+            _lastRawButtons = raw;
+            _lx = SDL_GetGamepadAxis(h, AXIS_LEFTX);  _ly = SDL_GetGamepadAxis(h, AXIS_LEFTY);
+            _rx = SDL_GetGamepadAxis(h, AXIS_RIGHTX); _ry = SDL_GetGamepadAxis(h, AXIS_RIGHTY);
+            _lt = SDL_GetGamepadAxis(h, AXIS_LTRIG);  _rt = SDL_GetGamepadAxis(h, AXIS_RTRIG);
+        }
+
         // Detection/hot-plug diagnostics → Logs/controller-diag.log (see ControllerDiagLog).
         private static void CtrlLog(string msg) => ControllerDiagLog.Write($"[panel] {msg}");
 
@@ -124,6 +207,10 @@ namespace Emutastic.Services
             // Windows never hit this; XInput state reads need no pump.)
             if (!EmulatorSession.AnyActive) { SDL_PumpEvents(); SDL_UpdateGamepads(); }
             if (++_refreshCounter >= 60) { _refreshCounter = 0; Refresh(); }   // ~1Hz hotplug rescan
+
+            // EmuTV raw-poll snapshot — kept fresh every tick regardless of RawMode (the couch shell
+            // polls IsRawXInputButtonDown/GetButtonState; it doesn't use the capture/ButtonChanged flow).
+            UpdateRawSnapshot();
 
             if (!RawMode || _activeDevice < 0 || _activeDevice >= _pads.Count) return;
             IntPtr h = _pads[_activeDevice].handle;

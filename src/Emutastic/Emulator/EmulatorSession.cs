@@ -398,7 +398,7 @@ namespace Emutastic.Emulator
             switch (scancode)
             {
                 case SC_ESCAPE: _running = false; break;
-                case SC_F11:    _glFullscreen = !_glFullscreen; _gl?.SetFullscreen(_glFullscreen); break;
+                case SC_F11:    _glFullscreen = !_glFullscreen; (_wlTop ?? _gl)?.SetFullscreen(_glFullscreen); break;
                 case SC_P:      _paused = !_paused; break;
                 case SC_F5:     RequestSaveState("Quick Save"); break;   // upstream's F5 quick save
                 case SC_F7:     RequestQuickLoad(); break;               // upstream's F7 quick load
@@ -686,6 +686,7 @@ namespace Emutastic.Emulator
 
                 if (!_noInputPoll) _input.Poll();
                 ServiceDiskSwap();   // disc-swap chord (L3+Start) + FDS/deferred-insert ticks
+                ServiceQuitChord();  // EmuTV quit chord (L3+R3+L2+R2 held ~1.5s) → quit the game
                 if (_saveStatePending) ExecuteSaveOnEmuThread();   // between retro_run calls, like upstream
                 if (_loadStatePending) ExecuteLoadOnEmuThread();
                 if (_cheatsApplyPending) ExecuteCheatsApplyOnEmuThread();
@@ -905,6 +906,7 @@ namespace Emutastic.Emulator
                 if (_paused) { RaIdle(); Thread.Sleep(16); frameTimer.Restart(); continue; }
                 if (!_noInputPoll) _input.Poll();
                 ServiceDiskSwap();   // disc-swap chord (L3+Start) + FDS/deferred-insert ticks
+                ServiceQuitChord();  // EmuTV quit chord (L3+R3+L2+R2 held ~1.5s) → quit the game
                 if (_saveStatePending) ExecuteSaveOnEmuThread();   // between retro_run calls, like upstream
                 if (_loadStatePending) ExecuteLoadOnEmuThread();
                 if (_cheatsApplyPending) ExecuteCheatsApplyOnEmuThread();
@@ -1103,7 +1105,10 @@ namespace Emutastic.Emulator
                 ready.Set();
                 return;
             }
-            Trace.WriteLine("[Emu] GL present ACTIVE (DECOUPLED: own xdg_toplevel + audio-clock emu thread)");
+            // EmuTV / --fullscreen: ask the compositor to fullscreen our xdg_toplevel right away.
+            _glFullscreen = Environment.GetEnvironmentVariable("EMUTASTIC_GL_FULLSCREEN") == "1";
+            if (_glFullscreen) _wlTop.SetFullscreen(true);
+            Trace.WriteLine($"[Emu] GL present ACTIVE (DECOUPLED: own xdg_toplevel + audio-clock emu thread; fullscreen={_glFullscreen})");
             RunPresenterOsdLoop(ready, "TOPLEVEL");
         }
 
@@ -1130,11 +1135,19 @@ namespace Emutastic.Emulator
             // Themed title bar: follow the user's WindowButtonStyle (macOS / Windows11 / Linux). The game-host
             // loads the same JSON config the app does, so the choice is honored. Reserve chrome so the game
             // is framed by the title bar (top) + status bar (bottom) rather than covered by them.
-            string winStyle = _wlTop.HasWindowChrome
+            string baseStyle = _wlTop.HasWindowChrome
                 ? App.Configuration?.GetThemeConfiguration()?.WindowButtonStyle ?? "macOS"
                 : "none";   // native WM decorations — the OSD draws no title bar
             string title = $"Emutastic — {CoreName}";
-            _wlTop.SetInsets(_wlTop.HasWindowChrome ? (int)GlOsd.TitleBarHeight : 0, (int)GlOsd.StatusBarHeight);
+            // Fullscreen (EmuTV couch mode or F11) drops ALL chrome: no title bar / caption buttons, no
+            // reserved insets, no rounded corners — the game fills the whole screen. Recomputed in the loop
+            // so an F11 toggle restores the chrome. `chromeFs` mirrors the presenter's live fullscreen state.
+            bool chromeFs = _wlTop.IsFullscreen;
+            string winStyle = chromeFs ? "none" : baseStyle;
+            void ApplyChromeInsets(bool fs) => _wlTop.SetInsets(
+                fs ? 0 : (_wlTop.HasWindowChrome ? (int)GlOsd.TitleBarHeight : 0),
+                fs ? 0 : (int)GlOsd.StatusBarHeight);
+            ApplyChromeInsets(chromeFs);
             _wlTop.SetAspect(DisplayAspectRatio);   // render at the display aspect (0 → frame pixel ratio)
             if (_wlTop.HasDecoLayers) InitDecorations();   // bezel + Vectrex overlay (art loads off-thread)
             // Restore the per-game shader (upstream's RestoreShaderPreset): a built-in enum name,
@@ -1699,13 +1712,16 @@ namespace Emutastic.Emulator
                 float tgt = hudVisible ? 1f : 0f;                       // 150ms fade-in / 300ms fade-out
                 if (hudAlpha < tgt) hudAlpha = (float)Math.Min(tgt, hudAlpha + dt / 150.0);
                 else if (hudAlpha > tgt) hudAlpha = (float)Math.Max(tgt, hudAlpha - dt / 300.0);
+                // React to a fullscreen change (F11 / compositor) — add or remove all chrome.
+                bool fsNow = _wlTop.IsFullscreen;
+                if (fsNow != chromeFs) { chromeFs = fsNow; winStyle = fsNow ? "none" : baseStyle; ApplyChromeInsets(fsNow); }
                 hover = (hudVisible && _wlTop.MouseInside) ? GlOsd.HitTest(ww, wh, _wlTop.MouseX, _wlTop.MouseY) : -1;
-                titleHover = (_wlTop.HasWindowChrome && _wlTop.MouseInside) ? GlOsd.TitleHitTest(ww, winStyle, _wlTop.MouseX, _wlTop.MouseY) : -1;
+                titleHover = (_wlTop.HasWindowChrome && !chromeFs && _wlTop.MouseInside) ? GlOsd.TitleHitTest(ww, winStyle, _wlTop.MouseX, _wlTop.MouseY) : -1;
                 // Cursor feedback: resize arrows over the edges/corners (but not over the title controls).
                 if (_wlTop.HasWindowChrome && _wlTop.MouseInside)
                 {
                     bool onCtl = titleHover == GlOsd.TbMin || titleHover == GlOsd.TbMax || titleHover == GlOsd.TbClose;
-                    int rEdge = (!_wlTop.IsMaximized && !onCtl) ? GlOsd.ResizeHitTest(ww, wh, _wlTop.MouseX, _wlTop.MouseY) : 0;
+                    int rEdge = (!_wlTop.IsMaximized && !chromeFs && !onCtl) ? GlOsd.ResizeHitTest(ww, wh, _wlTop.MouseX, _wlTop.MouseY) : 0;
                     _wlTop.SetCursorShape(GlOsd.CursorShapeForEdge(rEdge));
                 }
                 // Pause-effect lifecycle: start on the pause edge (per the Theme tab's setting),
@@ -1779,7 +1795,7 @@ namespace Emutastic.Emulator
                 var cogItems = cogMenu?.Select(m => (m.Label, m.Enabled, m.Value)).ToList();
                 var (raToast, raToastAlpha) = RaToastForPresent();
                 var (raChallenges, raProgress, raIndVer) = RaIndicatorsForPresent();
-                if (osd.Build(ww, wh, shownStatus, title, winStyle, _wlTop.IsMaximized, titleHover, hudAlpha, hover, IsPaused,
+                if (osd.Build(ww, wh, shownStatus, title, winStyle, _wlTop.IsMaximized || chromeFs, titleHover, hudAlpha, hover, IsPaused,
                               pickerItems, pickerHover, statusHover,
                               cogItems, cogHover, cogMenu != null ? CoreName : "", fxOnGpuLayer ? null : fxFrame, IsRecording,
                               raToast, raToastAlpha, RaHardcoreActive,
@@ -2443,6 +2459,29 @@ namespace Emutastic.Emulator
             if (!next.Remove(id)) next.Add(id);
             _turboButtons[port] = next;
             return string.Join(",", next);
+        }
+
+        // ── EmuTV quit chord ────────────────────────────────────────────────────────────────────────
+        // The same L3+R3+L2+R2 chord that launches EmuTV quits a running game when held ~1.5s, so the
+        // couch shell needs no keyboard to exit. Frame-counted on the emu thread; raw reads in SdlInput's
+        // panel id space (7/8 = left/right stick click, 100/101 = left/right trigger), port 0.
+        private int _quitChordFrames;
+        private bool _quitChordFired;
+        private const int QuitChordFramesRequired = 90;   // ~1.5s at 60fps
+
+        private void ServiceQuitChord()
+        {
+            bool held = _input.IsRawControlDown(7, 0) && _input.IsRawControlDown(8, 0)
+                     && _input.IsRawControlDown(100, 0) && _input.IsRawControlDown(101, 0);
+            if (held)
+            {
+                if (!_quitChordFired && ++_quitChordFrames >= QuitChordFramesRequired)
+                {
+                    _quitChordFired = true;
+                    RequestQuit();
+                }
+            }
+            else _quitChordFrames = 0;
         }
 
         // ── In-game disc switching (L3 + Start chord) ───────────────────────────────────────────────

@@ -78,7 +78,7 @@ namespace Emutastic.Services
         /// for this session (e.g. direct CLI launches).
         /// </summary>
         public static void Launch(string corePath, string romPath, string console,
-            Models.Game? game, string? loadStatePath, Action<GameHostResult?>? onExit = null)
+            Models.Game? game, string? loadStatePath, Action<GameHostResult?>? onExit = null, bool fullscreen = false)
         {
             // GL present is now the DEFAULT path: the separate --game-host process runs the decoupled
             // pacing (audio-clock emu thread + vsync present thread), which on this hardware gives correct
@@ -93,6 +93,7 @@ namespace Emutastic.Services
             {
                 // Legacy in-process path — unchanged behavior, the default until GL ships (Phase 5).
                 var win = new Views.EmulatorWindow(new EmulatorSession(corePath, romPath, console));
+                if (fullscreen) win.WindowState = Avalonia.Controls.WindowState.FullScreen;   // EmuTV couch launches
                 if (onExit != null) win.Closed += (_, _) => onExit(new GameHostResult { ExitCode = 0, PlaySeconds = 0 });
                 win.Show();
                 return;
@@ -114,15 +115,15 @@ namespace Emutastic.Services
                     // them; this just waits for any in-flight sync, bounded so launch can't hang.
                     try { await syncSvc.EnsureConsoleSavesReadyAsync(console).ConfigureAwait(false); }
                     catch (Exception ex) { CloudSyncLog.Write($"pre-launch memcard sync failed: {ex.Message}"); }
-                    Dispatcher.UIThread.Post(() => SpawnHost(corePath, romPath, console, game, loadStatePath, onExit));
+                    Dispatcher.UIThread.Post(() => SpawnHost(corePath, romPath, console, game, loadStatePath, onExit, fullscreen));
                 });
                 return;
             }
-            SpawnHost(corePath, romPath, console, game, loadStatePath, onExit);
+            SpawnHost(corePath, romPath, console, game, loadStatePath, onExit, fullscreen);
         }
 
         private static void SpawnHost(string corePath, string romPath, string console,
-            Models.Game? game, string? loadStatePath, Action<GameHostResult?>? onExit)
+            Models.Game? game, string? loadStatePath, Action<GameHostResult?>? onExit, bool fullscreen = false)
         {
             string results = Path.Combine(Path.GetTempPath(), $"emutastic-host-{Guid.NewGuid():N}.json");
             var psi = new ProcessStartInfo
@@ -144,6 +145,7 @@ namespace Emutastic.Services
             psi.ArgumentList.Add(corePath);
             psi.ArgumentList.Add(romPath);
             if (!string.IsNullOrEmpty(console)) { psi.ArgumentList.Add("--console"); psi.ArgumentList.Add(console); }
+            if (fullscreen) psi.ArgumentList.Add("--fullscreen");   // EmuTV couch launches go fullscreen
             psi.ArgumentList.Add("--results"); psi.ArgumentList.Add(results);
             psi.ArgumentList.Add("--parent-stdin");   // we hold the child's stdin; closing it = graceful quit
             // Portable mode forwarding: the child re-detects via portable.txt next to the

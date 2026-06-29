@@ -36,6 +36,7 @@ public partial class PreferencesWindow : Window
         ("NavAchievements", "PanelAchievements"),
         ("NavMedia",        "PanelMedia"),
         ("NavBackups",      "PanelBackups"),
+        ("NavEmuTv",        "PanelEmuTv"),
         ("NavAbout",        "PanelAbout"),
     };
 
@@ -106,6 +107,7 @@ public partial class PreferencesWindow : Window
         WireTheme();
         WireLibrary();
         WireSnaps();
+        WireEmuTv();
         WireAchievements();
         this.FindControl<Button>("CoreOptionsResetBtn")!.Click += (_, _) => CoreOptionsReset();
         this.FindControl<Button>("CoreOptionsSaveBtn")!.Click += (_, _) => CoreOptionsSave();
@@ -141,6 +143,7 @@ public partial class PreferencesWindow : Window
         if (target == "PanelTheme") LoadThemeSettings();
         if (target == "PanelLibrary") LoadLibrarySettings();
         if (target == "PanelSnaps") LoadSnapsSettings();
+        if (target == "PanelEmuTv") LoadEmuTvSettings();
         if (target == "PanelAchievements") LoadAchievementsSettings();
         if (target == "PanelCoreOptions") BuildCoreOptionsTab();
         if (target == "PanelMedia") LoadMediaSettings();
@@ -705,6 +708,58 @@ public partial class PreferencesWindow : Window
 
     private bool _snapsLoaded;
     private bool _suppressSnapSave;
+
+    // ── EmuTV settings (SteamGridDB token + couch-shell nav rebinds) ──────────
+    private bool _suppressEmuTvSave;
+    private static readonly string[] EmuTvButtons = { "Y", "X", "Back", "Start", "L1", "R1" };
+
+    private void WireEmuTv()
+    {
+        var hkTheme = this.FindControl<ComboBox>("HkThemeBrowser")!;
+        var hkSave  = this.FindControl<ComboBox>("HkSaveStates")!;
+        foreach (var b in EmuTvButtons) { hkTheme.Items.Add(b); hkSave.Items.Add(b); }
+        this.FindControl<ToggleSwitch>("SgdbEnabledToggle")!.IsCheckedChanged += (_, _) => SaveEmuTvSettings();
+        this.FindControl<TextBox>("SgdbTokenBox")!.LostFocus += (_, _) => SaveEmuTvSettings();
+        hkTheme.SelectionChanged += (_, _) => SaveEmuTvSettings();
+        hkSave.SelectionChanged  += (_, _) => SaveEmuTvSettings();
+        this.FindControl<Button>("SgdbTestBtn")!.Click += async (_, _) => await VerifySgdb();
+    }
+
+    private void LoadEmuTvSettings()
+    {
+        var cfg = App.Configuration?.GetEmuTvConfiguration();
+        if (cfg == null) return;
+        _suppressEmuTvSave = true;   // only suppressed while we populate the controls
+        this.FindControl<ToggleSwitch>("SgdbEnabledToggle")!.IsChecked = cfg.SteamGridDbEnabled;
+        this.FindControl<TextBox>("SgdbTokenBox")!.Text = cfg.SteamGridDbToken;
+        this.FindControl<ComboBox>("HkThemeBrowser")!.SelectedItem =
+            cfg.HotkeyOverrides.TryGetValue("theme_browser", out var tb) ? tb : "Y";
+        this.FindControl<ComboBox>("HkSaveStates")!.SelectedItem =
+            cfg.HotkeyOverrides.TryGetValue("save_states", out var ss) ? ss : "Start";
+        _suppressEmuTvSave = false;
+    }
+
+    private void SaveEmuTvSettings()
+    {
+        if (_suppressEmuTvSave) return;
+        var cfg = App.Configuration?.GetEmuTvConfiguration();
+        if (cfg == null) return;
+        cfg.SteamGridDbEnabled = this.FindControl<ToggleSwitch>("SgdbEnabledToggle")!.IsChecked == true;
+        cfg.SteamGridDbToken   = (this.FindControl<TextBox>("SgdbTokenBox")!.Text ?? "").Trim();
+        cfg.HotkeyOverrides["theme_browser"] = this.FindControl<ComboBox>("HkThemeBrowser")!.SelectedItem as string ?? "Y";
+        cfg.HotkeyOverrides["save_states"]   = this.FindControl<ComboBox>("HkSaveStates")!.SelectedItem as string ?? "Start";
+        App.Configuration?.SetEmuTvConfiguration(cfg);
+    }
+
+    private async System.Threading.Tasks.Task VerifySgdb()
+    {
+        var status   = this.FindControl<TextBlock>("SgdbStatusLabel")!;
+        var tokenBox = this.FindControl<TextBox>("SgdbTokenBox")!;
+        SaveEmuTvSettings();                 // persist the token before testing it
+        status.Text = "Verifying…";
+        string? error = await new Services.SteamGridDbService().TestTokenAsync(tokenBox.Text);
+        status.Text = error ?? "Token verified ✓";
+    }
 
     private void WireSnaps()
     {

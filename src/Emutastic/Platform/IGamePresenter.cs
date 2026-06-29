@@ -29,6 +29,7 @@ namespace Emutastic.Platform
         bool CloseRequested { get; }
         double LastSwapMs { get; }
         bool IsMaximized { get; }
+        bool IsFullscreen => false;   // presenters that support xdg fullscreen override this
         int MouseX { get; }
         int MouseY { get; }
         bool MouseInside { get; }
