@@ -52,6 +52,7 @@ namespace Emutastic.Platform
                    SDL_EVENT_MOUSE_MOTION = 0x400,
                    SDL_EVENT_MOUSE_BUTTON_DOWN = 0x401, SDL_EVENT_MOUSE_BUTTON_UP = 0x402;
         const ulong SDL_WINDOW_MAXIMIZED = 0x0000000000000080UL;
+        const ulong SDL_WINDOW_FULLSCREEN = 0x0000000000000001UL;
 
         /// <summary>Mouse moved inside the game window (hover-reveal an overlay). Emu thread.</summary>
         public event Action? MouseMoved;
@@ -469,6 +470,7 @@ namespace Emutastic.Platform
         }
 
         public bool IsMaximized => _window != IntPtr.Zero && (SDL_GetWindowFlags(_window) & SDL_WINDOW_MAXIMIZED) != 0;
+        public bool IsFullscreen => _window != IntPtr.Zero && (SDL_GetWindowFlags(_window) & SDL_WINDOW_FULLSCREEN) != 0;
 
         // ── OSD overlay quad (window-sized straight-alpha RGBA8, row 0 = top) ───────────────────
         private uint _osdTex;

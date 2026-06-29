@@ -537,6 +537,7 @@ namespace Emutastic.Views
                 // input + refresh preview/saves when the host exits. (PS3/RPCS3 would route here
                 // too once the port grows that core.)
                 Services.GameHostLauncher.Launch(corePath, game.RomPath, game.Console ?? "", game, statePath,
+                    fullscreen: true,
                     onExit: _ => Dispatcher.UIThread.Post(() =>
                     {
                         _aLatch = true;

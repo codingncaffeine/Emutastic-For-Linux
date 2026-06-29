@@ -54,6 +54,7 @@ typedef struct {
     struct zxdg_decoration_manager_v1 *deco_mgr;
     struct zxdg_toplevel_decoration_v1 *deco;
     int maximized;             // tracked from xdg_toplevel.configure states
+    int fullscreen;            // tracked from xdg_toplevel.configure states
     int ins_top, ins_bottom;   // chrome insets (title bar / status bar) — game is fit BETWEEN them
     double dar;                // display aspect ratio to render at (0 = use the frame's pixel ratio)
     int w, h;
@@ -121,11 +122,14 @@ static const struct xdg_surface_listener xsurf_listener = { xsurf_configure };
 static void top_configure(void *data, struct xdg_toplevel *t, int32_t w, int32_t h,
                           struct wl_array *states) {
     wlp *s = data;
-    int max = 0;
+    int max = 0, fs = 0;
     uint32_t *st;
-    for (st = states->data; (const char*)st < (const char*)states->data + states->size; st++)
-        if (*st == XDG_TOPLEVEL_STATE_MAXIMIZED) max = 1;
+    for (st = states->data; (const char*)st < (const char*)states->data + states->size; st++) {
+        if (*st == XDG_TOPLEVEL_STATE_MAXIMIZED)  max = 1;
+        if (*st == XDG_TOPLEVEL_STATE_FULLSCREEN) fs  = 1;
+    }
     s->maximized = max;
+    s->fullscreen = fs;
     if (w > 0 && h > 0 && (w != s->w || h != s->h)) {
         s->w = w; s->h = h;
         if (s->eglwin) wl_egl_window_resize(s->eglwin, w, h, 0, 0);
@@ -205,7 +209,7 @@ static void set_opaque(wlp *s) {
     if (!s->comp || !s->surf) return;
     struct wl_region *r = wl_compositor_create_region(s->comp);
     int R = CORNER_R, w = s->w, h = s->h;
-    if (s->maximized || w <= 2 * R || h <= 2 * R) {
+    if (s->maximized || s->fullscreen || w <= 2 * R || h <= 2 * R) {
         wl_region_add(r, 0, 0, w, h);
     } else {
         wl_region_add(r, 0, R, w, h - 2 * R);     // middle band, full width
@@ -239,7 +243,7 @@ static void make_corner_tex(wlp *s) {
 
 // Erase the 4 window corners to transparent (dst *= 1-mask.alpha) so the window appears rounded.
 static void draw_corners(wlp *s) {
-    if (s->maximized || !s->corner_tex) return;
+    if (s->maximized || s->fullscreen || !s->corner_tex) return;
     int R = CORNER_R, w = s->w, h = s->h;
     glBindTexture(GL_TEXTURE_2D, s->corner_tex);
     glEnable(GL_BLEND);
@@ -812,6 +816,14 @@ void wlp_toggle_maximize(void *h) {
 }
 
 int wlp_is_maximized(void *h) { wlp *s = h; return s ? s->maximized : 0; }
+
+void wlp_set_fullscreen(void *h, int on) {
+    wlp *s = h; if (!s || !s->top) return;
+    if (on) xdg_toplevel_set_fullscreen(s->top, NULL);   // NULL output = compositor picks the screen
+    else    xdg_toplevel_unset_fullscreen(s->top);
+    if (s->surf) wl_surface_commit(s->surf);
+}
+int wlp_is_fullscreen(void *h) { wlp *s = h; return s ? s->fullscreen : 0; }
 
 // Start an interactive move (drag the title bar). Uses the last pointer button serial.
 void wlp_move(void *h) {

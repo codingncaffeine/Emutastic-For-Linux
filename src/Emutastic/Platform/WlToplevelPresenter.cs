@@ -59,6 +59,8 @@ namespace Emutastic.Platform
         [DllImport(LIB)] static extern void wlp_minimize(IntPtr h);
         [DllImport(LIB)] static extern void wlp_toggle_maximize(IntPtr h);
         [DllImport(LIB)] static extern int wlp_is_maximized(IntPtr h);
+        [DllImport(LIB)] static extern void wlp_set_fullscreen(IntPtr h, int on);
+        [DllImport(LIB)] static extern int wlp_is_fullscreen(IntPtr h);
         [DllImport(LIB)] static extern void wlp_move(IntPtr h);
         [DllImport(LIB)] static extern void wlp_resize(IntPtr h, int edge);
         [DllImport(LIB)] static extern void wlp_set_cursor_shape(IntPtr h, int shape);
@@ -209,11 +211,12 @@ namespace Emutastic.Platform
         public void Minimize()       { if (_h != IntPtr.Zero) wlp_minimize(_h); }
         public void ToggleMaximize() { if (_h != IntPtr.Zero) wlp_toggle_maximize(_h); }
         public bool IsMaximized => _h != IntPtr.Zero && wlp_is_maximized(_h) != 0;
+        public bool IsFullscreen => _h != IntPtr.Zero && wlp_is_fullscreen(_h) != 0;
         public void StartMove()      { if (_h != IntPtr.Zero) wlp_move(_h); }
         public void StartResize(int edge) { if (_h != IntPtr.Zero) wlp_resize(_h, edge); }
         public void SetCursorShape(int shape) { if (_h != IntPtr.Zero) wlp_set_cursor_shape(_h, shape); }
 
-        public void SetFullscreen(bool fullscreen) { /* TODO: xdg_toplevel.set_fullscreen via shim */ }
+        public void SetFullscreen(bool fullscreen) { if (_h != IntPtr.Zero) wlp_set_fullscreen(_h, fullscreen ? 1 : 0); }
 
         public void Dispose()
         {

@@ -70,6 +70,8 @@ void wlp_set_aspect(void* h, double dar);
 void wlp_minimize(void* h);
 void wlp_toggle_maximize(void* h);
 int  wlp_is_maximized(void* h);
+void wlp_set_fullscreen(void* h, int on);   // xdg_toplevel.set/unset_fullscreen (NULL output)
+int  wlp_is_fullscreen(void* h);
 void wlp_move(void* h);              // start an interactive move (title-bar drag)
 void wlp_resize(void* h, int edge);  // start an interactive resize (edge bits: T=1,B=2,L=4,R=8; corners OR'd)
 void wlp_set_cursor_shape(void* h, int shape);  // wp_cursor_shape_device_v1 shape enum (resize arrows etc.)
