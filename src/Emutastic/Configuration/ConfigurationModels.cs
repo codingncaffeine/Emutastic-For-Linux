@@ -187,6 +187,15 @@ namespace Emutastic.Configuration
         public double BackgroundImageOffsetY { get; set; } = 0.0;
         /// <summary>Whether the background image tiles/repeats instead of stretching.</summary>
         public bool BackgroundImageRepeat { get; set; } = false;
+
+        // ── EmuTV (couch shell) theme ──
+        /// <summary>Active EmuTV theme id (folder under EmuTvThemes/, or a built-in id). Empty = EmuTV default.</summary>
+        public string EmuTvThemeId { get; set; } = "";
+        /// <summary>Selected EmuTV theme axis values. Empty = the theme's own defaults.</summary>
+        public string EmuTvVariant { get; set; } = "";
+        public string EmuTvColorScheme { get; set; } = "";
+        public string EmuTvAspectRatio { get; set; } = "";
+        public string EmuTvFontSize { get; set; } = "";
     }
 
     // Library configuration
