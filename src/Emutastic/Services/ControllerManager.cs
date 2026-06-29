@@ -99,8 +99,10 @@ namespace Emutastic.Services
         /// <summary>True while a trigger is pressed past the threshold on the polled pad.</summary>
         public bool IsRawTriggerDown(bool rightTrigger) => (rightTrigger ? _rt : _lt) > TRIG_THRESHOLD;
 
-        /// <summary>Both thumbsticks clicked — the chord that launches EmuTV from the desktop window.</summary>
+        /// <summary>The EmuTV launch chord — both triggers + both thumbsticks clicked (L2+R2+L3+R3).
+        /// Chosen to avoid colliding with normal in-game input and desktop gestures.</summary>
         public bool IsTvModeChordHeld =>
+            IsRawTriggerDown(false) && IsRawTriggerDown(true) &&
             (_lastRawButtons & XI_LTHUMB) != 0 && (_lastRawButtons & XI_RTHUMB) != 0;
 
         // Refresh the raw snapshot from the active pad (or the first connected one) every poll tick.
