@@ -156,6 +156,8 @@ guide, with one delta: `controller-diag.log` is in `Logs/` too, not next to the 
 
 ## EmuTV — Living-Room Mode
 
+![EmuTV](src/Emutastic/Assets/banners%20and%20icons/emutv_banner.png)
+
 A controller-only, 10-foot front end for the couch. Open it from the library with the
 **L3 + R3 + L2 + R2** chord (the same chord, held ~1.5s, quits a running game back to EmuTV).
 Browse consoles and games, launch with **A**, go back with **B**, and pull up save states with
