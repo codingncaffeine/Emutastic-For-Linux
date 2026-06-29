@@ -456,6 +456,25 @@ namespace Emutastic.Configuration
         public bool   EmuMoviesEnabled      { get; set; } = false;
     }
 
+    // EmuTV (couch shell) per-user configuration.
+    public class EmuTvConfiguration : ConfigurationBase
+    {
+        /// <summary>Per-user SteamGridDB API token for hi-res box art / marquees.
+        /// Stored per-user only — never embedded/shared in the build.</summary>
+        public string SteamGridDbToken { get; set; } = "";
+
+        /// <summary>When true, EmuTV upgrades missing / low-res art via SteamGridDB.</summary>
+        public bool SteamGridDbEnabled { get; set; } = false;
+
+        /// <summary>
+        /// EmuTV controller hotkey overrides, keyed by action id
+        /// ("theme_browser", "save_states", "accept", "back", "page_up", "page_down")
+        /// → button name ("A","B","X","Y","Start","Back","L1","R1").
+        /// Missing entries fall back to the built-in default.
+        /// </summary>
+        public Dictionary<string, string> HotkeyOverrides { get; set; } = new();
+    }
+
     // Button mapping definition
     public class ButtonMapping
     {
