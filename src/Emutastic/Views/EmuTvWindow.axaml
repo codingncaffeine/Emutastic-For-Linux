@@ -4,7 +4,7 @@
         x:Class="Emutastic.Views.EmuTvWindow"
         x:CompileBindings="False"
         Title="EmuTV"
-        SystemDecorations="None"
+        WindowDecorations="None"
         CanResize="False"
         WindowState="FullScreen"
         WindowStartupLocation="CenterScreen"
