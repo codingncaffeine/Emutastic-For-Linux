@@ -140,7 +140,8 @@ screenshots & **gameplay recording** (x264) · **GitHub cloud sync** (below) · 
 core options · save states with screenshots · play-time tracking · **ROM hacks**
 (IPS/BPS/UPS soft-patching — original ROM untouched) · **video shaders** (7 built-ins + the
 downloadable libretro GLSL pack) · **bezels & Vectrex overlays** · **turbo buttons** ·
-**in-app updates**.
+**📺 EmuTV living-room mode** (a controller-only, couch-friendly console interface for the TV that
+renders ES-DE themes — [details below](#emutv--living-room-mode)) · **in-app updates**.
 
 (Shader note: the Windows app runs the libretro *slang* pack through librashader; librashader
 ships no Linux binaries, so this port runs the libretro *GLSL* pack — the same shader library —
