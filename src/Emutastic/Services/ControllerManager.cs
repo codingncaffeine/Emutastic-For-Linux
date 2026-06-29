@@ -99,6 +99,11 @@ namespace Emutastic.Services
         /// <summary>True while a trigger is pressed past the threshold on the polled pad.</summary>
         public bool IsRawTriggerDown(bool rightTrigger) => (rightTrigger ? _rt : _lt) > TRIG_THRESHOLD;
 
+        /// <summary>Raw snapshot, for chord diagnostics.</summary>
+        public string RawDebug =>
+            $"pads={_pads.Count} btns=0x{_lastRawButtons:X4} L3={(_lastRawButtons & XI_LTHUMB) != 0} " +
+            $"R3={(_lastRawButtons & XI_RTHUMB) != 0} lt={_lt} rt={_rt} chord={IsTvModeChordHeld}";
+
         /// <summary>The EmuTV launch chord — both triggers + both thumbsticks clicked (L2+R2+L3+R3).
         /// Chosen to avoid colliding with normal in-game input and desktop gestures.</summary>
         public bool IsTvModeChordHeld =>

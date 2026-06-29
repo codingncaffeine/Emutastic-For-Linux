@@ -1316,10 +1316,12 @@ public partial class MainWindow : Window
     private void StartTvModeComboWatch()
     {
         if (_tvComboTimer != null) return;
+        // F9 opens EmuTV from the keyboard too (test path + accessibility; the chord is the couch path).
+        KeyDown += (_, e) => { if (e.Key == Avalonia.Input.Key.F9) { e.Handled = true; EnterTvMode(); } };
         _tvComboTimer = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _tvComboTimer.Tick += (_, _) =>
         {
-            if (_tvModeOpen || !IsActive || _hotplugMgr == null) { _tvComboTicks = 0; return; }
+            if (_hotplugMgr == null || _tvModeOpen || !IsActive) { _tvComboTicks = 0; return; }
             if (_hotplugMgr.IsTvModeChordHeld)
             {
                 if (++_tvComboTicks >= TvComboTicksRequired) { _tvComboTicks = 0; EnterTvMode(); }
@@ -1335,17 +1337,28 @@ public partial class MainWindow : Window
     {
         if (_tvModeOpen) return;
         _tvModeOpen = true;
-
-        var tv = new Views.EmuTvWindow(_hotplugMgr, _db);
-        tv.Closed += (_, _) =>
+        try
         {
+            var tv = new Views.EmuTvWindow(_hotplugMgr, _db);
+            tv.Closed += (_, _) =>
+            {
+                _tvModeOpen = false;
+                Show();
+                Activate();
+            };
+            Hide();
+            tv.Show();
+            tv.Activate();
+            Services.ControllerDiagLog.Write("[tvchord] EmuTvWindow shown");
+        }
+        catch (Exception ex)
+        {
+            // Runtime failure building/showing the shell — log the full error, recover the library
+            // window, and clear the latch so the chord/F9 can be retried.
+            Services.ControllerDiagLog.Write($"[tvchord] EnterTvMode FAILED: {ex}");
             _tvModeOpen = false;
-            Show();
-            Activate();
-        };
-        Hide();
-        tv.Show();
-        tv.Activate();
+            try { Show(); Activate(); } catch { }
+        }
     }
 
     // Clicking back on the main window dismisses an open game-detail card (light dismiss). The
