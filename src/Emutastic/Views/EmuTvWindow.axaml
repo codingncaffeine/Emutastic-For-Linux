@@ -369,31 +369,5 @@
             </Grid>
         </Border>
 
-        <!-- ===== Save-state selector: self-contained overlay over ANY theme (Start in the game
-             list). The save carousel is reparented in here when opened, so it works regardless of
-             where the active theme puts things. ===== -->
-        <Border x:Name="SaveOverlay" IsVisible="False" Background="#E8060A12">
-            <Grid VerticalAlignment="Center" MaxWidth="1500" Margin="60,0">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="200"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-                <Image Grid.Row="0" x:Name="SaveOverlayCassette" Height="155" Stretch="Uniform"
-                       HorizontalAlignment="Center" Margin="0,0,0,2"
-                       RenderOptions.BitmapInterpolationMode="HighQuality"/>
-                <TextBlock Grid.Row="1" x:Name="SaveOverlaySubtitle" Text="" FontSize="19" Opacity="0.7"
-                           Foreground="#FFBFEFFF" HorizontalAlignment="Center" Margin="0,4,0,22"/>
-                <Grid Grid.Row="2" x:Name="SaveOverlayHost">
-                    <TextBlock x:Name="SaveOverlayEmpty" Text="No save states yet for this game"
-                               HorizontalAlignment="Center" VerticalAlignment="Center"
-                               FontSize="20" Opacity="0.55" Foreground="#FF8FE3FF"/>
-                </Grid>
-                <TextBlock Grid.Row="3" Text="◀ ▶  Browse         A  Load         B  Close"
-                           FontSize="17" FontWeight="SemiBold" Foreground="#FFC8F2FF"
-                           HorizontalAlignment="Center" Margin="0,22,0,0"/>
-            </Grid>
-        </Border>
     </Grid>
 </Window>

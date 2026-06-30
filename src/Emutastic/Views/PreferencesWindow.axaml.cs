@@ -2614,17 +2614,24 @@ public partial class PreferencesWindow : Window
             foreach (var btn in group) panel.Children.Add(BuildMappingRow(btn.Name));
         }
 
-        // Frontend-only Disk Swap action (upstream parity) — for consoles whose cores expose the
-        // libretro disk control interface. Captured as a chord; unbound default is L3 + Start.
+        // Frontend-only rebindable actions (upstream parity), all captured as chords. Save/Load State
+        // apply to every console (defaults L3+R2 / L3+L2); Disk Swap only where the core exposes the
+        // libretro disk-control interface (default L3+Start).
+        panel.Children.Add(new TextBlock { Text = "FRONTEND", FontSize = 10, FontWeight = FontWeight.SemiBold,
+            FontFamily = Font("PrimaryFont"), Foreground = Brush("TextMutedBrush"), Margin = new Thickness(0, 12, 0, 4) });
+        panel.Children.Add(new Avalonia.Controls.Shapes.Rectangle { Height = 1, Fill = Brush("BorderNormalBrush"), Margin = new Thickness(0, 0, 0, 6) });
+        panel.Children.Add(BuildMappingRow("Save State"));
+        panel.Children.Add(BuildMappingRow("Load State"));
         if (Emulator.EmulatorSession.ConsoleSupportsDiskSwap(_currentConsole))
-        {
-            panel.Children.Add(new TextBlock { Text = "FRONTEND", FontSize = 10, FontWeight = FontWeight.SemiBold,
-                FontFamily = Font("PrimaryFont"), Foreground = Brush("TextMutedBrush"), Margin = new Thickness(0, 12, 0, 4) });
-            panel.Children.Add(new Avalonia.Controls.Shapes.Rectangle { Height = 1, Fill = Brush("BorderNormalBrush"), Margin = new Thickness(0, 0, 0, 6) });
             panel.Children.Add(BuildMappingRow("Disk Swap"));
-        }
         RefreshAllRows();
     }
+
+    // Frontend actions captured as two-press chords (vs. single-button game inputs).
+    private static bool IsChordButton(string name) =>
+        string.Equals(name, "Disk Swap", StringComparison.OrdinalIgnoreCase)
+     || string.Equals(name, "Save State", StringComparison.OrdinalIgnoreCase)
+     || string.Equals(name, "Load State", StringComparison.OrdinalIgnoreCase);
 
     private Control BuildMappingRow(string buttonName)
     {
@@ -2706,7 +2713,7 @@ public partial class PreferencesWindow : Window
         int cur = _waitingRowIndex;
         _waitingRowIndex = -1;
         RefreshRow(cur);
-        if (_ctrl != null) _ctrl.RawMode = false;   // Disk Swap is the last row — no auto-advance
+        if (_ctrl != null) _ctrl.RawMode = false;   // chord rows don't auto-advance (each is bound deliberately)
     }
 
     private void CommitMapping(string buttonName, string displayText, Key key = Key.None, uint controllerId = 0)
@@ -2731,9 +2738,9 @@ public partial class PreferencesWindow : Window
         string btnName = _ctrlRows[_waitingRowIndex].ButtonName;
         string display = KeyToDisplayString(e.Key);
 
-        // Disk Swap is captured as a CHORD: first press becomes the candidate first half,
-        // a second DIFFERENT press commits both as "KeyA+KeyB" (upstream parity).
-        if (string.Equals(btnName, "Disk Swap", StringComparison.OrdinalIgnoreCase))
+        // Frontend chords (Disk Swap / Save State / Load State) are captured as a CHORD: first press
+        // becomes the candidate first half, a second DIFFERENT press commits both as "KeyA+KeyB".
+        if (IsChordButton(btnName))
         {
             e.Handled = true;
             if (_chordFirstKey == null)
@@ -2757,10 +2764,11 @@ public partial class PreferencesWindow : Window
         if (_isKeyboardMode || !isPressed || _waitingRowIndex < 0) return;
         string btnName = _ctrlRows[_waitingRowIndex].ButtonName;
         string display = rawId >= 110 ? StickDirToString(rawId)
-            : rawId == 100 ? "L2" : rawId == 101 ? "R2" : $"Button {rawId}";
+            : rawId == 100 ? "L2" : rawId == 101 ? "R2"
+            : rawId == 6 ? "Start" : rawId == 7 ? "L3" : rawId == 8 ? "R3" : $"Button {rawId}";
 
-        // Disk Swap chord on the controller too: "rawA+rawB" in the panel id space.
-        if (string.Equals(btnName, "Disk Swap", StringComparison.OrdinalIgnoreCase))
+        // Frontend chords on the controller too: "rawA+rawB" in the panel id space.
+        if (IsChordButton(btnName))
         {
             if (_chordFirstCtrl == null)
             {

@@ -111,7 +111,6 @@ namespace Emutastic.Emulator
         private bool _diskControlAvailable;     // core registered a disk-control interface (multi-disc / FDS)
         private int _fdsSideChangeFrames;        // FDS: inject JOYPAD_L for N polled frames = "disk side change"
         private int _diskInsertPendingFrames;    // deferred set_eject_state(false) countdown after a swap
-        private bool _diskSwapPrevHeld;          // rising-edge latch for the swap chord
         private volatile string _diskMsg = "";   // transient "Disk N/M" OSD message (read by the present loop)
         private long _diskMsgUntil;              // Stopwatch ticks; message shown while now < this
 
@@ -389,10 +388,11 @@ namespace Emutastic.Emulator
         // a few non-game scancodes drive the session (quit / fullscreen / pause).
         private void OnGlKey(int scancode, bool down)
         {
-            // Disk-swap keyboard chord held-state — tracked before the game-button dispatch so a
+            // Frontend keyboard-chord held-state — tracked before the game-button dispatch so a
             // chord half that doubles as a game key (e.g. Enter=Start) still registers.
-            if (scancode == _diskSwapKeySCa) _diskSwapKeyAHeld = down;
-            if (scancode == _diskSwapKeySCb) _diskSwapKeyBHeld = down;
+            UpdateChordKey(_diskSwapChord,  scancode, down);
+            UpdateChordKey(_saveStateChord, scancode, down);
+            UpdateChordKey(_loadStateChord, scancode, down);
             if (_glKeyMap.TryGetValue(scancode, out int id)) { _input.SetKeyboardButton(id, down); return; }
             if (!down) return;
             switch (scancode)
@@ -512,7 +512,7 @@ namespace Emutastic.Emulator
             {
                 _input.Initialize();
                 _input.LoadConfiguration(_console, App.Configuration);   // honor the Controls-panel bindings
-                LoadDiskSwapChord();                                     // P1 "Disk Swap" chord (or L3+Start default)
+                LoadFrontendChords();                                    // P1 Disk Swap / Save State / Load State chords (+ defaults)
                 // In-game controller hot-plug feedback: named connect/disconnect in the same
                 // transient OSD slot as disc swaps — mirrors upstream EmulatorWindow's status-tick
                 // diff (be69750). Fires on the emu thread; ShowDiskMessage only sets volatile fields.
@@ -687,6 +687,7 @@ namespace Emutastic.Emulator
                 if (!_noInputPoll) _input.Poll();
                 ServiceDiskSwap();   // disc-swap chord (L3+Start) + FDS/deferred-insert ticks
                 ServiceQuitChord();  // EmuTV quit chord (L3+R3+L2+R2 held ~1.5s) → quit the game
+                ServiceStateChords(); // EmuTV save (L3+R2) / load-latest (L3+L2) chords
                 if (_saveStatePending) ExecuteSaveOnEmuThread();   // between retro_run calls, like upstream
                 if (_loadStatePending) ExecuteLoadOnEmuThread();
                 if (_cheatsApplyPending) ExecuteCheatsApplyOnEmuThread();
@@ -907,6 +908,7 @@ namespace Emutastic.Emulator
                 if (!_noInputPoll) _input.Poll();
                 ServiceDiskSwap();   // disc-swap chord (L3+Start) + FDS/deferred-insert ticks
                 ServiceQuitChord();  // EmuTV quit chord (L3+R3+L2+R2 held ~1.5s) → quit the game
+                ServiceStateChords(); // EmuTV save (L3+R2) / load-latest (L3+L2) chords
                 if (_saveStatePending) ExecuteSaveOnEmuThread();   // between retro_run calls, like upstream
                 if (_loadStatePending) ExecuteLoadOnEmuThread();
                 if (_cheatsApplyPending) ExecuteCheatsApplyOnEmuThread();
@@ -2484,6 +2486,35 @@ namespace Emutastic.Emulator
             else _quitChordFrames = 0;
         }
 
+        // ── EmuTV save/load-state chords ──────────────────────────────────────────────────────────
+        // Couch-shell quick save/load with no keyboard (Preferences → Controls → FRONTEND, defaults
+        // shown in the EmuTV tab):
+        //   Save State        Hold L3, then R2   (raw 7 + 101 default)
+        //   Load latest State Hold L3, then L2   (raw 7 + 100 default)
+        // Both are rebindable like Disk Swap. The defaults share triggers with the quit chord
+        // (L3+R3+L2+R2), so while that full gesture is held we suppress save/load — otherwise pressing
+        // it to quit would rising-edge both on the first frame. Gating (hardcore, unreliable cores,
+        // missing save dir) lives in RequestSave/LoadState, so we just call through.
+        private void ServiceStateChords()
+        {
+            bool quitGesture = _input.IsRawControlDown(7, 0) && _input.IsRawControlDown(8, 0)
+                            && _input.IsRawControlDown(100, 0) && _input.IsRawControlDown(101, 0);
+
+            bool saveHeld = !quitGesture && ChordHeld(_saveStateChord, 7, 101);
+            if (saveHeld && !_saveStateChord.PrevHeld)
+                RequestSaveState(DateTime.Now.ToString("yyyy-MM-dd HH.mm.ss"));
+            _saveStateChord.PrevHeld = saveHeld;
+
+            bool loadHeld = !quitGesture && ChordHeld(_loadStateChord, 7, 100);
+            if (loadHeld && !_loadStateChord.PrevHeld)
+            {
+                var latest = RecentSaveStates().FirstOrDefault();
+                if (latest.Path is { Length: > 0 }) RequestLoadState(latest.Path, latest.Name);
+                else ShowDiskMessage("No save state to load", 3);
+            }
+            _loadStateChord.PrevHeld = loadHeld;
+        }
+
         // ── In-game disc switching (L3 + Start chord) ───────────────────────────────────────────────
         // Wraps SdlInput.GetInputState so we can inject a JOYPAD_L press on port 0 for FDS "disk side
         // change" (FDS cores don't expose the disk-control interface — they read an L press instead).
@@ -2526,51 +2557,86 @@ namespace Emutastic.Emulator
         public static bool ConsoleSupportsDiskSwap(string console)
             => !string.IsNullOrEmpty(console) && DiskCapableConsoles.Contains(console);
 
-        // User-configured chord halves (Preferences → Controls → FRONTEND → Disk Swap).
-        // Controller: panel raw-id space; -1 = unbound → fall back to the L3+Start default.
-        // Keyboard: SDL scancodes resolved from the stored Avalonia Key names ("KeyA+KeyB").
-        private int _diskSwapCtrlA = -1, _diskSwapCtrlB = -1;
-        private int _diskSwapKeySCa = -1, _diskSwapKeySCb = -1;
-        private volatile bool _diskSwapKeyAHeld, _diskSwapKeyBHeld;
-
-        // Parse the P1 "Disk Swap" chord from config (upstream loads it alongside the keyboard
-        // mappings; same "A+B" identifier format both sides). Called from Start() after
-        // LoadConfiguration so prefs edits apply at next launch like every other binding.
-        private void LoadDiskSwapChord()
+        // A rebindable FRONTEND chord (Preferences → Controls → FRONTEND). Controller halves live in
+        // the panel raw-id space (-1 = unbound → caller's default); keyboard halves are SDL scancodes
+        // resolved from the stored Avalonia Key names ("KeyA+KeyB"). KeyAHeld/KeyBHeld are fed by
+        // OnGlKey; PrevHeld is the rising-edge latch the Service* methods read.
+        private sealed class FrontendChord
         {
-            _diskSwapCtrlA = _diskSwapCtrlB = -1;
-            _diskSwapKeySCa = _diskSwapKeySCb = -1;
-            _diskSwapKeyAHeld = _diskSwapKeyBHeld = false;
+            public int CtrlA = -1, CtrlB = -1, KeySCa = -1, KeySCb = -1;
+            public volatile bool KeyAHeld, KeyBHeld;
+            public bool PrevHeld;
+        }
+
+        private readonly FrontendChord _diskSwapChord  = new();
+        private readonly FrontendChord _saveStateChord = new();
+        private readonly FrontendChord _loadStateChord = new();
+
+        // Parse a named P1 frontend chord from config into the controller/keyboard halves (upstream
+        // loads these alongside the keyboard mappings; same "A+B" identifier format both sides). Reset
+        // first so a removed binding falls back to its default. Returns the chord for logging.
+        private FrontendChord LoadFrontendChord(string buttonName, FrontendChord chord)
+        {
+            chord.CtrlA = chord.CtrlB = chord.KeySCa = chord.KeySCb = -1;
+            chord.KeyAHeld = chord.KeyBHeld = false;
             var cfg = App.Configuration;
-            if (cfg == null) return;
+            if (cfg == null) return chord;
             var p1 = cfg.GetInputConfiguration($"{_console}_P1");
             if (p1.ControllerMappings.Count == 0 && p1.KeyboardMappings.Count == 0)
                 p1 = cfg.GetInputConfiguration(_console);   // legacy single-player saves
 
             foreach (var m in p1.ControllerMappings)
-                if (string.Equals(m.ButtonName, "Disk Swap", StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(m.ButtonName, buttonName, StringComparison.OrdinalIgnoreCase))
                 {
                     var parts = (m.InputIdentifier ?? "").Split('+', 2);
                     if (parts.Length == 2 && int.TryParse(parts[0].Trim(), out int a)
                                           && int.TryParse(parts[1].Trim(), out int b))
-                    { _diskSwapCtrlA = a; _diskSwapCtrlB = b; }
+                    { chord.CtrlA = a; chord.CtrlB = b; }
                     break;
                 }
             foreach (var m in p1.KeyboardMappings)
-                if (string.Equals(m.ButtonName, "Disk Swap", StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(m.ButtonName, buttonName, StringComparison.OrdinalIgnoreCase))
                 {
                     var parts = (m.InputIdentifier ?? "").Split('+', 2);
                     if (parts.Length == 2)
                     {
-                        _diskSwapKeySCa = KeyNameToScancode(parts[0].Trim());
-                        _diskSwapKeySCb = KeyNameToScancode(parts[1].Trim());
-                        if (_diskSwapKeySCa < 0 || _diskSwapKeySCb < 0)
-                            _diskSwapKeySCa = _diskSwapKeySCb = -1;
+                        chord.KeySCa = KeyNameToScancode(parts[0].Trim());
+                        chord.KeySCb = KeyNameToScancode(parts[1].Trim());
+                        if (chord.KeySCa < 0 || chord.KeySCb < 0)
+                            chord.KeySCa = chord.KeySCb = -1;
                     }
                     break;
                 }
-            if (_diskSwapCtrlA >= 0 || _diskSwapKeySCa >= 0)
-                Trace.WriteLine($"[Emu] disk swap chord: ctrl {_diskSwapCtrlA}+{_diskSwapCtrlB}, key sc {_diskSwapKeySCa}+{_diskSwapKeySCb}");
+            return chord;
+        }
+
+        // Parse the P1 frontend chords from config. Called from Start() after LoadConfiguration so
+        // prefs edits apply at next launch like every other binding.
+        private void LoadFrontendChords()
+        {
+            LoadFrontendChord("Disk Swap",  _diskSwapChord);
+            LoadFrontendChord("Save State", _saveStateChord);
+            LoadFrontendChord("Load State", _loadStateChord);
+            if (_diskSwapChord.CtrlA >= 0 || _diskSwapChord.KeySCa >= 0)
+                Trace.WriteLine($"[Emu] disk swap chord: ctrl {_diskSwapChord.CtrlA}+{_diskSwapChord.CtrlB}, key sc {_diskSwapChord.KeySCa}+{_diskSwapChord.KeySCb}");
+        }
+
+        // True while a chord is fully held — user-configured controller halves win, else the supplied
+        // default pair; a configured keyboard chord (held flags fed by OnGlKey) also triggers.
+        private bool ChordHeld(FrontendChord c, int defCtrlA, int defCtrlB)
+        {
+            bool held = c.CtrlA >= 0 && c.CtrlB >= 0
+                ? _input.IsRawControlDown(c.CtrlA) && _input.IsRawControlDown(c.CtrlB)
+                : _input.IsRawControlDown(defCtrlA) && _input.IsRawControlDown(defCtrlB);
+            held |= c.KeySCa >= 0 && c.KeyAHeld && c.KeyBHeld;
+            return held;
+        }
+
+        // Feed a keyboard scancode edge into a chord's held flags (called from OnGlKey for each chord).
+        private static void UpdateChordKey(FrontendChord c, int scancode, bool down)
+        {
+            if (scancode == c.KeySCa) c.KeyAHeld = down;
+            if (scancode == c.KeySCb) c.KeyBHeld = down;
         }
 
         // Avalonia Key enum name → SDL scancode for the chord-capturable set. -1 = unmappable
@@ -2605,15 +2671,11 @@ namespace Emutastic.Emulator
 
             // Chord on controller 0, read raw so it works regardless of the per-console mapping
             // (NES/FDS etc. don't map L3). User-configured chord (Preferences → Controls →
-            // FRONTEND) wins; L3 + Start is the unbound default. A configured keyboard chord
-            // (held flags fed by OnGlKey) also triggers. Rising edge so a held chord fires once.
-            bool held = _diskSwapCtrlA >= 0 && _diskSwapCtrlB >= 0
-                ? _input.IsRawControlDown(_diskSwapCtrlA) && _input.IsRawControlDown(_diskSwapCtrlB)
-                : _input.IsRawButtonDown(SdlInput.SdlButtonLeftStick)
-                  && _input.IsRawButtonDown(SdlInput.SdlButtonStart);
-            held |= _diskSwapKeySCa >= 0 && _diskSwapKeyAHeld && _diskSwapKeyBHeld;
-            if (held && !_diskSwapPrevHeld) SwapToNextDisk();
-            _diskSwapPrevHeld = held;
+            // FRONTEND) wins; L3 + Start (raw 7 + 6) is the unbound default. A configured keyboard
+            // chord (held flags fed by OnGlKey) also triggers. Rising edge so a held chord fires once.
+            bool held = ChordHeld(_diskSwapChord, 7, 6);
+            if (held && !_diskSwapChord.PrevHeld) SwapToNextDisk();
+            _diskSwapChord.PrevHeld = held;
         }
 
         // Cycle to the next disc image (eject → set index → deferred re-insert), mirroring RetroArch's
@@ -2783,10 +2845,10 @@ namespace Emutastic.Emulator
             try
             {
                 // Our in-memory config was loaded at launch and is now stale; re-read the file the parent
-                // just wrote, then rebind the live input map + the disk-swap chord (both come from it).
+                // just wrote, then rebind the live input map + the frontend chords (both come from it).
                 App.Configuration?.LoadAsync().GetAwaiter().GetResult();
                 _input.LoadConfiguration(_console, App.Configuration);
-                LoadDiskSwapChord();
+                LoadFrontendChords();
                 Trace.WriteLine("[Emu] input config reloaded live (Controls edit applied to the running game)");
             }
             catch (Exception ex) { Trace.WriteLine($"[Emu] live input reload failed: {ex}"); }

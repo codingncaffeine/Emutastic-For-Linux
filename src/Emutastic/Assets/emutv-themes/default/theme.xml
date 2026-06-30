@@ -108,24 +108,21 @@
             <size>0.545 0.52</size>
             <zIndex>21</zIndex>
         </image>
-        <!-- Box art under the TV. -->
-        <image name="gameCover">
-            <imageType>cover, 3dbox, screenshot</imageType>
-            <pos>0.715 0.785</pos>
+        <!-- Inline save-state browser: the VCR-tape "SAVE STATES" label centred on top, the save
+             thumbnail list below it. Lives in the lower-right (BELOW the TV, never over it), so the
+             live video keeps playing. Dimmed until the player presses Right/Start to browse, then the
+             renderer brightens it. -->
+        <saveStateCarousel name="saveStates">
+            <pos>0.715 0.79</pos>
             <origin>0.5 0.5</origin>
-            <maxSize>0.2 0.2</maxSize>
-            <zIndex>20</zIndex>
-        </image>
-        <!-- Saves are handled by the universal Start overlay, not an inline carousel. -->
-        <text name="saveHint">
-            <text>Press Start for save states</text>
-            <pos>0.715 0.905</pos>
-            <origin>0.5 0.5</origin>
-            <size>0.5 0.04</size>
-            <horizontalAlignment>center</horizontalAlignment>
-            <color>${textMuted}</color>
-            <fontPath>assets/fonts/PressStart2P-Regular.ttf</fontPath>
-            <fontSize>0.013</fontSize>
-        </text>
+            <size>0.5 0.38</size>
+            <labelImage>assets/save-states.png</labelImage>
+            <!-- 4:3 frame (0.083*1920 : 0.11*1080 = 160:119 ≈ 4:3) so screenshots aren't squished. -->
+            <itemSize>0.083 0.11</itemSize>
+            <itemSpacing>0.012 0</itemSpacing>
+            <selectorColor>${accent}</selectorColor>
+            <emptyText>No save states yet</emptyText>
+            <zIndex>46</zIndex>
+        </saveStateCarousel>
     </view>
 </theme>

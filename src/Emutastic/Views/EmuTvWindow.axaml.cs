@@ -238,30 +238,16 @@ namespace Emutastic.Views
         {
             if (_mode != NavMode.GameList) return;
             _mode = NavMode.SaveStates;
-            // The "SAVE STATES" header is the VCR-cassette art (it carries the label). Load it once.
-            if (SaveOverlayCassette.Source == null)
-            {
-                try
-                {
-                    string cassette = Path.Combine(AppContext.BaseDirectory,
-                        "Assets", "emutv-themes", "default", "assets", "save-states.png");
-                    if (File.Exists(cassette)) SaveOverlayCassette.Source = new Bitmap(cassette);
-                }
-                catch { /* fall back to no header art */ }
-            }
-            // Lift the save carousel out of the hidden legacy panel into the visible overlay so it
-            // shows over whatever the active theme is drawing.
-            if (SaveList.Parent is Panel home && !ReferenceEquals(home, SaveOverlayHost))
-            {
-                home.Children.Remove(SaveList);
-                SaveOverlayHost.Children.Add(SaveList);
-            }
-            SaveOverlaySubtitle.Text = (GameList.SelectedItem as Game)?.Title ?? "";
-            bool any = SaveList.ItemCount > 0;
-            SaveOverlayEmpty.IsVisible = !any;
-            if (any && SaveList.SelectedIndex < 0) SaveList.SelectedIndex = 0;
-            SaveOverlay.IsVisible = true;
+            // Mirror the focus state onto the legacy layer (F8 peek) and re-render the theme so its
+            // saveStateCarousel element lights up. The carousel is positioned by the theme — below the
+            // metadata text, away from the TV — so the video keeps playing untouched.
+            GameList.Opacity = 0.5;
+            SaveRow.Opacity  = 1.0;
+            if (SaveList.ItemCount > 0 && SaveList.SelectedIndex < 0) SaveList.SelectedIndex = 0;
+            SaveStateDiagLog.Write($"[saves] EnterSaveStates game='{(GameList.SelectedItem as Game)?.Title}' " +
+                $"itemCount={SaveList.ItemCount} selIdx={SaveList.SelectedIndex}");
             UpdateHint();
+            RenderActiveView();
             _navDir = 0;
             _navHoldTicks = 0;
         }
@@ -269,14 +255,11 @@ namespace Emutastic.Views
         private void ExitSaveStatesToList()
         {
             _mode = NavMode.GameList;
-            SaveOverlay.IsVisible = false;
-            // Return the carousel to its home so it's ready to be reparented next time.
-            if (ReferenceEquals(SaveList.Parent, SaveOverlayHost))
-            {
-                SaveOverlayHost.Children.Remove(SaveList);
-                SaveListHome.Children.Add(SaveList);
-            }
+            // Return focus to the game list; re-render so the saveStateCarousel dims back down.
+            GameList.Opacity = 1.0;
+            SaveRow.Opacity  = 0.5;
             UpdateHint();
+            RenderActiveView();
             _navDir = 0;
             _navHoldTicks = 0;
         }
@@ -294,12 +277,18 @@ namespace Emutastic.Views
             if (_mode == NavMode.ThemeBrowser) { AcceptThemeBrowser(); return; }
             if (_mode == NavMode.Carousel) OpenSelectedConsole();
             else if (_mode == NavMode.GameList && GameList.SelectedItem is Game g) LaunchGame(g);
-            else if (_mode == NavMode.SaveStates
-                     && GameList.SelectedItem is Game game
-                     && SaveList.SelectedItem is SaveState s)
+            else if (_mode == NavMode.SaveStates)
             {
-                ExitSaveStatesToList();        // close the overlay before the emulator takes over
-                LaunchGame(game, s.StatePath);
+                var game = GameList.SelectedItem as Game;
+                var s = SaveList.SelectedItem as SaveState;
+                SaveStateDiagLog.Write($"[accept] load attempt game='{game?.Title}' state='{s?.Name}' " +
+                    $"path='{s?.StatePath}' exists={(s != null && File.Exists(s.StatePath))} " +
+                    $"(game!=null={game != null}, sel!=null={s != null})");
+                if (game != null && s != null)
+                {
+                    ExitSaveStatesToList();    // close the overlay before the emulator takes over
+                    LaunchGame(game, s.StatePath);
+                }
             }
         }
 
@@ -323,7 +312,10 @@ namespace Emutastic.Views
             {
                 List<SaveState> saves;
                 try { saves = db?.GetSaveStatesByGame(g.Id) ?? new List<SaveState>(); }
-                catch { saves = new List<SaveState>(); }
+                catch (Exception ex) { saves = new List<SaveState>(); SaveStateDiagLog.Write($"[load] GetSaveStatesByGame threw: {ex.Message}"); }
+
+                SaveStateDiagLog.Write($"[load] game id={g.Id} title='{g.Title}' db={(db != null)} → {saves.Count} states" +
+                    (saves.Count > 0 ? ": " + string.Join(" | ", saves.ConvertAll(s => $"{s.Name}@{s.StatePath}")) : ""));
 
                 Dispatcher.UIThread.Post(() =>
                 {
@@ -509,6 +501,8 @@ namespace Emutastic.Views
         {
             try
             {
+                if (statePath != null)
+                    SaveStateDiagLog.Write($"[launch] '{game.Title}' with state='{statePath}' exists={File.Exists(statePath)}");
                 var coreManager = new CoreManager(App.Configuration!);
 
                 if (!coreManager.HasCore(game.Console))
@@ -550,6 +544,7 @@ namespace Emutastic.Views
                         // regardless of which zone we launched from.
                         if (GameList.SelectedItem is Game refreshGame)
                         {
+                            SaveStateDiagLog.Write($"[exit] host returned; refreshing saves for '{refreshGame.Title}' (mode={_mode})");
                             _videoDebounce.Stop();
                             _videoDebounce.Start();
                             LoadSavesFor(refreshGame);
@@ -1160,6 +1155,11 @@ namespace Emutastic.Views
                         Favorite = g.IsFavorite,
                     });
 
+            var saves = new List<ThemeSaveEntry>();
+            if (SaveList.ItemsSource is System.Collections.IEnumerable saveSrc)
+                foreach (SaveState s in saveSrc)
+                    saves.Add(new ThemeSaveEntry { ScreenshotPath = s.ScreenshotPath, Label = s.RelativeTime });
+
             return new ThemeItemData
             {
                 Systems = systems,
@@ -1169,6 +1169,9 @@ namespace Emutastic.Views
                 SystemName = selConsole?.ConsoleName ?? "",
                 SystemGameCount = selConsole != null ? $"{selConsole.TotalCount} games" : "",
                 HelpText = HintLabel.Text ?? "",
+                Saves = saves,
+                SelectedSave = Math.Max(0, SaveList.SelectedIndex),
+                InSaveStates = _mode == NavMode.SaveStates,
             };
         }
 

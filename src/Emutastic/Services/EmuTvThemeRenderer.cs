@@ -59,6 +59,19 @@ namespace Emutastic.Services
         public string SystemName { get; init; } = "";   // selected console display name
         public string SystemGameCount { get; init; } = ""; // e.g. "42 games"
         public string HelpText { get; init; } = "";
+
+        // Save states for the selected game (drives the theme's saveStateCarousel element). Populated
+        // for the gamelist view; SelectedSave indexes Saves; InSaveStates is true while the user is
+        // browsing them (the carousel renders full then, dimmed otherwise — like the game list).
+        public IReadOnlyList<ThemeSaveEntry> Saves { get; init; } = Array.Empty<ThemeSaveEntry>();
+        public int SelectedSave { get; init; }
+        public bool InSaveStates { get; init; }
+    }
+
+    public sealed class ThemeSaveEntry
+    {
+        public string? ScreenshotPath { get; init; }   // absolute user-library thumbnail path
+        public string Label { get; init; } = "";        // relative time / save name
     }
 
     public sealed class ThemeSystemEntry
@@ -214,8 +227,118 @@ namespace Emutastic.Services
             GamelistInfoElement gi => BuildGamelistInfo(gi),
             AnimationElement an  => BuildAnimation(an),
             BadgesElement bg     => BuildBadges(bg),
+            SaveStateCarouselElement sc => BuildSaveStateCarousel(sc),
             _ => null,
         };
+
+        // The theme's save-state browser slot. Layout (matches the Windows shell): the VCR-tape
+        // "SAVE STATES" label image centred along the top, and BELOW it a horizontal strip of save
+        // thumbnails (each with its relative-time label) centred on the selected save. Positioned by
+        // the theme below the TV — NOT over it — so the live video keeps playing. Full while browsing
+        // saves, dimmed otherwise; shows EmptyText under the label when the game has no saves.
+        private Control? BuildSaveStateCarousel(SaveStateCarouselElement sc)
+        {
+            if (_viewKind != ThemeViewKind.Gamelist) return null;
+            var saves = _items?.Saves ?? Array.Empty<ThemeSaveEntry>();
+
+            double areaW = (sc.Size?.X ?? 0.5) * _w;
+            double areaH = (sc.Size?.Y ?? 0.34) * _h;
+            var area = new Canvas { Width = areaW, Height = areaH, ClipToBounds = true };
+            area.Opacity = (_items?.InSaveStates ?? false) ? 1.0 : 0.5;
+
+            // VCR-tape label ("SAVE STATES") centred along the top.
+            double labelBottom = 0;
+            var label = LoadImage(sc.LabelImage);
+            if (label != null && label.Size.Height > 0)
+            {
+                double labelH = areaH * 0.42;
+                double lw = labelH * (label.Size.Width / label.Size.Height);
+                if (lw > areaW) { lw = areaW; labelH = lw * (label.Size.Height / label.Size.Width); }
+                var img = new Image { Source = label, Width = lw, Height = labelH, Stretch = Stretch.Uniform };
+                Canvas.SetLeft(img, (areaW - lw) / 2);
+                Canvas.SetTop(img, 0);
+                area.Children.Add(img);
+                labelBottom = labelH + areaH * 0.03;
+            }
+
+            double stripTop = labelBottom;
+            double stripH = Math.Max(0, areaH - stripTop);
+
+            if (saves.Count == 0)
+            {
+                var empty = new TextBlock
+                {
+                    Text = sc.EmptyText ?? "No save states yet",
+                    FontSize = Math.Max(10, stripH * 0.18),
+                    Foreground = new SolidColorBrush(Color.FromRgb(0x8F, 0xE3, 0xFF)) { Opacity = 0.6 },
+                    TextAlignment = TextAlignment.Center, Width = areaW,
+                };
+                if (_currentFont != null) empty.FontFamily = _currentFont;
+                empty.Measure(new Size(areaW, stripH));
+                Canvas.SetLeft(empty, 0);
+                Canvas.SetTop(empty, stripTop + (stripH - empty.DesiredSize.Height) / 2);
+                area.Children.Add(empty);
+                return area;
+            }
+
+            int sel = Math.Clamp(_items?.SelectedSave ?? 0, 0, saves.Count - 1);
+            var itemSize = sc.ItemSize ?? new Vec2(0.092, 0.082);
+            double itemW = itemSize.X * _w, itemH = itemSize.Y * _h;
+            double dateH = Math.Clamp(itemH * 0.30, 0, Math.Max(0, stripH - itemH));
+            double spacing = (sc.ItemSpacing?.X ?? 0.012) * _w;
+            double pitch = itemW + spacing;
+            double centerX = areaW / 2;
+            double thumbCenterY = stripTop + (stripH - dateH) / 2;
+            var selColor = ColorFromHex(sc.SelectorColor ?? "00E5FFFF");
+
+            int span = (int)Math.Ceiling(areaW / (2 * pitch)) + 1;
+            for (int k = -span; k <= span; k++)
+            {
+                int idx = sel + k;
+                if (idx < 0 || idx >= saves.Count) continue;
+                bool selected = k == 0;
+                double scale = selected ? 1.12 : 1.0;
+                double iw = itemW * scale, ih = itemH * scale;
+                double cx = centerX + k * pitch;
+
+                var thumb = LoadUserImage(saves[idx].ScreenshotPath);
+                // Uniform (not UniformToFill): preserve the screenshot's native aspect — letterbox it in
+                // the dark 4:3 frame rather than stretching/cropping it (which read as "squished").
+                Control inner = thumb != null
+                    ? new Image { Source = thumb, Stretch = Stretch.Uniform, Width = iw, Height = ih }
+                    : new Border { Width = iw, Height = ih, Background = new SolidColorBrush(Color.FromArgb(0x33, 0, 0, 0)) };
+                var box = new Border
+                {
+                    Width = iw, Height = ih, ClipToBounds = true, CornerRadius = new CornerRadius(8),
+                    BorderBrush = new SolidColorBrush(selected ? selColor : Color.FromArgb(0x55, 0x00, 0xE5, 0xFF)),
+                    BorderThickness = new Thickness(selected ? 3 : 1.5),
+                    Background = new SolidColorBrush(Color.FromArgb(0x22, 0, 0, 0)),
+                    Child = inner,
+                    Opacity = selected ? 1.0 : 0.55,
+                };
+                Canvas.SetLeft(box, cx - iw / 2);
+                Canvas.SetTop(box, thumbCenterY - ih / 2);
+                box.ZIndex = selected ? 100 : 50 - Math.Abs(k);
+                area.Children.Add(box);
+
+                if (dateH > 0)
+                {
+                    var lbl = new TextBlock
+                    {
+                        Text = saves[idx].Label,
+                        FontSize = Math.Max(9, dateH * 0.62),
+                        Foreground = new SolidColorBrush(Color.FromRgb(0xEA, 0xF6, 0xFF)),
+                        TextAlignment = TextAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
+                        Width = Math.Max(iw, pitch), Opacity = selected ? 1.0 : 0.5,
+                    };
+                    if (_currentFont != null) lbl.FontFamily = _currentFont;
+                    Canvas.SetLeft(lbl, cx - Math.Max(iw, pitch) / 2);
+                    Canvas.SetTop(lbl, thumbCenterY + ih / 2 + 4);
+                    area.Children.Add(lbl);
+                }
+            }
+            return area;
+        }
 
         // ════════════════════════ secondary elements ════════════════════════════
 
