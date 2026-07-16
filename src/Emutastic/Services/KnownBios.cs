@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Emutastic.Services
 {
@@ -9,7 +11,8 @@ namespace Emutastic.Services
         string Filename,
         string Description,
         long ExpectedSize,
-        string? Md5);
+        string? Md5,
+        string[]? AltMd5s = null); // other known-good dumps — drag-drop recognition only
 
     /// <summary>
     /// Static BIOS manifest (verbatim from upstream PreferencesWindow.xaml.cs). Platform-neutral
@@ -63,6 +66,111 @@ namespace Emutastic.Services
             new("NeoCD","Neo Geo CD","neocdz.zip","CDZ BIOS archive (required for CD games)",0,null),
             // Game Boy Advance (optional — mgba has built-in HLE BIOS)
             new("GBA","Game Boy Advance","gba_bios.bin","BIOS (optional, improves compatibility)",16384,"a860e8c0b6d573d191e4ec7db1b1e4f6"),
+            // GameCube IPL (optional — Dolphin boots without it, but the dump
+            // restores the official IPL fonts; without it games that render
+            // text through the font ROM (e.g. Star Fox Assault) show missing
+            // or misplaced text. The NTSC dump is shared by USA and Japan;
+            // PAL covers Europe. Md5 is null (presence-only — dev/NR dumps
+            // exist beyond the known set); AltMd5s carries the known retail
+            // dumps (libretro-database System.dat) so drag-drop recognizes
+            // them under any filename (gc-ntsc-10.bin, *.ipl, zipped…).
+            new("GameCube","GameCube","GC/USA/IPL.bin","USA — optional; restores official IPL fonts (fixes e.g. Star Fox Assault text)",2097152,null,
+                new[]{ "fc924a7c879b661abc37cec4f018fdf3",    // NTSC 1.0
+                       "019e39822a9ca3029124f74dd4d55ac4",    // NTSC 1.1
+                       "b17148254a5799684c7d783206504926" }), // NTSC 1.2
+            new("GameCube","GameCube","GC/JAP/IPL.bin","Japan — optional; same NTSC dump as USA",2097152,null,
+                new[]{ "fc924a7c879b661abc37cec4f018fdf3",    // NTSC 1.0
+                       "019e39822a9ca3029124f74dd4d55ac4",    // NTSC 1.1
+                       "b17148254a5799684c7d783206504926" }), // NTSC 1.2
+            new("GameCube","GameCube","GC/EUR/IPL.bin","Europe — optional; PAL dump",2097152,null,
+                new[]{ "0cdda509e2da83c85bfe423dd87346cc",    // PAL 1.0
+                       "339848a0b7c2124cf155276c1e79cbd0",    // PAL 1.1
+                       "db92574caab77a7ec99d4605fd6f2450" }), // PAL 1.2
         };
+
+        // ── Recognition (shared by drag-drop and the ROM-folder auto-import) ──
+
+        // Returns the best KnownBios match for (filename, size, md5). md5 may be null
+        // when the caller hasn't computed it yet — tier 1 is skipped in that case.
+        // openStream (optional) lets content-based tiers peek at the file bytes
+        // (used for GameCube IPL dumps, which ship under arbitrary filenames).
+        internal static BiosEntry? MatchKnownBios(string entryName, long size, string? md5,
+            Func<System.IO.Stream>? openStream = null)
+        {
+            if (md5 != null)
+            {
+                var hashMatch = All.FirstOrDefault(b =>
+                    (b.Md5 != null && string.Equals(b.Md5, md5, StringComparison.OrdinalIgnoreCase))
+                    || (b.AltMd5s != null && b.AltMd5s.Contains(md5, StringComparer.OrdinalIgnoreCase)));
+                if (hashMatch != null) return hashMatch;
+            }
+
+            // GameCube IPL dumps: identify by content (exact 2 MB + plaintext
+            // copyright header) so revisions missing from the hash table still
+            // route to the right region folder regardless of filename.
+            if (size == GcIplSize && openStream != null)
+            {
+                string? gcRegion = SniffGcIplRegion(openStream);
+                if (gcRegion != null)
+                    return All.FirstOrDefault(b => b.Filename == $"GC/{gcRegion}/IPL.bin");
+            }
+
+            var sizeMatch = All.FirstOrDefault(b =>
+                string.Equals(System.IO.Path.GetFileName(b.Filename), entryName, StringComparison.OrdinalIgnoreCase)
+                && (b.ExpectedSize == 0 || b.ExpectedSize == size));
+            if (sizeMatch != null) return sizeMatch;
+
+            return All.FirstOrDefault(b =>
+                string.Equals(System.IO.Path.GetFileName(b.Filename), entryName, StringComparison.OrdinalIgnoreCase));
+        }
+
+        internal const long GcIplSize = 2097152; // every retail GC IPL dump is exactly 2 MB
+
+        // Every retail GameCube IPL begins with this plaintext copyright header
+        // (verbatim from Dolphin's EXI_DeviceIPL.cpp; the rest of the ROM is
+        // scrambled). PAL revisions append a "PAL  Revision …" marker; NTSC
+        // revisions (shared by USA and Japan) do not.
+        private const string GcIplHeader =
+            "(C) 1999-2001 Nintendo.  All rights reserved."
+          + "(C) 1999 ArtX Inc.  All rights reserved.";
+
+        // Returns "EUR" or "USA" when the stream is a GameCube IPL dump, else null.
+        // (NTSC dumps land on USA; callers mirror them to JAP via GcIplTargets.)
+        private static string? SniffGcIplRegion(Func<System.IO.Stream> openStream)
+        {
+            try
+            {
+                using var s = openStream();
+                byte[] head = new byte[0x100];
+                int read = 0;
+                while (read < head.Length)
+                {
+                    int n = s.Read(head, read, head.Length - read);
+                    if (n <= 0) break;
+                    read += n;
+                }
+                if (read < head.Length) return null;
+                string text = System.Text.Encoding.ASCII.GetString(head);
+                if (!text.StartsWith(GcIplHeader, StringComparison.Ordinal)) return null;
+                return text.Contains("PAL", StringComparison.Ordinal) ? "EUR" : "USA";
+            }
+            catch { return null; }
+        }
+
+        // The NTSC GameCube IPL serves both the USA and JAP folders — a
+        // recognized NTSC dump is written to both so either region's games
+        // pick it up. Everything else maps to exactly its own entry.
+        internal static BiosEntry[] GcIplTargets(BiosEntry match)
+        {
+            if (match.Console != "GameCube") return new[] { match };
+            string sibling = match.Filename switch
+            {
+                "GC/USA/IPL.bin" => "GC/JAP/IPL.bin",
+                "GC/JAP/IPL.bin" => "GC/USA/IPL.bin",
+                _ => ""
+            };
+            var sib = All.FirstOrDefault(b => b.Filename == sibling);
+            return sib != null ? new[] { match, sib } : new[] { match };
+        }
     }
 }

@@ -1510,7 +1510,7 @@ public partial class PreferencesWindow : Window
 
     private static readonly (string Category, string[] ConsoleDisplays)[] BiosCategories =
     {
-        ("Nintendo", new[] { "Famicom Disk System", "Game Boy Advance" }),
+        ("Nintendo", new[] { "Famicom Disk System", "GameCube", "Game Boy Advance" }),
         ("Sega",     new[] { "Sega CD", "Saturn" }),
         ("Sony",     new[] { "PlayStation", "PlayStation 2" }),
         ("NEC",      new[] { "TurboGrafx-CD" }),
@@ -1550,9 +1550,16 @@ public partial class PreferencesWindow : Window
     private static (HashSet<string> Existing, HashSet<string> Verified, Dictionary<string, string[]> RomDirs) BiosScan(string sysDir)
     {
         var romDirs = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+        string[] baseRomDirs = Array.Empty<string>();
         try
         {
             var games = new Services.DatabaseService().GetAllGames();
+            baseRomDirs = games.Where(g => !string.IsNullOrEmpty(g.RomPath))
+                .Select(g => System.IO.Path.GetDirectoryName(AppPaths.FromStoragePath(g.RomPath)))
+                .Where(d => !string.IsNullOrEmpty(d))
+                .Select(d => d!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
             romDirs = games.Where(g => !string.IsNullOrEmpty(g.RomPath))
                 .GroupBy(g => g.Console)
                 .ToDictionary(grp => grp.Key, grp =>
@@ -1566,6 +1573,16 @@ public partial class PreferencesWindow : Window
         }
         catch { }
 
+        // Auto-import: recognize BIOS files parked in (sub)folders of the ROM
+        // directories — same identification the System Files drag-drop uses
+        // (MD5 / GameCube IPL content sniff / canonical name+size) — and copy
+        // matches into the System folder's canonical layout, so the panel,
+        // the row display and per-console launch syncs all see them.
+        // Non-destructive: originals stay put; existing System-folder files
+        // are never overwritten. Runs on this scan's worker thread.
+        try { AutoImportRomDirBios(baseRomDirs, sysDir); }
+        catch { /* the sweep must never break the scan */ }
+
         var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var verified = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         void Note(Services.BiosEntry e, string path)
@@ -1577,6 +1594,10 @@ public partial class PreferencesWindow : Window
         foreach (var e in Services.KnownBios.All)
         {
             Note(e, System.IO.Path.Combine(sysDir, e.Filename));
+            // Sub-path entries (pcsx2/bios/…, kronos/…, GC/…) live in the System
+            // folder only — a flat same-named file next to ROMs is not read at
+            // launch, so don't count one as found.
+            if (e.Filename.Contains('/')) continue;
             if (romDirs.TryGetValue(e.Console, out var dirs))
             {
                 string leaf = System.IO.Path.GetFileName(e.Filename);
@@ -1588,6 +1609,166 @@ public partial class PreferencesWindow : Window
     }
 
     private static bool SafeExists(string p) { try { return System.IO.File.Exists(p); } catch { return false; } }
+
+    // ── ROM-folder BIOS auto-import (runs inside BiosScan, off the UI thread) ──
+
+    // Skip archives beyond this size: metadata reads are cheap, but a huge "every
+    // system" BIOS pack can hold dozens of size-matched entries whose trial
+    // hashing would drag the scan out. Drag-drop remains the path for those.
+    private const long ArchiveSweepMaxBytes = 64 * 1024 * 1024;
+
+    // Archives that yielded no imports, keyed by path|size|mtime — skipped on
+    // later scans this session so a settled library keeps rescans metadata-free.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _archiveSweepNoHit = new();
+
+    // Recognize-and-import sweep over the ROM directories (see call site in
+    // BiosScan). Each ROM base dir is walked up to three subfolder levels, so
+    // BIOS packs nested a few folders deep (e.g. Roms/Gamecube/BIOS/USA/IPL.bin)
+    // are still found. Identification is KnownBios.MatchKnownBios — hashing is
+    // only attempted on files whose size exactly matches a known dump, so
+    // multi-GB ROMs are never read.
+    //
+    // Beyond upstream: archives (.zip/.7z/.rar) up to
+    // ArchiveSweepMaxBytes are also opened, metadata first — an inner entry is
+    // only decompressed when its exact uncompressed size or leaf name matches a
+    // still-missing catalog entry (a rar'd GameCube IPL, a Saturn BIOS zip…).
+    private static void AutoImportRomDirBios(IEnumerable<string> baseRomDirs, string sysDir)
+    {
+        // Candidate gates are built from entries whose System-folder file is
+        // still MISSING — once a size/name class is fully satisfied, files of
+        // that size are never even hashed again (steady state: sweep is free).
+        var missing = Services.KnownBios.All
+            .Where(b => !SafeExists(System.IO.Path.Combine(sysDir, b.Filename)))
+            .ToList();
+        if (missing.Count == 0) return;
+
+        var knownSizes = missing.Where(b => b.ExpectedSize > 0).Select(b => b.ExpectedSize).ToHashSet();
+        var knownNames = missing.Select(b => System.IO.Path.GetFileName(b.Filename)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        string sysPrefix;
+        try
+        {
+            sysPrefix = System.IO.Path.GetFullPath(sysDir)
+                .TrimEnd(System.IO.Path.DirectorySeparatorChar) + System.IO.Path.DirectorySeparatorChar;
+        }
+        catch { return; }
+
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var root in baseRomDirs)
+            Walk(root, 3);
+
+        void Walk(string dir, int remainingDepth)
+        {
+            string full;
+            try { full = System.IO.Path.GetFullPath(dir); } catch { return; }
+            if (!visited.Add(full)) return;
+            // Never treat the System folder itself as an import source, and skip
+            // dot-folders (.Trash-1000 on removable drives holds deleted copies).
+            if ((full.TrimEnd(System.IO.Path.DirectorySeparatorChar) + System.IO.Path.DirectorySeparatorChar)
+                    .StartsWith(sysPrefix, StringComparison.OrdinalIgnoreCase)) return;
+            if (System.IO.Path.GetFileName(full).StartsWith('.')) return;
+
+            IEnumerable<System.IO.FileInfo> files;
+            try { files = new System.IO.DirectoryInfo(full).EnumerateFiles(); }
+            catch { return; }
+            foreach (var fi in files) Consider(fi);
+
+            if (remainingDepth <= 0) return;
+            IEnumerable<string> subs;
+            try { subs = System.IO.Directory.EnumerateDirectories(full); }
+            catch { return; }
+            foreach (var sub in subs) Walk(sub, remainingDepth - 1);
+        }
+
+        void Consider(System.IO.FileInfo fi)
+        {
+            long len;
+            try { len = fi.Length; } catch { return; }
+            bool sizeCandidate = knownSizes.Contains(len);
+            bool nameCandidate = knownNames.Contains(fi.Name);
+            if (sizeCandidate || nameCandidate)
+            {
+                string? md5 = sizeCandidate ? ComputeMd5(fi.FullName) : null;
+                var match = Services.KnownBios.MatchKnownBios(fi.Name, len, md5,
+                    () => System.IO.File.OpenRead(fi.FullName));
+                // The passive sweep is stricter than an explicit drop: never
+                // import a name-only match whose size doesn't fit the entry.
+                if (match != null && (match.ExpectedSize == 0 || match.ExpectedSize == len))
+                {
+                    ImportTo(match, () => System.IO.File.OpenRead(fi.FullName), fi.FullName);
+                    return; // a file that IS a known BIOS is not also a pack to open
+                }
+            }
+            ConsiderArchive(fi, len);
+        }
+
+        void ConsiderArchive(System.IO.FileInfo fi, long len)
+        {
+            string ext = fi.Extension;
+            bool isArchive = ext.Equals(".zip", StringComparison.OrdinalIgnoreCase)
+                          || ext.Equals(".7z", StringComparison.OrdinalIgnoreCase)
+                          || ext.Equals(".rar", StringComparison.OrdinalIgnoreCase);
+            if (!isArchive || len <= 0 || len > ArchiveSweepMaxBytes) return;
+
+            string memoKey = $"{fi.FullName}|{len}|{fi.LastWriteTimeUtc.Ticks}";
+            if (_archiveSweepNoHit.ContainsKey(memoKey)) return;
+
+            bool anyImport = false;
+            try
+            {
+                using var archive = Services.Archives.RomArchive.Open(fi.FullName);
+                foreach (var entry in archive.Entries)
+                {
+                    if (entry.IsDirectory || string.IsNullOrEmpty(entry.Key)) continue;
+                    string entryName = System.IO.Path.GetFileName(entry.Key);
+                    if (string.IsNullOrEmpty(entryName)) continue;
+                    bool eSize = knownSizes.Contains(entry.Size);
+                    bool eName = knownNames.Contains(entryName);
+                    if (!eSize && !eName) continue;
+
+                    string? md5 = null;
+                    if (eSize)
+                    {
+                        try { using var ms = entry.OpenEntryStream(); using var h = System.Security.Cryptography.MD5.Create(); md5 = Convert.ToHexString(h.ComputeHash(ms)).ToLowerInvariant(); } catch { }
+                    }
+                    var match = Services.KnownBios.MatchKnownBios(entryName, entry.Size, md5, () => entry.OpenEntryStream());
+                    if (match == null || (match.ExpectedSize > 0 && match.ExpectedSize != entry.Size)) continue;
+                    if (ImportTo(match, () => entry.OpenEntryStream(), $"{fi.FullName}:{entry.Key}")) anyImport = true;
+                }
+            }
+            catch { /* unreadable/unsupported archive — memoize and move on */ }
+            if (!anyImport) _archiveSweepNoHit.TryAdd(memoKey, 0);
+        }
+
+        // Copies a recognized source into every canonical destination it serves
+        // (GC NTSC fans out to USA+JAP). Never overwrites; writes via a temp name
+        // so a failed copy can't leave a truncated BIOS behind. Returns true when
+        // the match was handled (imported now or already present).
+        bool ImportTo(Services.BiosEntry match, Func<System.IO.Stream> open, string srcLabel)
+        {
+            foreach (var target in Services.KnownBios.GcIplTargets(match))
+            {
+                string dest = System.IO.Path.Combine(sysDir, target.Filename);
+                if (SafeExists(dest)) continue;
+                string tmp = dest + ".importing";
+                try
+                {
+                    System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(dest)!);
+                    using (var src = open())
+                    using (var destFs = System.IO.File.Create(tmp))
+                        src.CopyTo(destFs);
+                    System.IO.File.Move(tmp, dest, overwrite: false);
+                    System.Diagnostics.Trace.WriteLine($"[BiosScan] Auto-imported {srcLabel} → {dest}");
+                }
+                catch
+                {
+                    // Locked or unwritable — retried on a later scan.
+                    try { System.IO.File.Delete(tmp); } catch { }
+                }
+            }
+            return true;
+        }
+    }
 
     private void RenderBios(StackPanel panel, string sysDir, HashSet<string> existing, HashSet<string> verified, Dictionary<string, string[]> romDirs)
     {
@@ -1603,7 +1784,7 @@ public partial class PreferencesWindow : Window
         var bs = new StackPanel();
         bs.Children.Add(new TextBlock { Text = "Where to place BIOS files", FontSize = 12, FontWeight = FontWeight.SemiBold, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextPrimaryBrush"), Margin = new Thickness(0, 0, 0, 4) });
         bs.Children.Add(new TextBlock { Text = $"System folder (recommended):  {sysDir}", FontSize = 11, FontFamily = "monospace", Foreground = Brush("TextMutedBrush"), TextWrapping = TextWrapping.Wrap });
-        bs.Children.Add(new TextBlock { Text = "Alternatively, place a BIOS file in the same folder as the ROMs for that system — it will be found automatically.", FontSize = 11, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextMutedBrush"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) });
+        bs.Children.Add(new TextBlock { Text = "Alternatively, place BIOS files anywhere in a system's ROM folder (subfolders and archives are fine) — recognized files are imported into the System folder automatically.", FontSize = 11, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextMutedBrush"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) });
         bs.Children.Add(new TextBlock { Text = "Or just drag and drop BIOS files anywhere on this panel — they're identified by hash/size and copied here automatically.", FontSize = 11, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextMutedBrush"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) });
         banner.Child = bs;
         panel.Children.Add(banner);
@@ -1613,6 +1794,7 @@ public partial class PreferencesWindow : Window
         bool FoundFor(Services.BiosEntry e)
         {
             if (Has(System.IO.Path.Combine(sysDir, e.Filename))) return true;
+            if (e.Filename.Contains('/')) return false;   // sub-path entries: System folder only (see BiosScan)
             return romDirs.TryGetValue(e.Console, out var dirs) && dirs.Any(d =>
                 !string.IsNullOrEmpty(d) && Has(System.IO.Path.Combine(d, System.IO.Path.GetFileName(e.Filename))));
         }
@@ -1716,7 +1898,7 @@ public partial class PreferencesWindow : Window
         string sysPath = System.IO.Path.Combine(sysDir, entry.Filename);
         bool inSys = exists && SafeExists(sysPath);
         string? foundPath = inSys ? sysPath : null;
-        if (foundPath == null && exists && romDirs.TryGetValue(entry.Console, out var dirs))
+        if (foundPath == null && exists && !entry.Filename.Contains('/') && romDirs.TryGetValue(entry.Console, out var dirs))
             foundPath = dirs.Select(d => System.IO.Path.Combine(d, System.IO.Path.GetFileName(entry.Filename))).FirstOrDefault(SafeExists);
         bool verified = foundPath != null && verifiedSet.Contains(foundPath);   // computed off-thread in BiosScan
 
@@ -1726,7 +1908,10 @@ public partial class PreferencesWindow : Window
             Foreground = new SolidColorBrush(Color.Parse(verified ? "#30D158" : "#E03535")) };
         Grid.SetColumn(icon, 0);
 
-        var filename = new TextBlock { Text = System.IO.Path.GetFileName(entry.Filename), FontSize = 13, FontFamily = "monospace",
+        // Sub-path entries show their System-folder relative path (e.g. GC/USA/IPL.bin)
+        // so identically-named files stay distinguishable and the expected location is
+        // visible at a glance.
+        var filename = new TextBlock { Text = entry.Filename.Contains('/') ? entry.Filename : System.IO.Path.GetFileName(entry.Filename), FontSize = 13, FontFamily = "monospace",
             MinWidth = 200, Foreground = Brush("TextPrimaryBrush"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 16, 0) };
         Grid.SetColumn(filename, 1);
 
@@ -1832,9 +2017,19 @@ public partial class PreferencesWindow : Window
                     {
                         try { using var ms = entry.OpenEntryStream(); using var md5 = System.Security.Cryptography.MD5.Create(); entryMd5 = Convert.ToHexString(md5.ComputeHash(ms)).ToLowerInvariant(); } catch { }
                     }
-                    var match = MatchKnownBios(entryName, entry.Size, entryMd5);
+                    var match = Services.KnownBios.MatchKnownBios(entryName, entry.Size, entryMd5, () => entry.OpenEntryStream());
                     if (match == null) continue;
-                    try { using var es = entry.OpenEntryStream(); CopyEntryToSystem(match, es, sysDir); messages.Add($"✓ {srcName} → {System.IO.Path.GetFileName(match.Filename)} ({match.ConsoleDisplay})"); imported++; extractedHere++; }
+                    try
+                    {
+                        var targets = Services.KnownBios.GcIplTargets(match);
+                        foreach (var target in targets)
+                        {
+                            using var es = entry.OpenEntryStream();
+                            CopyEntryToSystem(target, es, sysDir);
+                        }
+                        messages.Add($"✓ {srcName} → {string.Join(" + ", targets.Select(t => t.Filename))} ({match.ConsoleDisplay})");
+                        imported++; extractedHere++;
+                    }
                     catch (Exception ex) { messages.Add($"⚠ {srcName}:{entryName}: {ex.Message}"); skipped++; }
                 }
             }
@@ -1843,30 +2038,21 @@ public partial class PreferencesWindow : Window
         }
 
         string? fileMd5 = anyHashed ? ComputeMd5(src) : null;
-        var fileMatch = MatchKnownBios(srcName, size, fileMd5);
-        string destPath; string label;
-        if (fileMatch != null) { destPath = System.IO.Path.Combine(sysDir, fileMatch.Filename); label = $"{System.IO.Path.GetFileName(fileMatch.Filename)} → {fileMatch.ConsoleDisplay}"; }
-        else { messages.Add($"• {srcName}: not a recognized BIOS"); skipped++; return; }
+        var fileMatch = Services.KnownBios.MatchKnownBios(srcName, size, fileMd5, () => System.IO.File.OpenRead(src));
+        if (fileMatch == null) { messages.Add($"• {srcName}: not a recognized BIOS"); skipped++; return; }
         try
         {
-            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(destPath)!);
-            System.IO.File.Copy(src, destPath, overwrite: true);
-            messages.Add($"✓ {label}"); imported++;
+            var targets = Services.KnownBios.GcIplTargets(fileMatch);
+            foreach (var target in targets)
+            {
+                string destPath = System.IO.Path.Combine(sysDir, target.Filename);
+                System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(destPath)!);
+                System.IO.File.Copy(src, destPath, overwrite: true);
+            }
+            messages.Add($"✓ {string.Join(" + ", targets.Select(t => t.Filename))} → {fileMatch.ConsoleDisplay}");
+            imported++;
         }
         catch (Exception ex) { messages.Add($"⚠ {srcName}: {ex.Message}"); skipped++; }
-    }
-
-    private static Services.BiosEntry? MatchKnownBios(string entryName, long size, string? md5)
-    {
-        if (md5 != null)
-        {
-            var hashMatch = Services.KnownBios.All.FirstOrDefault(b => b.Md5 != null && string.Equals(b.Md5, md5, StringComparison.OrdinalIgnoreCase));
-            if (hashMatch != null) return hashMatch;
-        }
-        var sizeMatch = Services.KnownBios.All.FirstOrDefault(b =>
-            string.Equals(System.IO.Path.GetFileName(b.Filename), entryName, StringComparison.OrdinalIgnoreCase) && (b.ExpectedSize == 0 || b.ExpectedSize == size));
-        if (sizeMatch != null) return sizeMatch;
-        return Services.KnownBios.All.FirstOrDefault(b => string.Equals(System.IO.Path.GetFileName(b.Filename), entryName, StringComparison.OrdinalIgnoreCase));
     }
 
     private static void CopyEntryToSystem(Services.BiosEntry match, System.IO.Stream source, string sysDir)
