@@ -442,6 +442,11 @@ namespace Emutastic.Emulator
         }
 
         private readonly string _console;
+        // Library entry when the caller has one (in-process launches pass it whole;
+        // the game-host rebuilds Title/Console/RomPath from its CLI args). Null for
+        // direct CLI launches — per-game decisions (PS1 pad, HD-mod checks) then
+        // fall back to console defaults.
+        private readonly Models.Game? _game;
 
         // Per-console handler (core options, controller ports, aspect/fps, dirs) — keeps each console
         // segregated so one console's quirks can't break another. See ConsoleHandlers/.
@@ -465,13 +470,17 @@ namespace Emutastic.Emulator
         [StructLayout(LayoutKind.Sequential)]
         private struct retro_variable { public IntPtr key; public IntPtr value; }
 
-        public EmulatorSession(string corePath, string romPath, string console = "")
+        // game is optional (upstream threads it through the console-handler factory the
+        // same way): PS1 needs the title to pick digital vs DualShock per game. Callers
+        // without library context (direct CLI launches) omit it and get console defaults.
+        public EmulatorSession(string corePath, string romPath, string console = "", Models.Game? game = null)
         {
             _corePath = corePath;
             _romPath = romPath;
             _console = console;
+            _game = game;
             _coreName = System.IO.Path.GetFileNameWithoutExtension(corePath);
-            _handler = ConsoleHandlerFactory.Create(console);
+            _handler = ConsoleHandlerFactory.Create(console, game);
             _handler.CoreFileName = _coreName;   // so the handler can return core-specific options (N64: parallel vs mupen)
             foreach (var kv in _handler.GetDefaultCoreOptions())   // pre-seed this console's curated options
                 _coreOptions[kv.Key] = kv.Value;
@@ -483,6 +492,18 @@ namespace Emutastic.Emulator
             // Per-game launch overrides (e.g. PS2 region BIOS) resolved from this ROM —
             // applied last so they win over both curated defaults and persisted values.
             _handler.ApplyPerGameCoreOptions(_romPath, _coreOptions);
+            // Games with installed enhancement packs: force the pack options,
+            // after user values — a globally saved core option must not override
+            // the per-game state. Mesen consoles answer from the mod library on
+            // disk (self-healing across DB history); texture consoles force
+            // on/off from the persisted per-game toggle. Empty dict = nothing
+            // installed. (Upstream seeds these in SeedDefaultCoreOptions.)
+            if (_game != null)
+                foreach (var kv in Services.HdPackService.GetLaunchForcedOptions(_game))
+                {
+                    _coreOptions[kv.Key] = kv.Value;
+                    System.Diagnostics.Trace.WriteLine($"HD pack: forced {kv.Key} = {kv.Value}");
+                }
             // Hold back load-fragile options (handler-declared): invisible during retro_load_game
             // (GET_VARIABLE misses -> core default), applied via the live path at frame 1 below.
             foreach (var k in _handler.DeferUntilAfterLoad)
@@ -3904,6 +3925,20 @@ namespace Emutastic.Emulator
                     ShowDiskMessage("Hardcore Mode is disabled for PSP titles — achievements still track", 6);
                 }
 
+                // RA hardcore-compliance carve-out for HD mods that embed ROM
+                // patches (<patch> in hires.txt): Mesen patches the ROM
+                // internally at load, so rcheevos hashed the clean file while
+                // the running game is modified code — crediting hardcore
+                // unlocks against the base game's set wouldn't be compliant.
+                // Softcore still tracks; switching the mod to None restores
+                // hardcore on the next launch.
+                if (effectiveHardcore && _game != null && Services.HdPackService.ActiveModHasRomPatch(_game))
+                {
+                    effectiveHardcore = false;
+                    Trace.WriteLine("[RA] Hardcore refused — active HD mod patches the ROM (pack <patch> tag); softcore for this session.");
+                    ShowDiskMessage("Hardcore disabled — the active HD mod patches the ROM; achievements still track", 6);
+                }
+
                 // Stamp the core into the rcheevos UA BEFORE login/identify HTTP fires.
                 Services.RetroAchievementsClient.SetCoreContext(_core?.CoreName, _core?.CoreVersion);
 
@@ -3976,10 +4011,42 @@ namespace Emutastic.Emulator
                 }
                 Trace.WriteLine("[RA] Login OK");
 
+                // ROM-hack entries: hash the PATCHED bytes, not the base file on
+                // disk — the running game is the hack, so its RA identity must
+                // follow the patch (hacks with their own sets identify correctly;
+                // base-game sets are never credited from modified code).
+                byte[]? raRomData = null;
+                if (!string.IsNullOrEmpty(PatchPath) && System.IO.File.Exists(PatchPath))
+                {
+                    try
+                    {
+                        string raw = _romPath;
+                        string rext = System.IO.Path.GetExtension(raw);
+                        if (Services.ZipRomExtractor.IsArchiveExtension(rext)
+                            && Services.ZipRomExtractor.ConsoleNeedsExtraction(_console))
+                        {
+                            string? extracted = Services.ZipRomExtractor.ExtractSync(raw, _console);
+                            if (!string.IsNullOrEmpty(extracted) && System.IO.File.Exists(extracted)) raw = extracted;
+                        }
+                        var pr = Services.RomPatcher.Apply(
+                            System.IO.File.ReadAllBytes(raw),
+                            System.IO.File.ReadAllBytes(PatchPath));
+                        if (pr.Ok && pr.Patched != null)
+                        {
+                            raRomData = pr.Patched;
+                            Trace.WriteLine("[RA] Hashing patched ROM bytes (hack entry)");
+                        }
+                    }
+                    catch (Exception pex)
+                    {
+                        Trace.WriteLine($"[RA] Patched-hash prep failed, falling back to file hash: {pex.Message}");
+                    }
+                }
+
                 string romPath = _romPath;
                 Trace.WriteLine($"[RA] Loading game: {romPath} (console {consoleId})");
                 _raClient = client;   // descriptors arriving mid-load can now reach the client
-                var (loadOk, loadErr) = client.LoadGame(romPath, consoleId);
+                var (loadOk, loadErr) = client.LoadGame(romPath, consoleId, raRomData);
                 if (!loadOk)
                 {
                     Trace.WriteLine($"[RA] Game load failed: {loadErr}");

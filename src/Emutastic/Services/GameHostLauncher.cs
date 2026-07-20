@@ -92,7 +92,7 @@ namespace Emutastic.Services
             if (!useHost)
             {
                 // Legacy in-process path — unchanged behavior, the default until GL ships (Phase 5).
-                var win = new Views.EmulatorWindow(new EmulatorSession(corePath, romPath, console));
+                var win = new Views.EmulatorWindow(new EmulatorSession(corePath, romPath, console, game));
                 if (fullscreen) win.WindowState = Avalonia.Controls.WindowState.FullScreen;   // EmuTV couch launches
                 if (onExit != null) win.Closed += (_, _) => onExit(new GameHostResult { ExitCode = 0, PlaySeconds = 0 });
                 win.Show();
@@ -168,6 +168,15 @@ namespace Emutastic.Services
                 {
                     psi.ArgumentList.Add("--patch");
                     psi.ArgumentList.Add(game.PatchPath);
+                }
+                // Enhancement-pack state for texture consoles (GameCube/N64/PSP):
+                // the host has no DB, and unlike Mesen mods (read from the shared
+                // filesystem) the per-game toggle only exists in DB columns —
+                // hand both down so GetLaunchForcedOptions works host-side.
+                if (game.HasHdPack)
+                {
+                    psi.ArgumentList.Add("--hd-pack");    psi.ArgumentList.Add(game.HdPackPath);
+                    psi.ArgumentList.Add("--hd-pack-on"); psi.ArgumentList.Add(game.HdPackEnabled ? "1" : "0");
                 }
                 if (!string.IsNullOrEmpty(loadStatePath))
                 {

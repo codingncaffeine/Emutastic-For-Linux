@@ -203,10 +203,42 @@ namespace Emutastic.Services
                     Trace.WriteLine($"[RA] Post-descriptor reload result={result} err={msg}");
                 };
                 rc_client_unload_game(_client);
+                BeginIdentifyAndLoad(_lastConsoleId, _lastRomPath!, _lastRomData,
+                    _reloadCallbackDelegate);
+            }
+        }
+
+        // When identifying from bytes (patched ROM-hack entries), the buffer is
+        // handed to rc_client, which RETAINS it in its hash iterator — retry
+        // paths can re-hash from an async server-response continuation. The pin
+        // must therefore outlive the call: held here until the next identify or
+        // Dispose, never freed pin-around-the-call.
+        private byte[]? _lastRomData;
+        private GCHandle _romDataPin;
+
+        private void FreeRomDataPin()
+        {
+            if (_romDataPin.IsAllocated) _romDataPin.Free();
+        }
+
+        private void BeginIdentifyAndLoad(uint consoleId, string romPath, byte[]? romData,
+            ClientCallbackFunc callback)
+        {
+            FreeRomDataPin();
+            if (romData != null)
+            {
+                _romDataPin = GCHandle.Alloc(romData, GCHandleType.Pinned);
                 rc_client_begin_identify_and_load_game(
-                    _client, _lastConsoleId, _lastRomPath,
+                    _client, consoleId, romPath,
+                    _romDataPin.AddrOfPinnedObject(), (UIntPtr)romData.Length,
+                    callback, IntPtr.Zero);
+            }
+            else
+            {
+                rc_client_begin_identify_and_load_game(
+                    _client, consoleId, romPath,
                     IntPtr.Zero, UIntPtr.Zero,
-                    _reloadCallbackDelegate, IntPtr.Zero);
+                    callback, IntPtr.Zero);
             }
         }
 
@@ -323,10 +355,13 @@ namespace Emutastic.Services
         }
 
         /// <summary>
-        /// Identify and load a game by its ROM file path.
-        /// Blocks the calling thread until loading completes.
+        /// Identify and load a game by its ROM file path — or, when
+        /// <paramref name="romData"/> is provided, by those exact bytes (used for
+        /// ROM-hack entries: the hash must follow the PATCHED game, so hacks with
+        /// their own RA sets identify correctly and base-game sets are never
+        /// credited from modified code). Blocks until loading completes.
         /// </summary>
-        public (bool success, string? error) LoadGame(string romPath, uint consoleId)
+        public (bool success, string? error) LoadGame(string romPath, uint consoleId, byte[]? romData = null)
         {
             if (_client == IntPtr.Zero) return (false, "Client not initialized.");
 
@@ -334,6 +369,7 @@ namespace Emutastic.Services
             // SET_MEMORY_MAPS during the first frame, not during load).
             _lastRomPath = romPath;
             _lastConsoleId = consoleId;
+            _lastRomData = romData;
 
             bool completed = false;
             int resultCode = 0;
@@ -352,10 +388,7 @@ namespace Emutastic.Services
             // achievement addresses during load via the read memory callback.
             CacheMemoryRegions();
 
-            rc_client_begin_identify_and_load_game(
-                _client, consoleId, romPath,
-                IntPtr.Zero, UIntPtr.Zero,
-                loadCallback, IntPtr.Zero);
+            BeginIdentifyAndLoad(consoleId, romPath, romData, loadCallback);
 
             loadEvent.Wait(TimeSpan.FromSeconds(30));
 
@@ -860,6 +893,11 @@ namespace Emutastic.Services
                 try { rc_client_destroy(_client); } catch { }
                 _client = IntPtr.Zero;
             }
+
+            // Safe to release only after the native client is destroyed — its
+            // hash iterator may reference the pinned ROM buffer until then.
+            FreeRomDataPin();
+            _lastRomData = null;
 
             _core = null;
             GC.SuppressFinalize(this);

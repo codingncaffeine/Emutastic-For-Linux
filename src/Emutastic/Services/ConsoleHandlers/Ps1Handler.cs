@@ -1,4 +1,11 @@
+using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
+using Emutastic.Models;
 
 namespace Emutastic.Services.ConsoleHandlers
 {
@@ -10,20 +17,92 @@ namespace Emutastic.Services.ConsoleHandlers
     /// </summary>
     public class Ps1Handler : ConsoleHandlerBase
     {
-        private const uint RETRO_DEVICE_JOYPAD = 1;                  // original PSX digital pad — unambiguous, works in every non-analog game
-        private const uint RETRO_DEVICE_DUALSHOCK = (2 << 8) | 5;    // RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_ANALOG, 1) = 517 (Beetle PSX DualShock)
+        private const uint RETRO_DEVICE_JOYPAD    = 1;           // digital PlayStation Controller (SCPH-1080), reports SIO id 0x41
+        private const uint RETRO_DEVICE_DUALSHOCK = (2 << 8) | 5; // RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_ANALOG, 1) = 517, reports 0x73
+
+        private readonly Game? _game;
+
+        public Ps1Handler(Game? game = null) => _game = game;
 
         public override string ConsoleName => "PS1";
-        // Default to the digital pad: with the DualShock + analog-stick path the d-pad went dead
-        // (SOTN uncontrollable on both PSX cores) while plain-JOYPAD consoles like NES worked fine.
-        // The digital controller has no analog mode to shadow the d-pad. Analog can come back as an
-        // opt-in once the stick/d-pad interaction is sorted.
-        public override bool UsesAnalogStick => false;
+        public override bool UsesAnalogStick => true;
 
         public override void ConfigureControllerPorts(LibretroCore core)
         {
+            // Most PS1 games run best as a DualShock (d-pad + analog sticks). But
+            // pre-analog-era titles verify the pad type over serial I/O — some refuse
+            // to boot behind an "insert a standard controller" screen, others silently
+            // read no input at all — when the pad announces the analog id (0x73)
+            // instead of the original digital pad id (0x41). Those get a digital pad
+            // so they run; everyone else keeps the DualShock. Forcing digital on them
+            // costs nothing: by definition they have no analog features to lose.
+            // (This replaces the port's early always-digital workaround — the "dead
+            // d-pad" it papered over was these digital-only titles all along.)
+            bool digital = IsDigitalOnly(_game?.Title);
+            if (digital)
+                System.Diagnostics.Trace.WriteLine("[PS1] title requires the original digital pad — selecting it over the DualShock");
+            uint device = digital ? RETRO_DEVICE_JOYPAD : RETRO_DEVICE_DUALSHOCK;
             for (uint port = 0; port < 2; port++)
-                core.SetControllerPortDevice(port, RETRO_DEVICE_JOYPAD);
+                core.SetControllerPortDevice(port, device);
+        }
+
+        // The digital-pad-required table: SHA-1 hashes (lowercase hex) of normalized
+        // titles, one per line, embedded at build time. Generated offline from a
+        // community-maintained controller-compatibility database covering the full
+        // PS1 library — every entry that does not list analog-pad support is included.
+        // Hashes rather than plaintext so the table stays an opaque compatibility
+        // artifact; the generator script lives in the local build notes.
+        private static readonly Lazy<HashSet<string>> DigitalOnlyTitleHashes = new(LoadDigitalOnlyTitleHashes);
+
+        private static HashSet<string> LoadDigitalOnlyTitleHashes()
+        {
+            var set = new HashSet<string>(StringComparer.Ordinal);
+            try
+            {
+                using var stream = Assembly.GetExecutingAssembly()
+                    .GetManifestResourceStream("Emutastic.Data.ps1_digital_only.txt");
+                if (stream != null)
+                {
+                    using var reader = new StreamReader(stream, Encoding.UTF8);
+                    string? line;
+                    while ((line = reader.ReadLine()) != null)
+                    {
+                        line = line.Trim();
+                        if (line.Length == 40) set.Add(line);
+                    }
+                }
+            }
+            catch { /* fall through: empty set below */ }
+            if (set.Count == 0)
+                System.Diagnostics.Trace.WriteLine("[PS1] digital-pad table missing or empty — every title keeps the DualShock");
+            return set;
+        }
+
+        private static bool IsDigitalOnly(string? title)
+        {
+            if (string.IsNullOrEmpty(title)) return false;
+            string normalized = NormalizeTitle(title);
+            if (normalized.Length == 0) return false;
+            string hash = Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant();
+            return DigitalOnlyTitleHashes.Value.Contains(hash);
+        }
+
+        // Lowercase, drop (parenthetical) / [bracketed] tags (region, dump flags, disc
+        // numbers), reduce the rest to alphanumeric words, collapse whitespace. So
+        // "My Game - The Sequel (USA) (Disc 1)" -> "my game the sequel". Must stay in
+        // lockstep with the table generator's normalization.
+        private static string NormalizeTitle(string title)
+        {
+            var sb = new StringBuilder(title.Length);
+            int depth = 0;
+            foreach (char c in title)
+            {
+                if (c == '(' || c == '[') { depth++; continue; }
+                if (c == ')' || c == ']') { if (depth > 0) depth--; continue; }
+                if (depth > 0) continue;
+                sb.Append(char.IsLetterOrDigit(c) ? char.ToLowerInvariant(c) : ' ');
+            }
+            return string.Join(' ', sb.ToString().Split(' ', StringSplitOptions.RemoveEmptyEntries));
         }
 
         // Request OpenGL Core context for Beetle PSX HW. The Vulkan path was

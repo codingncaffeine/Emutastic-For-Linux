@@ -16,10 +16,13 @@ namespace Emutastic.Services
         {
             { "NES",         new[] { "nestopia_libretro.so",
                                      "quicknes_libretro.so",
-                                     "fceumm_libretro.so"            }},
-            { "FDS",         new[] { "nestopia_libretro.so"            }},
+                                     "fceumm_libretro.so",
+                                     "mesen_libretro.so"             }},
+            { "FDS",         new[] { "nestopia_libretro.so",
+                                     "mesen_libretro.so"             }},
             { "SNES",        new[] { "snes9x_libretro.so",
-                                     "bsnes_libretro.so"               }},
+                                     "bsnes_libretro.so",
+                                     "bsnes_hd_beta_libretro.so"       }},
             // mupen64plus_next first: parallel_n64 under-produces audio through the SDL3 path on
             // Linux (rough/garbled at correct speed); mupen64plus_next is clean. Linux-specific
             // default — Windows keeps parallel_n64 (its WASAPI path handles parallel_n64 fine).
@@ -356,6 +359,21 @@ namespace Emutastic.Services
                             $"[CoreManager] Legacy DAT-routed arcade: '{romName}' → {routedDll}");
                         return routedPath;
                     }
+                }
+            }
+
+            // 2.5. Enhancement mods: a game with an ACTIVE Mesen HD mod on disk
+            //      routes to the Mesen core — filesystem-based like the overlay
+            //      picker, so packs installed by older builds or by hand route
+            //      correctly even when no per-game PreferredCore was persisted.
+            if (HdPackService.IsMesenConsole(game.Console) && HdPackService.WantsPackCore(game))
+            {
+                string mesenPath = Path.Combine(_coresFolder, "mesen_libretro.so");
+                if (File.Exists(mesenPath))
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[CoreManager] Active HD mod → Mesen for '{game.Title}'");
+                    return mesenPath;
                 }
             }
 

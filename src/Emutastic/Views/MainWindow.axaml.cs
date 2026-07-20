@@ -1832,9 +1832,31 @@ public partial class MainWindow : Window
         if (CoreManager.ConsoleCoreMap.TryGetValue(game.Console ?? "", out var cheatCores) && cheatCores.Length > 0
             && CheatSupport.Lookup(cheatCores[0]).Level != CheatSupportLevel.NotSupported)
             items.Add(MenuAction("🎮  Cheats…", () => RunGuarded(() => new CheatsManagerWindow(game).ShowDialog(this))));
-        // Apply ROM Hack (cartridge systems only; base ROMs, not already-hacked entries).
-        if (!game.HasPatch && RomPatcher.SupportedConsoles.Contains(game.Console ?? ""))
-            items.Add(MenuAction("🧩  Apply ROM Hack…", () => RunGuarded(() => ApplyRomHackAsync(game))));
+        // ── Mods: ROM hack patches + enhancement packs, one entry point ──
+        // A single item covers whatever this console supports; the handler
+        // routes by what the user picked (.ips/.bps/.ups patch, a zip that
+        // CONTAINS a patch, a Mesen HD pack archive, or a texture pack).
+        // Hidden on hacked entries (they're their own games and don't stack).
+        // Mesen consoles keep the item when packs are installed — the mod
+        // library holds several and the game card picks the active one;
+        // single-slot texture consoles hide it once a pack is in.
+        {
+            bool canPatch = RomPatcher.SupportedConsoles.Contains(game.Console ?? "");
+            bool canMesen = HdPackService.IsMesenConsole(game.Console ?? "");
+            bool canTex   = HdPackService.IsTexturePackConsole(game.Console ?? "") && !game.HasHdPack;
+            if (!game.HasPatch && (canPatch || canMesen || canTex))
+            {
+                string label = (canPatch, canMesen, canTex) switch
+                {
+                    (true,  true,  _)     => "🧩  Apply ROM Hack / HD Pack…",
+                    (true,  false, true)  => "🧩  Apply ROM Hack / Texture Pack…",
+                    (true,  false, false) => "🧩  Apply ROM Hack…",
+                    (false, true,  _)     => "🖼  Install HD Pack…",
+                    _                     => "🖼  Install Texture Pack…",
+                };
+                items.Add(MenuAction(label, () => RunGuarded(() => AddModAsync(game, canPatch, canMesen, canTex))));
+            }
+        }
 
         items.Add(MenuAction("📁  Show in Files", () =>
         {
@@ -1919,7 +1941,8 @@ public partial class MainWindow : Window
             string? newTitle = await new RenameWindow(game.Title).ShowDialog<string?>(this);
             if (string.IsNullOrEmpty(newTitle)) return;
             game.Title = newTitle;
-            await Task.Run(() => _db!.UpdateTitle(game.Id, newTitle));
+            game.TitleLocked = true;
+            await Task.Run(() => _db!.UpdateTitle(game.Id, newTitle, lockTitle: true));
             _vm!.RefreshGame(game);
         })));
 
@@ -1944,27 +1967,151 @@ public partial class MainWindow : Window
         catch (Exception ex) { _vm?.SetStatus($"Action failed: {ex.Message}", autoClear: true); }
     }
 
+    // One entry point for all game mods. Routes the picked file: a bare
+    // .ips/.bps/.ups goes to the ROM-hack flow; an archive is inspected —
+    // Mesen HD pack (hires.txt) → pack install, an archive with exactly one
+    // patch inside (how hacks are usually distributed) → ROM-hack flow,
+    // anything else on a texture-pack console → texture pack install.
+    private async Task AddModAsync(Game game, bool canPatch, bool canMesen, bool canTex)
+    {
+        var patchType = new FilePickerFileType("ROM hack patches") { Patterns = new[] { "*.ips", "*.bps", "*.ups" } };
+        var packType  = new FilePickerFileType("Pack archives") { Patterns = new[] { "*.zip", "*.7z", "*.rar", "*.hdn" } };
+        var types = new List<FilePickerFileType>();
+        if (canPatch && (canMesen || canTex))
+            types.Add(new FilePickerFileType("Mods") { Patterns = new[] { "*.ips", "*.bps", "*.ups", "*.zip", "*.7z", "*.rar", "*.hdn" } });
+        if (canPatch) types.Add(patchType);
+        if (canMesen || canTex) types.Add(packType);
+        types.Add(new FilePickerFileType("All files") { Patterns = new[] { "*" } });
+
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = canPatch ? "Select a ROM hack patch or pack archive" : "Select a pack archive",
+            AllowMultiple = false,
+            FileTypeFilter = types,
+        });
+        string? picked = files.Count > 0 ? files[0].TryGetLocalPath() : null;
+        if (string.IsNullOrEmpty(picked)) return;
+
+        if (RomPatcher.IsPatchExtension(picked))
+        {
+            if (!canPatch)
+            {
+                await new ConfirmDialog("ROM Hack", $"ROM hack patches aren't supported for {game.Console}.",
+                    "OK", infoOnly: true).ShowDialog<bool>(this);
+                return;
+            }
+            await ApplyRomHackFromFileAsync(game, picked);
+            return;
+        }
+
+        string ext = System.IO.Path.GetExtension(picked).ToLowerInvariant();
+        bool isArchive = ext is ".zip" or ".7z" or ".rar" or ".hdn";
+        if (!isArchive)
+        {
+            await new ConfirmDialog("Mods",
+                "That file isn't a patch (.ips/.bps/.ups) or a pack archive (.zip/.7z/.rar/.hdn).",
+                "OK", infoOnly: true).ShowDialog<bool>(this);
+            return;
+        }
+
+        // Mesen HD pack archive?
+        if (canMesen && await Task.Run(() => HdPackService.IsMesenHdPackArchive(picked)))
+        {
+            await InstallPackAsync(game, picked, mesen: true);
+            return;
+        }
+
+        // Archive containing a ROM-hack patch? (typical hack download: patch + readme)
+        if (canPatch)
+        {
+            var (patchFile, patchError) = await Task.Run(() => ExtractSinglePatchFromArchive(picked));
+            if (patchFile != null)
+            {
+                await ApplyRomHackFromFileAsync(game, patchFile,
+                    titleSeed: System.IO.Path.GetFileNameWithoutExtension(picked));
+                return;
+            }
+            if (patchError != null)
+            {
+                await new ConfirmDialog("ROM Hack", patchError, "OK", infoOnly: true).ShowDialog<bool>(this);
+                return;
+            }
+            // No patches inside — fall through to texture pack if applicable.
+        }
+
+        if (canTex)
+        {
+            await InstallPackAsync(game, picked, mesen: false);
+            return;
+        }
+
+        await new ConfirmDialog("Mods",
+            "Nothing usable found in that archive — no patch and no recognizable pack.",
+            "OK", infoOnly: true).ShowDialog<bool>(this);
+    }
+
+    // Extracts the archive's single .ips/.bps/.ups to a temp file. Returns
+    // (path, null) on success, (null, error) when the archive holds several
+    // patches (variant packs — the user must pick one), (null, null) when it
+    // holds none.
+    private static (string? patchFile, string? error) ExtractSinglePatchFromArchive(string archivePath)
+    {
+        try
+        {
+            using var archive = Services.Archives.RomArchive.Open(archivePath);
+            var patches = archive.Entries
+                .Where(e => !e.IsDirectory && e.Key != null &&
+                            RomPatcher.IsPatchExtension(e.Key))
+                .ToList();
+            if (patches.Count == 0) return (null, null);
+            if (patches.Count > 1)
+                return (null, $"This archive contains {patches.Count} patches (likely variants). Extract it and apply the one you want.");
+
+            var entry = patches[0];
+            string dest = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                "Emutastic-" + System.IO.Path.GetFileName(entry.Key!.Replace('\\', '/').TrimStart('/').Split('/')[^1]));
+            using (var src = entry.OpenEntryStream())
+            using (var dst = System.IO.File.Create(dest))
+                src.CopyTo(dst);
+            return (dest, null);
+        }
+        catch (Exception ex)
+        {
+            return (null, $"Couldn't read the archive: {ex.Message}");
+        }
+    }
+
+    // Install a Mesen HD pack or texture pack for a specific game (the
+    // deterministic path — the user told us the game) and surface the result.
+    private async Task InstallPackAsync(Game game, string archivePath, bool mesen)
+    {
+        _vm!.SetStatus($"Installing pack for {game.Title}…");
+        var library = await Task.Run(() => _db!.GetAllGames());
+        var result = mesen
+            ? await HdPackService.InstallMesenPackAsync(archivePath, _db!, library, game)
+            : await HdPackService.InstallTexturePackAsync(archivePath, _db!, library, game);
+
+        if (!result.Ok)
+        {
+            _vm.SetStatus("Pack not installed", autoClear: true);
+            await new ConfirmDialog(mesen ? "HD Pack" : "Texture Pack", result.Message,
+                "OK", infoOnly: true).ShowDialog<bool>(this);
+            return;
+        }
+
+        await Task.Run(() => _vm.Reload());
+        await _vm.FilterGamesAsync();
+        _vm.SetStatus(result.Message, autoClear: true);
+    }
+
     /// <summary>
-    /// "Apply ROM Hack…" (port of upstream): pick an IPS/BPS/UPS patch, validate it against the
+    /// ROM-hack flow (port of upstream): validate the picked IPS/BPS/UPS patch against the
     /// base ROM off the UI thread (BPS/UPS verify the source checksum), name the hack, copy the
     /// patch into RomPatches/{Console}/, and add the result as its own library entry. The base
     /// ROM file is never modified — the patch is applied in memory at launch (LoadGame).
     /// </summary>
-    private async Task ApplyRomHackAsync(Game baseGame)
+    private async Task ApplyRomHackFromFileAsync(Game baseGame, string patchPicked, string? titleSeed = null)
     {
-        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
-        {
-            Title = "Select a ROM hack patch",
-            AllowMultiple = false,
-            FileTypeFilter = new[]
-            {
-                new FilePickerFileType("ROM hack patches") { Patterns = new[] { "*.ips", "*.bps", "*.ups" } },
-                new FilePickerFileType("All files") { Patterns = new[] { "*" } },
-            },
-        });
-        string? patchPicked = files.Count > 0 ? files[0].TryGetLocalPath() : null;
-        if (string.IsNullOrEmpty(patchPicked)) return;
-
         if (!RomPatcher.IsPatchExtension(patchPicked))
         {
             await new ConfirmDialog("ROM Hack", "That file isn't an IPS, BPS, or UPS patch.",
@@ -2010,8 +2157,9 @@ public partial class MainWindow : Window
             return;
         }
 
-        // Name the hack (default to the patch's file name).
-        string defaultTitle = System.IO.Path.GetFileNameWithoutExtension(patchPicked);
+        // Name the hack (default to the download's name — the archive stem
+        // when the patch came out of a zip, else the patch's file name).
+        string defaultTitle = titleSeed ?? System.IO.Path.GetFileNameWithoutExtension(patchPicked);
         string? newTitle = await new RenameWindow(defaultTitle).ShowDialog<string?>(this);
         if (newTitle == null) { _vm.SetStatus("ROM hack not applied", autoClear: true); return; }
         string hackTitle = string.IsNullOrWhiteSpace(newTitle) ? defaultTitle : newTitle;

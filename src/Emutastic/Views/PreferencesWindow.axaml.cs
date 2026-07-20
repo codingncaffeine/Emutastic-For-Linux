@@ -2037,6 +2037,16 @@ public partial class PreferencesWindow : Window
             if (extractedHere > 0) return; // else fall through (archive IS the BIOS, e.g. neogeo.zip)
         }
 
+        // Mesen HD packs land here when no BIOS entry matched — they belong
+        // to the library import flow (which matches them to their game and
+        // marks it), not the System folder. Point the user there.
+        if (isArchive && Services.HdPackService.IsMesenHdPackArchive(src))
+        {
+            messages.Add($"ℹ {srcName}: this is a Mesen HD pack, not a BIOS — drop it on the main library window (or use the game's mods menu) to install it.");
+            skipped++;
+            return;
+        }
+
         string? fileMd5 = anyHashed ? ComputeMd5(src) : null;
         var fileMatch = Services.KnownBios.MatchKnownBios(srcName, size, fileMd5, () => System.IO.File.OpenRead(src));
         if (fileMatch == null) { messages.Add($"• {srcName}: not a recognized BIOS"); skipped++; return; }

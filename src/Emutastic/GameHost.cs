@@ -47,6 +47,7 @@ namespace Emutastic
             string? rom  = args.Length > 2 ? args[2] : null;
             string console = "", resultsPath = "";
             string saveDir = "", gameTitle = "", romHash = "", loadStatePath = "", patchPath = "", turboSpec = "", winSize = "";
+            string hdPackPath = ""; bool hdPackOn = true;
             int gameId = -1;
             bool fullscreen = false, parentStdin = false;
             int prewarmSeconds = 0;   // >0 = shader pre-warm pass: run the attract/boot loop, then auto-quit
@@ -65,6 +66,10 @@ namespace Emutastic
                     case "--load-state":   if (i + 1 < args.Length) loadStatePath = args[++i]; break;
                     // ROM-hack patch (IPS/BPS/UPS) — applied to the ROM buffer in memory at load.
                     case "--patch":        if (i + 1 < args.Length) patchPath = args[++i]; break;
+                    // Enhancement-pack state for texture consoles (DB-only per-game toggle;
+                    // Mesen-console mods are read from the shared filesystem instead).
+                    case "--hd-pack":      if (i + 1 < args.Length) hdPackPath = args[++i]; break;
+                    case "--hd-pack-on":   if (i + 1 < args.Length) hdPackOn = args[++i] != "0"; break;
                     // Per-game turbo sets ("p0csv;p1csv;p2csv;p3csv") — this process reads no config.
                     case "--turbo":        if (i + 1 < args.Length) turboSpec = args[++i]; break;
                     // Per-game remembered window size ("WxH"), saved at the last session's end.
@@ -137,7 +142,20 @@ namespace Emutastic
             if (onWayland && !forceX11Gl && Environment.GetEnvironmentVariable("EMUTASTIC_GL_TOPLEVEL") == null)
                 Environment.SetEnvironmentVariable("EMUTASTIC_GL_TOPLEVEL", "1");
 
-            var session = new EmulatorSession(core, rom, console)
+            // The host has no DB — rebuild just enough Game for per-title/per-ROM handler
+            // decisions (PS1 digital-vs-DualShock, HD-mod lookups keyed by ROM stem) from
+            // the args the parent already hands us. HdPackEnabled/HdPackPath stay at their
+            // defaults: Mesen-console pack state is read from the filesystem, which the
+            // host shares with the library.
+            var hostGame = string.IsNullOrEmpty(gameTitle) ? null : new Models.Game
+            {
+                Title = gameTitle,
+                Console = console,
+                RomPath = rom,   // non-null: the missing/invalid guard above already bailed
+                HdPackPath = hdPackPath,
+                HdPackEnabled = hdPackOn,
+            };
+            var session = new EmulatorSession(core, rom, console, hostGame)
             {
                 SaveStateDir  = saveDir,
                 SaveGameTitle = gameTitle,

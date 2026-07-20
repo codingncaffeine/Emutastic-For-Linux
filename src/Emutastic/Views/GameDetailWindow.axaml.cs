@@ -351,7 +351,7 @@ public partial class GameDetailWindow : Window
     }
 
     // ── Actions ──
-    private void PlayButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    private async void PlayButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         var coreManager = new CoreManager(App.Configuration!);
         string? corePath = coreManager.GetCorePathForGame(_game);
@@ -359,6 +359,27 @@ public partial class GameDetailWindow : Window
         {
             _ = Info("Missing Core", $"No emulator core installed for {_game.Console}. Download one in Preferences → Cores.");
             return;
+        }
+
+        // Games with an active enhancement pack/mod are pinned to a
+        // pack-capable core (e.g. Mesen). When that core isn't installed,
+        // GetCorePathForGame silently falls back to the console default and
+        // the pack wouldn't render — ask first. (Mod set to None / pack
+        // toggled off per-game → nothing to warn about.)
+        if (Services.HdPackService.WantsPackCore(_game))
+        {
+            string preferredSo = Services.HdPackService.PreferredCoreFor(_game.Console ?? "");
+            if (preferredSo.Length > 0 &&
+                !System.IO.File.Exists(System.IO.Path.Combine(AppPaths.GetCoresFolder(), preferredSo)))
+            {
+                string coreLabel = System.IO.Path.GetFileNameWithoutExtension(preferredSo)
+                    .Replace("_libretro", "");
+                bool playAnyway = await new ConfirmDialog("HD Pack",
+                    $"This entry uses an HD pack that needs the '{coreLabel}' core, which isn't installed yet.\n\n" +
+                    "Install it from Preferences → Cores, or play without the HD pack for now.",
+                    "Play without HD pack").ShowDialog<bool>(this);
+                if (!playAnyway) return;
+            }
         }
         string romPath = AppPaths.FromStoragePath(_game.RomPath);
         if (!System.IO.File.Exists(romPath))
@@ -421,7 +442,8 @@ public partial class GameDetailWindow : Window
             string? newTitle = await new RenameWindow(_game.Title).ShowDialog<string?>(this);
             if (string.IsNullOrWhiteSpace(newTitle)) return;
             _game.Title = newTitle;
-            await Task.Run(() => _db.UpdateTitle(_game.Id, _game.Title));
+            _game.TitleLocked = true;
+            await Task.Run(() => _db.UpdateTitle(_game.Id, _game.Title, lockTitle: true));
             Get<TextBlock>("GameTitle").Text = _game.Title;
             Get<TextBlock>("ArtPlaceholderText").Text = _game.Title;
         };
@@ -447,6 +469,70 @@ public partial class GameDetailWindow : Window
             menu.Items.Add(cheats);
         }
 
+        // HD mods: the active pack is chosen HERE, before launch — never
+        // mid-session (flipping packs at runtime crashes the stock Mesen
+        // core; the next game start simply boots with the chosen mod).
+        if (Services.HdPackService.IsMesenConsole(_game.Console ?? ""))
+        {
+            var (active, all) = Services.HdPackService.ListMods(_game);
+            if (all.Count > 0)
+            {
+                var hdRoot = new MenuItem { Header = "HD Mod" };
+                var none = new MenuItem { Header = (active == null ? "✓ " : "    ") + "None" };
+                none.Click += (_, _) => SetHdMod(null);
+                hdRoot.Items.Add(none);
+                foreach (var mod in all)
+                {
+                    // Mesen 2 packs (format v107+) are silently ignored by the
+                    // classic core — show them, but say why they can't be used.
+                    int ver = Services.HdPackService.GetModVersion(_game, mod);
+                    bool unsupported = ver > Services.HdPackService.MaxSupportedPackVersion;
+                    bool isActive = string.Equals(mod, active, StringComparison.OrdinalIgnoreCase);
+                    var item = new MenuItem
+                    {
+                        Header = (isActive ? "✓ " : "    ") +
+                                 (unsupported ? $"{mod}  (needs Mesen 2 — unsupported)" : mod),
+                        IsEnabled = !unsupported,
+                    };
+                    string captured = mod;
+                    item.Click += (_, _) => SetHdMod(captured);
+                    hdRoot.Items.Add(item);
+                }
+
+                hdRoot.Items.Add(new Separator());
+                var renameRoot = new MenuItem { Header = "Rename Mod" };
+                foreach (var mod in all)
+                {
+                    var r = new MenuItem { Header = mod };
+                    string captured = mod;
+                    r.Click += async (_, _) =>
+                    {
+                        string? newName = await new RenameWindow(captured).ShowDialog<string?>(this);
+                        if (!string.IsNullOrWhiteSpace(newName)
+                            && !string.Equals(newName, captured, StringComparison.Ordinal))
+                        {
+                            if (!Services.HdPackService.RenameMod(_game, captured, newName))
+                                await Info("HD Mod",
+                                    "Couldn't rename the mod — the name may already exist, or its files are in use.");
+                        }
+                    };
+                    renameRoot.Items.Add(r);
+                }
+                hdRoot.Items.Add(renameRoot);
+                menu.Items.Add(hdRoot);
+            }
+        }
+        else if (Services.HdPackService.IsTexturePackConsole(_game.Console ?? "") && _game.HasHdPack)
+        {
+            var texToggle = new MenuItem { Header = (_game.HdPackEnabled ? "✓ " : "    ") + "Texture Pack" };
+            texToggle.Click += (_, _) =>
+            {
+                _game.HdPackEnabled = !_game.HdPackEnabled;
+                _db.UpdateHdPackEnabled(_game.Id, _game.HdPackEnabled);
+            };
+            menu.Items.Add(texToggle);
+        }
+
         menu.Items.Add(new Separator());
 
         var remove = new MenuItem { Header = "Remove from Library" };
@@ -466,6 +552,17 @@ public partial class GameDetailWindow : Window
 
     private Task Info(string title, string message) =>
         new ConfirmDialog(title, message, "OK", infoOnly: true).ShowDialog<bool>(this);
+
+    // Applies the chosen HD mod on disk (folder rename). Off the UI thread —
+    // packs can be large. Fails cleanly if the game is running and holds
+    // pack files open (music streams); the user closes it and re-picks.
+    private async void SetHdMod(string? modName)
+    {
+        bool ok = await Task.Run(() => Services.HdPackService.ActivateMod(_game, modName));
+        if (!ok)
+            await Info("HD Mod",
+                "Couldn't switch the HD mod — if the game is running, close it and try again.");
+    }
 
     // ════════════════════════════════════════════════════════════════════════
     //  A8e — RetroAchievements section (port of upstream's detail-card RA pane)

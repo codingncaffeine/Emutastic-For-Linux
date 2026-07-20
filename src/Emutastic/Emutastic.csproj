@@ -19,10 +19,15 @@
          AppContext.BaseDirectory/Assets/emutv-themes/** — they must be loose files next to the
          app, not embedded avares resources, so exclude them from the AvaloniaResource glob and
          ship them as Content (matches upstream's Content/CopyToOutputDirectory model). -->
-    <AvaloniaResource Include="Assets\**" Exclude="Assets\emutv-themes\**" />
+    <AvaloniaResource Include="Assets\**" Exclude="Assets\emutv-themes\**;Assets\data\**" />
     <Content Include="Assets\emutv-themes\**\*" Link="Assets\emutv-themes\%(RecursiveDir)%(Filename)%(Extension)">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <!-- PS1 digital-pad compatibility table: SHA-1 hashes of normalized titles that
+         require the original digital controller. Embedded (manifest resource, same
+         LogicalName as upstream) so Ps1Handler's loader stays identical; excluded from
+         the AvaloniaResource glob above so it isn't packed twice. -->
+    <EmbeddedResource Include="Assets\data\ps1_digital_only.txt" LogicalName="Emutastic.Data.ps1_digital_only.txt" />
     <!-- Also copy the HUD power glyph as a loose file so the game-host's own-toplevel OSD (no Avalonia
          asset loader in that process) can Skia-decode it from disk for the overlay. -->
     <None Include="Assets\buttons\powerbutton.png" Link="powerbutton.png" CopyToOutputDirectory="PreserveNewest" />
