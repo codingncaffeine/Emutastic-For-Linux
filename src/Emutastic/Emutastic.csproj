@@ -9,8 +9,8 @@
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- The Linux port's own release line (pre-1.0 while features stabilize against
-         upstream 1.7.x). Surfaced in Preferences → About and as the release tag. -->
-    <Version>0.9.1</Version>
+         upstream 1.8.x). Surfaced in Preferences → About and as the release tag. -->
+    <Version>0.9.2</Version>
   </PropertyGroup>
 
   <ItemGroup>
