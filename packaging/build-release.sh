@@ -72,9 +72,9 @@ Section: games
 Priority: optional
 Architecture: amd64
 Installed-Size: $INSTALLED_KB
-Depends: libc6, libgcc-s1, libstdc++6, libicu76 | libicu74 | libicu72, libx11-6, libfontconfig1, libegl1, libgl1, libsdl3-0, libwayland-client0, libwayland-egl1, libpng16-16t64 | libpng16-16, ffmpeg
+Depends: libc6, libgcc-s1, libstdc++6, libicu76 | libicu74 | libicu72, libx11-6, libxext6, libxi6, libxrandr2, libxcursor1, libxfixes3, libice6, libsm6, libfontconfig1, libegl1, libgl1, libsdl3-0, libwayland-client0, libwayland-egl1, libpng16-16t64 | libpng16-16, ffmpeg
 Recommends: libvlc5, vlc-plugin-base
-Maintainer: Emutastic for Linux <stragee@gmail.com>
+Maintainer: codingncaffeine <codingncaffeine@users.noreply.github.com>
 Description: Retro game library and emulator frontend
  Linux port of the Emutastic libretro frontend: game library, save states,
  screenshots, recordings, cheats, and RetroAchievements.
