@@ -3,17 +3,22 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Avalonia.Threading;
 using Emutastic.Emulator;
+using Emutastic.Platform;
 
 namespace Emutastic.Services
 {
     /// <summary>
     /// SDL3-native controller manager for the Preferences → Controls panel (replaces the upstream
-    /// XInput ControllerManager). Polls connected gamepads on a UI DispatcherTimer and raises
+    /// XInput ControllerManager). Polls connected controllers on a UI DispatcherTimer and raises
     /// <see cref="ButtonChanged"/> on press/release edges so the panel can "press a button to bind".
+    ///
+    /// Devices come from <see cref="SdlDeviceSet"/>, the same layer the game session reads through,
+    /// so the ids this panel offers ("product name#occurrence") are the ids the session binds to —
+    /// and a joystick SDL has no gamepad mapping for is listed and capturable here, not invisible.
     ///
     /// Thread model (per audit): SDL gamepad pumping isn't multi-thread safe, and the emu loop
     /// (EmulatorSession) pumps on its own thread while a game runs. So this manager only calls
-    /// SDL_PumpEvents/UpdateGamepads when <see cref="EmulatorSession.AnyActive"/> is false; while a
+    /// SDL_PumpEvents/Update* when <see cref="EmulatorSession.AnyActive"/> is false; while a
     /// game is live it just reads the state the emu loop already pumped. UI-thread timer ⇒ the
     /// panel's capture handlers need no marshaling.
     ///
@@ -24,23 +29,13 @@ namespace Emutastic.Services
     /// </summary>
     public sealed class ControllerManager : IDisposable
     {
-        const uint SDL_INIT_GAMEPAD = 0x00002000;
-        const int BUTTON_COUNT = 21;         // SDL_GAMEPAD_BUTTON_COUNT (SDL3)
-        const int AXIS_LEFTX = 0, AXIS_LEFTY = 1, AXIS_RIGHTX = 2, AXIS_RIGHTY = 3, AXIS_LTRIG = 4, AXIS_RTRIG = 5;
-        const short STICK_THRESHOLD = 18000;
-        const short TRIG_THRESHOLD  = 12000;
+        const uint SDL_INIT_JOYSTICK = 0x00000200, SDL_INIT_GAMEPAD = 0x00002000;
 
         [DllImport("SDL3")] [return: MarshalAs(UnmanagedType.I1)] static extern bool SDL_InitSubSystem(uint flags);
         [DllImport("SDL3")] static extern void SDL_QuitSubSystem(uint flags);
         [DllImport("SDL3")] static extern void SDL_PumpEvents();
+        [DllImport("SDL3")] static extern void SDL_UpdateJoysticks();
         [DllImport("SDL3")] static extern void SDL_UpdateGamepads();
-        [DllImport("SDL3")] static extern IntPtr SDL_GetGamepads(out int count);
-        [DllImport("SDL3")] static extern IntPtr SDL_OpenGamepad(uint instanceId);
-        [DllImport("SDL3")] static extern void SDL_CloseGamepad(IntPtr gamepad);
-        [DllImport("SDL3")] [return: MarshalAs(UnmanagedType.I1)] static extern bool SDL_GetGamepadButton(IntPtr gamepad, int button);
-        [DllImport("SDL3")] static extern short SDL_GetGamepadAxis(IntPtr gamepad, int axis);
-        [DllImport("SDL3")] static extern IntPtr SDL_GetGamepadName(IntPtr gamepad);
-        [DllImport("SDL3")] static extern void SDL_free(IntPtr mem);
 
         /// <summary>Fires on a control press/release edge while <see cref="RawMode"/> is on:
         /// (raw control id, isPressed). Used by the Controls panel's bind capture.</summary>
@@ -52,7 +47,7 @@ namespace Emutastic.Services
         /// <summary>When true, poll edges are reported via <see cref="ButtonChanged"/> (capture mode).</summary>
         public bool RawMode { get; set; }
 
-        public bool IsConnected => _pads.Count > 0;
+        public bool IsConnected => _set.Devices.Count > 0;
 
         // ── EmuTV raw-poll adapter ───────────────────────────────────────────────
         // EmuTV polls button state continuously (it does NOT use the capture/ButtonChanged flow), so we
@@ -85,24 +80,24 @@ namespace Emutastic.Services
         /// threshold on the polled pad. Lets EmuTV nav accept stick input alongside the d-pad.</summary>
         public bool GetButtonState(uint analogId) => analogId switch
         {
-            ANALOG_LEFT_LEFT   => _lx < -STICK_THRESHOLD,
-            ANALOG_LEFT_RIGHT  => _lx >  STICK_THRESHOLD,
-            ANALOG_LEFT_UP     => _ly < -STICK_THRESHOLD,
-            ANALOG_LEFT_DOWN   => _ly >  STICK_THRESHOLD,
-            ANALOG_RIGHT_LEFT  => _rx < -STICK_THRESHOLD,
-            ANALOG_RIGHT_RIGHT => _rx >  STICK_THRESHOLD,
-            ANALOG_RIGHT_UP    => _ry < -STICK_THRESHOLD,
-            ANALOG_RIGHT_DOWN  => _ry >  STICK_THRESHOLD,
+            ANALOG_LEFT_LEFT   => _lx < -SdlDeviceSet.STICK_THRESHOLD,
+            ANALOG_LEFT_RIGHT  => _lx >  SdlDeviceSet.STICK_THRESHOLD,
+            ANALOG_LEFT_UP     => _ly < -SdlDeviceSet.STICK_THRESHOLD,
+            ANALOG_LEFT_DOWN   => _ly >  SdlDeviceSet.STICK_THRESHOLD,
+            ANALOG_RIGHT_LEFT  => _rx < -SdlDeviceSet.STICK_THRESHOLD,
+            ANALOG_RIGHT_RIGHT => _rx >  SdlDeviceSet.STICK_THRESHOLD,
+            ANALOG_RIGHT_UP    => _ry < -SdlDeviceSet.STICK_THRESHOLD,
+            ANALOG_RIGHT_DOWN  => _ry >  SdlDeviceSet.STICK_THRESHOLD,
             _ => false,
         };
 
         /// <summary>True while a trigger is pressed past the threshold on the polled pad.</summary>
-        public bool IsRawTriggerDown(bool rightTrigger) => (rightTrigger ? _rt : _lt) > TRIG_THRESHOLD;
+        public bool IsRawTriggerDown(bool rightTrigger) => (rightTrigger ? _rt : _lt) > SdlDeviceSet.TRIG_THRESHOLD;
 
         /// <summary>Raw snapshot, for chord diagnostics.</summary>
         public string RawDebug =>
-            $"pads={_pads.Count} btns=0x{_lastRawButtons:X4} L3={(_lastRawButtons & XI_LTHUMB) != 0} " +
-            $"R3={(_lastRawButtons & XI_RTHUMB) != 0} lt={_lt} rt={_rt} chord={IsTvModeChordHeld}";
+            $"pads={_set.Devices.Count} active={_activeDeviceId ?? "(first)"} btns=0x{_lastRawButtons:X4} " +
+            $"L3={(_lastRawButtons & XI_LTHUMB) != 0} R3={(_lastRawButtons & XI_RTHUMB) != 0} lt={_lt} rt={_rt} chord={IsTvModeChordHeld}";
 
         /// <summary>The EmuTV launch chord — both triggers + both thumbsticks clicked (L2+R2+L3+R3).
         /// Chosen to avoid colliding with normal in-game input and desktop gestures.</summary>
@@ -113,85 +108,89 @@ namespace Emutastic.Services
         // Refresh the raw snapshot from the active pad (or the first connected one) every poll tick.
         private void UpdateRawSnapshot()
         {
-            int dev = (_activeDevice >= 0 && _activeDevice < _pads.Count) ? _activeDevice : 0;
-            if (dev < 0 || dev >= _pads.Count) { _lastRawButtons = 0; _lx = _ly = _rx = _ry = _lt = _rt = 0; return; }
-            IntPtr h = _pads[dev].handle;
+            var d = ActiveDevice();
+            if (d == null) { _lastRawButtons = 0; _lx = _ly = _rx = _ry = _lt = _rt = 0; return; }
             ushort raw = 0;
-            if (SDL_GetGamepadButton(h, 0))  raw |= XI_A;          // SOUTH
-            if (SDL_GetGamepadButton(h, 1))  raw |= XI_B;          // EAST
-            if (SDL_GetGamepadButton(h, 2))  raw |= XI_X;          // WEST
-            if (SDL_GetGamepadButton(h, 3))  raw |= XI_Y;          // NORTH
-            if (SDL_GetGamepadButton(h, 4))  raw |= XI_BACK;
-            if (SDL_GetGamepadButton(h, 6))  raw |= XI_START;
-            if (SDL_GetGamepadButton(h, 7))  raw |= XI_LTHUMB;     // LEFT_STICK
-            if (SDL_GetGamepadButton(h, 8))  raw |= XI_RTHUMB;     // RIGHT_STICK
-            if (SDL_GetGamepadButton(h, 9))  raw |= XI_LB;         // LEFT_SHOULDER
-            if (SDL_GetGamepadButton(h, 10)) raw |= XI_RB;         // RIGHT_SHOULDER
-            if (SDL_GetGamepadButton(h, 11)) raw |= XI_DPAD_UP;
-            if (SDL_GetGamepadButton(h, 12)) raw |= XI_DPAD_DOWN;
-            if (SDL_GetGamepadButton(h, 13)) raw |= XI_DPAD_LEFT;
-            if (SDL_GetGamepadButton(h, 14)) raw |= XI_DPAD_RIGHT;
+            if (_set.ReadButton(d, SdlDeviceSet.BTN_SOUTH))          raw |= XI_A;
+            if (_set.ReadButton(d, SdlDeviceSet.BTN_EAST))           raw |= XI_B;
+            if (_set.ReadButton(d, SdlDeviceSet.BTN_WEST))           raw |= XI_X;
+            if (_set.ReadButton(d, SdlDeviceSet.BTN_NORTH))          raw |= XI_Y;
+            if (_set.ReadButton(d, SdlDeviceSet.BTN_BACK))           raw |= XI_BACK;
+            if (_set.ReadButton(d, SdlDeviceSet.BTN_START))          raw |= XI_START;
+            if (_set.ReadButton(d, SdlDeviceSet.BTN_LEFT_STICK))     raw |= XI_LTHUMB;
+            if (_set.ReadButton(d, SdlDeviceSet.BTN_RIGHT_STICK))    raw |= XI_RTHUMB;
+            if (_set.ReadButton(d, SdlDeviceSet.BTN_LEFT_SHOULDER))  raw |= XI_LB;
+            if (_set.ReadButton(d, SdlDeviceSet.BTN_RIGHT_SHOULDER)) raw |= XI_RB;
+            if (_set.ReadButton(d, SdlDeviceSet.BTN_DPAD_UP))        raw |= XI_DPAD_UP;
+            if (_set.ReadButton(d, SdlDeviceSet.BTN_DPAD_DOWN))      raw |= XI_DPAD_DOWN;
+            if (_set.ReadButton(d, SdlDeviceSet.BTN_DPAD_LEFT))      raw |= XI_DPAD_LEFT;
+            if (_set.ReadButton(d, SdlDeviceSet.BTN_DPAD_RIGHT))     raw |= XI_DPAD_RIGHT;
             _lastRawButtons = raw;
-            _lx = SDL_GetGamepadAxis(h, AXIS_LEFTX);  _ly = SDL_GetGamepadAxis(h, AXIS_LEFTY);
-            _rx = SDL_GetGamepadAxis(h, AXIS_RIGHTX); _ry = SDL_GetGamepadAxis(h, AXIS_RIGHTY);
-            _lt = SDL_GetGamepadAxis(h, AXIS_LTRIG);  _rt = SDL_GetGamepadAxis(h, AXIS_RTRIG);
+            _lx = _set.ReadAxis(d, SdlDeviceSet.AXIS_LEFTX);  _ly = _set.ReadAxis(d, SdlDeviceSet.AXIS_LEFTY);
+            _rx = _set.ReadAxis(d, SdlDeviceSet.AXIS_RIGHTX); _ry = _set.ReadAxis(d, SdlDeviceSet.AXIS_RIGHTY);
+            _lt = _set.ReadAxis(d, SdlDeviceSet.AXIS_LTRIG);  _rt = _set.ReadAxis(d, SdlDeviceSet.AXIS_RTRIG);
         }
 
         // Detection/hot-plug diagnostics → Logs/controller-diag.log (see ControllerDiagLog).
         private static void CtrlLog(string msg) => ControllerDiagLog.Write($"[panel] {msg}");
 
-        private readonly List<(uint id, IntPtr handle)> _pads = new();
+        private readonly SdlDeviceSet _set = new();
         private readonly Dictionary<uint, bool> _prev = new();    // raw id -> last pressed (active device)
-        private int _activeDevice;                                // index into _pads for capture
+        private string? _activeDeviceId;                          // id the panel is capturing from; null = first
         private readonly DispatcherTimer _timer;
         private bool _initialized;
         private bool _disposed;
 
         public ControllerManager()
         {
-            _initialized = SDL_InitSubSystem(SDL_INIT_GAMEPAD);   // refcounted — safe alongside a session's SdlInput
-            CtrlLog(_initialized ? "SDL gamepad subsystem initialized"
-                                 : "SDL gamepad subsystem init FAILED");
+            _initialized = SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMEPAD);   // refcounted — safe alongside a session's SdlInput
+            CtrlLog(_initialized ? "SDL joystick+gamepad subsystems initialized"
+                                 : "SDL joystick+gamepad subsystem init FAILED");
             Refresh();
             _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
             _timer.Tick += (_, _) => Poll();
             _timer.Start();
         }
 
-        /// <summary>Connected gamepad names, in player order (panel prepends "Keyboard").</summary>
+        /// <summary>Connected controllers as (binding id, display name), in SDL enumeration order.
+        /// The display name is what the dropdown shows; the id is what gets persisted.</summary>
+        public List<(string Id, string DisplayName)> GetDevices()
+        {
+            var list = new List<(string, string)>(_set.Devices.Count);
+            foreach (var d in _set.Devices) list.Add((d.Id, d.DisplayName));
+            return list;
+        }
+
+        /// <summary>Connected controller display names, in enumeration order (panel prepends "Keyboard").</summary>
         public List<string> GetDeviceNames()
         {
-            var names = new List<string>();
-            foreach (var p in _pads)
-                names.Add(Marshal.PtrToStringUTF8(SDL_GetGamepadName(p.handle)) ?? "Controller");
+            var names = new List<string>(_set.Devices.Count);
+            foreach (var d in _set.Devices) names.Add(d.DisplayName);
             return names;
         }
 
-        /// <summary>Select which connected gamepad capture/state reads from.</summary>
-        public void SetActiveDevice(int index) { _activeDevice = index; _prev.Clear(); }
+        /// <summary>Select which connected controller capture/state reads from, by binding id.
+        /// Null = the first connected one. Resolved on every tick, so it follows hot-plug.</summary>
+        public void SetActiveDevice(string? id) { _activeDeviceId = id; _prev.Clear(); }
+
+        /// <summary>Select the capture device by enumeration index (legacy callers).</summary>
+        public void SetActiveDevice(int index) =>
+            SetActiveDevice(index >= 0 && index < _set.Devices.Count ? _set.Devices[index].Id : null);
+
+        private SdlDeviceSet.Device? ActiveDevice()
+        {
+            if (_activeDeviceId != null) return _set.Get(_activeDeviceId);   // null while it is unplugged
+            return _set.Devices.Count > 0 ? _set.Devices[0] : null;
+        }
 
         private void Refresh()
         {
-            IntPtr arr = SDL_GetGamepads(out int count);
-            var present = new HashSet<uint>();
-            for (int i = 0; i < count; i++) present.Add((uint)Marshal.ReadInt32(arr, i * 4));
-            if (arr != IntPtr.Zero) SDL_free(arr);
-
-            bool changed = false;
-            for (int i = _pads.Count - 1; i >= 0; i--)
-                if (!present.Contains(_pads[i].id)) { SDL_CloseGamepad(_pads[i].handle); _pads.RemoveAt(i); changed = true; }
-            foreach (uint id in present)
-                if (!_pads.Exists(p => p.id == id))
-                {
-                    IntPtr h = SDL_OpenGamepad(id);
-                    if (h != IntPtr.Zero) { _pads.Add((id, h)); changed = true; }
-                }
-            if (changed)
-            {
-                _prev.Clear();
-                CtrlLog($"Device set changed: count={_pads.Count} names=[{string.Join(", ", GetDeviceNames())}]");
-                ConnectionChanged?.Invoke(IsConnected);
-            }
+            if (!_set.Reconcile()) return;
+            _prev.Clear();
+            var names = new List<string>();
+            foreach (var d in _set.Devices) names.Add($"\"{d.Id}\"{(d.IsGamepad ? "" : " (raw)")}");
+            CtrlLog($"Device set changed: count={_set.Devices.Count} [{string.Join(", ", names)}]");
+            ConnectionChanged?.Invoke(IsConnected);
         }
 
         private int _refreshCounter;
@@ -205,25 +204,22 @@ namespace Emutastic.Services
             // process's SDL during any game session: a controller connected mid-session stayed
             // listed-but-frozen — the Controls panel went unresponsive until an app restart.
             // Windows never hit this; XInput state reads need no pump.)
-            if (!EmulatorSession.AnyActive) { SDL_PumpEvents(); SDL_UpdateGamepads(); }
+            if (!EmulatorSession.AnyActive) { SDL_PumpEvents(); SDL_UpdateJoysticks(); SDL_UpdateGamepads(); }
             if (++_refreshCounter >= 60) { _refreshCounter = 0; Refresh(); }   // ~1Hz hotplug rescan
 
             // EmuTV raw-poll snapshot — kept fresh every tick regardless of RawMode (the couch shell
             // polls IsRawXInputButtonDown/GetButtonState; it doesn't use the capture/ButtonChanged flow).
             UpdateRawSnapshot();
 
-            if (!RawMode || _activeDevice < 0 || _activeDevice >= _pads.Count) return;
-            IntPtr h = _pads[_activeDevice].handle;
+            if (!RawMode) return;
+            var d = ActiveDevice();
+            if (d == null) return;
 
-            for (int b = 0; b < BUTTON_COUNT; b++) Edge((uint)b, SDL_GetGamepadButton(h, b));
-            Edge(100, SDL_GetGamepadAxis(h, AXIS_LTRIG) > TRIG_THRESHOLD);
-            Edge(101, SDL_GetGamepadAxis(h, AXIS_RTRIG) > TRIG_THRESHOLD);
-            short lx = SDL_GetGamepadAxis(h, AXIS_LEFTX), ly = SDL_GetGamepadAxis(h, AXIS_LEFTY);
-            short rx = SDL_GetGamepadAxis(h, AXIS_RIGHTX), ry = SDL_GetGamepadAxis(h, AXIS_RIGHTY);
-            Edge(110, lx < -STICK_THRESHOLD); Edge(111, lx > STICK_THRESHOLD);
-            Edge(112, ly < -STICK_THRESHOLD); Edge(113, ly > STICK_THRESHOLD);
-            Edge(114, rx < -STICK_THRESHOLD); Edge(115, rx > STICK_THRESHOLD);
-            Edge(116, ry < -STICK_THRESHOLD); Edge(117, ry > STICK_THRESHOLD);
+            for (int b = 0; b < SdlDeviceSet.BTN_COUNT; b++) Edge((uint)b, _set.ReadButton(d, b));
+            Edge(SdlDeviceSet.RAW_L2, _set.ReadControl(d, SdlDeviceSet.RAW_L2));
+            Edge(SdlDeviceSet.RAW_R2, _set.ReadControl(d, SdlDeviceSet.RAW_R2));
+            for (int s = SdlDeviceSet.RAW_STICK_FIRST; s <= SdlDeviceSet.RAW_STICK_LAST; s++)
+                Edge((uint)s, _set.ReadControl(d, s));
         }
 
         private void Edge(uint rawId, bool pressed)
@@ -239,9 +235,8 @@ namespace Emutastic.Services
             if (_disposed) return;
             _disposed = true;
             _timer.Stop();
-            foreach (var p in _pads) SDL_CloseGamepad(p.handle);
-            _pads.Clear();
-            if (_initialized) SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
+            _set.Dispose();
+            if (_initialized) SDL_QuitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMEPAD);
         }
     }
 }

@@ -21,10 +21,21 @@ namespace Emutastic.Configuration
         public bool EnableRumble { get; set; } = true;
         public int ControllerSensitivity { get; set; } = 100;
         /// <summary>
-        /// Which XInput controller slot (0-3) this player uses.
-        /// -1 means "use default" (Player 1 → slot 0, Player 2 → slot 1, etc.)
+        /// Upstream (Windows) XInput slot, 0-3; -1 = default. Kept for config-file parity with
+        /// upstream. On Linux there is no XInput and nothing reads this — the player's pad is
+        /// chosen by <see cref="ControllerDeviceId"/>, or by enumeration order when unbound.
         /// </summary>
         public int ControllerSlot { get; set; } = -1;
+
+        /// <summary>
+        /// Stable id of the controller bound to this player, in the form "product name#occurrence"
+        /// (e.g. "Xbox Elite Wireless Controller#0"; two identical pads are "#0" and "#1" in SDL
+        /// enumeration order). Written by Preferences → Controls when the user picks a device;
+        /// read by the game session to route this player's input. Empty = no explicit binding:
+        /// the player takes the next unclaimed pad in enumeration order. Same field and format
+        /// as upstream, so a config file can move between the two apps.
+        /// </summary>
+        public string ControllerDeviceId { get; set; } = "";
     }
 
     // Display configuration

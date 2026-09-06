@@ -28,6 +28,12 @@ sealed class Program
             Emutastic.SelfTest.RunImport(args[1], args[2]);
             return;
         }
+        // Headless controller → player routing self-test (SDL3 virtual joysticks, no window, never
+        // touches the user's config): `Emutastic --selftest-input [--portable]`. Exit 0 = all pass.
+        if (args.Length >= 1 && args[0] == "--selftest-input")
+        {
+            Environment.Exit(Emutastic.InputSelfTest.Run());
+        }
         // Separate game process (Branch B): runs the SDL-GL game window with NO Avalonia in this process
         // (Avalonia + SDL-GL in one process hangs after present #1). Exit code propagates to the parent
         // supervisor for crash detection. See docs/gl-present-phase1-host-process-design.md.
@@ -118,8 +124,8 @@ sealed class Program
 
     // Avalonia configuration, don't remove; also used by visual designer.
     public static AppBuilder BuildAvaloniaApp()
-        // X11 + Skia explicitly (Linux target). We don't reference Avalonia.Desktop — see the
-        // vendored-Avalonia note in the csproj — so UsePlatformDetect() isn't available here.
+        // X11 + Skia explicitly (Linux target). We don't reference Avalonia.Desktop — it pulls in
+        // the macOS-only Avalonia.Native, see the csproj — so UsePlatformDetect() isn't available.
         => AppBuilder.Configure<App>()
             .UseX11()
             .UseSkia()

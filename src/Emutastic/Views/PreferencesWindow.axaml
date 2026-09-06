@@ -174,8 +174,10 @@
                                 <ComboBoxItem Content="Player 1"/><ComboBoxItem Content="Player 2"/>
                                 <ComboBoxItem Content="Player 3"/><ComboBoxItem Content="Player 4"/>
                             </ComboBox>
-                            <TextBlock Text="CONTROLLER SLOT" Theme="{StaticResource PrefLabel}"/>
-                            <ComboBox Name="ControllerSlotComboBox" Theme="{StaticResource DarkComboBox}" HorizontalAlignment="Stretch">
+                            <!-- Hidden on Linux: "controller slot" is an XInput concept and nothing here reads it.
+                                 The INPUT DEVICE dropdown at the bottom of the panel binds a pad to the player. -->
+                            <TextBlock Text="CONTROLLER SLOT" Theme="{StaticResource PrefLabel}" IsVisible="False"/>
+                            <ComboBox Name="ControllerSlotComboBox" Theme="{StaticResource DarkComboBox}" HorizontalAlignment="Stretch" IsVisible="False">
                                 <ComboBoxItem Content="Default"/><ComboBoxItem Content="Controller 1"/><ComboBoxItem Content="Controller 2"/>
                                 <ComboBoxItem Content="Controller 3"/><ComboBoxItem Content="Controller 4"/>
                             </ComboBox>

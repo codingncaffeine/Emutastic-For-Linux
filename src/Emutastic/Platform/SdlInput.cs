@@ -7,26 +7,32 @@ using Emutastic.Services;
 namespace Emutastic.Platform
 {
     /// <summary>
-    /// SDL3-backed gamepad input. Replaces the upstream Windows ControllerManager (XInput).
-    /// The upstream codebase only had SDL3 P/Invoke for device naming; the actual state-polling
-    /// layer here is new (written from scratch for the Linux port).
+    /// SDL3-backed gamepad input for the game session. Replaces the upstream Windows
+    /// ControllerManager (XInput). Runs in the game-host process and pumps SDL on the emu thread.
     ///
-    /// Scope (M2 vertical slice): standard digital joypad mapping for connected gamepads + a
-    /// keyboard fallback for player 1 so a ROM is playable without a controller. Per-console
-    /// button remapping (LibretroInput tables), analog sticks, deadzones, turbo and rumble are
-    /// refinements layered on when the full input/config UI is ported.
+    /// WHICH PAD IS PLAYER N
+    /// ---------------------
+    /// Each of the four ports resolves to a device through <see cref="ResolvePorts"/>:
+    ///
+    ///   1. A port whose console+player config carries a <c>ControllerDeviceId</c> reads THAT
+    ///      device. If it is not attached the port reads nothing — it is deliberately not handed
+    ///      some other pad, because silently giving player 1 player 2's controller is the exact
+    ///      confusion an explicit binding exists to remove.
+    ///   2. An unbound port keeps the device it already has for as long as that device is attached
+    ///      and no binding claims it.
+    ///   3. An unbound port with no device takes the next unclaimed device in SDL enumeration order.
+    ///
+    /// Rule 2 is what makes couch play survive a disconnect: previously <c>_pads[port]</c> was a
+    /// plain list, so when player 1's pad dropped out every later player shifted down a slot
+    /// mid-game. Now a disconnect frees only the port that owned the departed pad.
+    ///
+    /// Devices, ids and reads come from <see cref="SdlDeviceSet"/>, shared with the Preferences
+    /// capture panel so both agree on what "Xbox Elite Wireless Controller#1" means. That layer
+    /// also covers joysticks SDL has no gamepad mapping for, which were invisible before.
     /// </summary>
     public sealed class SdlInput : IDisposable
     {
-        const uint SDL_INIT_GAMEPAD = 0x00002000;
-
-        // SDL_GamepadButton
-        const int SDL_GAMEPAD_BUTTON_SOUTH = 0, SDL_GAMEPAD_BUTTON_EAST = 1, SDL_GAMEPAD_BUTTON_WEST = 2,
-                  SDL_GAMEPAD_BUTTON_NORTH = 3, SDL_GAMEPAD_BUTTON_BACK = 4, SDL_GAMEPAD_BUTTON_START = 6,
-                  SDL_GAMEPAD_BUTTON_LEFT_STICK = 7, SDL_GAMEPAD_BUTTON_RIGHT_STICK = 8,
-                  SDL_GAMEPAD_BUTTON_LEFT_SHOULDER = 9, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER = 10,
-                  SDL_GAMEPAD_BUTTON_DPAD_UP = 11, SDL_GAMEPAD_BUTTON_DPAD_DOWN = 12,
-                  SDL_GAMEPAD_BUTTON_DPAD_LEFT = 13, SDL_GAMEPAD_BUTTON_DPAD_RIGHT = 14;
+        const uint SDL_INIT_JOYSTICK = 0x00000200, SDL_INIT_GAMEPAD = 0x00002000;
 
         // libretro RETRO_DEVICE_ID_JOYPAD_*
         public const uint RETRO_DEVICE_JOYPAD = 1;
@@ -44,42 +50,40 @@ namespace Emutastic.Platform
         public bool UsesAnalogStick;
         public bool PromoteAnalogStickToDpad;
 
-        // libretro joypad id -> SDL gamepad button (-1 = unmapped for M2, e.g. L2/R2 triggers)
+        // libretro joypad id -> SDL gamepad button (-1 = no button; L2/R2 read the trigger axes)
         static readonly int[] _retroToSdl = BuildMap();
         static int[] BuildMap()
         {
             var m = new int[JOYPAD_COUNT];
             for (int i = 0; i < JOYPAD_COUNT; i++) m[i] = -1;
-            m[RJ_B] = SDL_GAMEPAD_BUTTON_SOUTH;   m[RJ_A] = SDL_GAMEPAD_BUTTON_EAST;
-            m[RJ_Y] = SDL_GAMEPAD_BUTTON_WEST;    m[RJ_X] = SDL_GAMEPAD_BUTTON_NORTH;
-            m[RJ_SELECT] = SDL_GAMEPAD_BUTTON_BACK; m[RJ_START] = SDL_GAMEPAD_BUTTON_START;
-            m[RJ_UP] = SDL_GAMEPAD_BUTTON_DPAD_UP; m[RJ_DOWN] = SDL_GAMEPAD_BUTTON_DPAD_DOWN;
-            m[RJ_LEFT] = SDL_GAMEPAD_BUTTON_DPAD_LEFT; m[RJ_RIGHT] = SDL_GAMEPAD_BUTTON_DPAD_RIGHT;
-            m[RJ_L] = SDL_GAMEPAD_BUTTON_LEFT_SHOULDER; m[RJ_R] = SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER;
-            m[RJ_L3] = SDL_GAMEPAD_BUTTON_LEFT_STICK; m[RJ_R3] = SDL_GAMEPAD_BUTTON_RIGHT_STICK;
+            m[RJ_B] = SdlDeviceSet.BTN_SOUTH;        m[RJ_A] = SdlDeviceSet.BTN_EAST;
+            m[RJ_Y] = SdlDeviceSet.BTN_WEST;         m[RJ_X] = SdlDeviceSet.BTN_NORTH;
+            m[RJ_SELECT] = SdlDeviceSet.BTN_BACK;    m[RJ_START] = SdlDeviceSet.BTN_START;
+            m[RJ_UP] = SdlDeviceSet.BTN_DPAD_UP;     m[RJ_DOWN] = SdlDeviceSet.BTN_DPAD_DOWN;
+            m[RJ_LEFT] = SdlDeviceSet.BTN_DPAD_LEFT; m[RJ_RIGHT] = SdlDeviceSet.BTN_DPAD_RIGHT;
+            m[RJ_L] = SdlDeviceSet.BTN_LEFT_SHOULDER; m[RJ_R] = SdlDeviceSet.BTN_RIGHT_SHOULDER;
+            m[RJ_L3] = SdlDeviceSet.BTN_LEFT_STICK;  m[RJ_R3] = SdlDeviceSet.BTN_RIGHT_STICK;
             return m;
         }
 
         [DllImport("SDL3")] [return: MarshalAs(UnmanagedType.I1)] static extern bool SDL_InitSubSystem(uint flags);
         [DllImport("SDL3")] static extern void SDL_QuitSubSystem(uint flags);
         [DllImport("SDL3")] static extern void SDL_PumpEvents();
-        [DllImport("SDL3")] static extern IntPtr SDL_GetGamepads(out int count);
-        [DllImport("SDL3")] static extern IntPtr SDL_OpenGamepad(uint instance_id);
-        [DllImport("SDL3")] static extern void SDL_CloseGamepad(IntPtr gamepad);
-        [DllImport("SDL3")] [return: MarshalAs(UnmanagedType.I1)] static extern bool SDL_GetGamepadButton(IntPtr gamepad, int button);
-        [DllImport("SDL3")] static extern short SDL_GetGamepadAxis(IntPtr gamepad, int axis);
-        [DllImport("SDL3")] static extern IntPtr SDL_GetGamepadName(IntPtr gamepad);
+        [DllImport("SDL3")] static extern void SDL_UpdateJoysticks();
         [DllImport("SDL3")] static extern void SDL_UpdateGamepads();
-        [DllImport("SDL3")] static extern void SDL_free(IntPtr mem);
-        [DllImport("SDL3")] [return: MarshalAs(UnmanagedType.I1)]
-        static extern bool SDL_RumbleGamepad(IntPtr gamepad, ushort low_frequency_rumble, ushort high_frequency_rumble, uint duration_ms);
 
         // De-dupes the unknown-button-name diagnostic (once per console+name pair).
         private static readonly HashSet<string> _unknownButtonNamesLogged = new();
 
-        // open gamepads in player order
-        private readonly List<(uint id, IntPtr handle)> _pads = new();
+        private readonly SdlDeviceSet _set = new();
         private int _refreshCounter;
+
+        private sealed class Port
+        {
+            public string? BoundId;                 // from config; null = unbound
+            public SdlDeviceSet.Device? Device;     // what this port reads right now
+        }
+        private readonly Port[] _ports = { new(), new(), new(), new() };
 
         // keyboard fallback state for player 1 (libretro joypad id -> pressed)
         private readonly bool[] _kbd = new bool[JOYPAD_COUNT];
@@ -114,21 +118,17 @@ namespace Emutastic.Platform
         // reading the physical SDL axes directly (pre-binding default behavior).
         private readonly int[]?[] _analogMap = new int[4][];
 
-        // SDL_GamepadAxis indices + thresholds (mirror ControllerManager's raw id space).
-        const int AXIS_LEFTX = 0, AXIS_LEFTY = 1, AXIS_RIGHTX = 2, AXIS_RIGHTY = 3, AXIS_LTRIG = 4, AXIS_RTRIG = 5;
-        const short STICK_THRESHOLD = 18000, TRIG_THRESHOLD = 12000;
-
         // Cheap ctor (no SDL calls) so the XAML designer can construct an EmulatorSession
         // without a working SDL3 library. SDL is initialized lazily in Initialize().
         public SdlInput() { }
 
-        /// <summary>Initialize the SDL gamepad subsystem. Called once before the emu loop starts.</summary>
+        /// <summary>Initialize the SDL joystick + gamepad subsystems. Called once before the emu loop starts.</summary>
         public void Initialize()
         {
             if (_initialized) return;
             _initialized = true;
-            SDL_InitSubSystem(SDL_INIT_GAMEPAD);
-            Refresh();
+            SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMEPAD);
+            RefreshDevices();
             _announceChanges = true;   // pads found by the baseline scan above are not hot-plug events
         }
 
@@ -141,24 +141,40 @@ namespace Emutastic.Platform
         private bool _announceChanges;
 
         /// <summary>
-        /// Load the per-console input mappings saved by the Controls panel. Builds, for each player
-        /// port, a libretro-id → raw-control-id table from <c>ControllerMappings</c>, and a key-name →
-        /// libretro-id table from player 1's <c>KeyboardMappings</c>. Ports with no controller mappings
-        /// keep the built-in default. Safe to call with a null service (leaves defaults in place).
+        /// Load the per-console input mappings and device bindings saved by the Controls panel.
+        /// Safe to call with a null service (leaves defaults in place).
         /// </summary>
         public void LoadConfiguration(string console, IConfigurationService? cfg)
+            => LoadConfiguration(console, cfg == null ? null : cfg.GetInputConfiguration);
+
+        /// <summary>
+        /// Same, from any config-key → configuration lookup. This is the real implementation; the
+        /// self-test feeds it in-memory configurations so it never touches the user's config file.
+        /// </summary>
+        public void LoadConfiguration(string console, Func<string, InputConfiguration>? lookup)
         {
             Array.Clear(_ctrlMap, 0, _ctrlMap.Length);
             Array.Clear(_analogMap, 0, _analogMap.Length);
             _kbdRetro.Clear();
-            if (cfg == null || string.IsNullOrEmpty(console)) return;
+            foreach (var p in _ports) p.BoundId = null;
+            if (lookup == null || string.IsNullOrEmpty(console)) { ResolvePorts(); return; }
 
             for (int port = 0; port < 4; port++)
             {
-                var config = cfg.GetInputConfiguration($"{console}_P{port + 1}");
+                var playerConfig = lookup($"{console}_P{port + 1}");
+
+                // The device binding is authored per player under the "_P{N}" key and is read from
+                // THERE, before the legacy fallback below can swap the config out. That fallback
+                // keys off the mapping lists being empty — which is exactly the state of a player
+                // who picked a pad and kept the default buttons — so reading the binding after it
+                // would silently discard the pick (the upstream bug, commit 8e4b7fc).
+                _ports[port].BoundId = string.IsNullOrWhiteSpace(playerConfig.ControllerDeviceId)
+                    ? null : playerConfig.ControllerDeviceId;
+
+                var config = playerConfig;
                 // Player 1 legacy fallback: pre-per-player saves used the bare console key.
                 if (port == 0 && config.ControllerMappings.Count == 0 && config.KeyboardMappings.Count == 0)
-                    config = cfg.GetInputConfiguration(console);
+                    config = lookup(console);
 
                 if (config.ControllerMappings.Count > 0)
                 {
@@ -172,7 +188,7 @@ namespace Emutastic.Platform
                         // all hit this upstream). Surface it instead of silently ignoring the
                         // user's binding. Once per console+name (upstream fc55478).
                         if (libretroId == uint.MaxValue && _unknownButtonNamesLogged.Add($"{console}:{m.ButtonName}"))
-                            Services.ControllerDiagLog.Write(
+                            ControllerDiagLog.Write(
                                 $"[session] UNKNOWN BUTTON NAME '{m.ButtonName}' (console={console}) — binding ignored! LibretroInput.GetButtonId needs a case for it.");
                         if (!int.TryParse(m.InputIdentifier, out var rawId)) continue;
                         if (libretroId < JOYPAD_COUNT)
@@ -201,6 +217,8 @@ namespace Emutastic.Platform
                             _kbdRetro[m.InputIdentifier] = (int)libretroId;
                     }
             }
+
+            ResolvePorts();
         }
 
         /// <summary>Configured player-1 libretro id for an Avalonia Key name, or -1 if not bound.</summary>
@@ -209,28 +227,17 @@ namespace Emutastic.Platform
         /// <summary>True if the Controls panel has a saved player-1 keyboard mapping (else use defaults).</summary>
         public bool HasKeyboardConfig => _kbdRetro.Count > 0;
 
-        // Read a raw control id (0..20 SDL button, 100/101 trigger, 110..117 stick dir) on a pad.
-        private bool ReadRawControl(IntPtr h, int rawId)
-        {
-            if (rawId < 0) return false;
-            if (rawId < 21) return SDL_GetGamepadButton(h, rawId);
-            switch (rawId)
-            {
-                case 100: return SDL_GetGamepadAxis(h, AXIS_LTRIG) > TRIG_THRESHOLD;
-                case 101: return SDL_GetGamepadAxis(h, AXIS_RTRIG) > TRIG_THRESHOLD;
-                case 110: return SDL_GetGamepadAxis(h, AXIS_LEFTX)  < -STICK_THRESHOLD;
-                case 111: return SDL_GetGamepadAxis(h, AXIS_LEFTX)  >  STICK_THRESHOLD;
-                case 112: return SDL_GetGamepadAxis(h, AXIS_LEFTY)  < -STICK_THRESHOLD;
-                case 113: return SDL_GetGamepadAxis(h, AXIS_LEFTY)  >  STICK_THRESHOLD;
-                case 114: return SDL_GetGamepadAxis(h, AXIS_RIGHTX) < -STICK_THRESHOLD;
-                case 115: return SDL_GetGamepadAxis(h, AXIS_RIGHTX) >  STICK_THRESHOLD;
-                case 116: return SDL_GetGamepadAxis(h, AXIS_RIGHTY) < -STICK_THRESHOLD;
-                case 117: return SDL_GetGamepadAxis(h, AXIS_RIGHTY) >  STICK_THRESHOLD;
-                default:  return false;
-            }
-        }
+        /// <summary>Number of attached controllers (gamepad-mapped or raw).</summary>
+        public int GamepadCount => _set.Devices.Count;
 
-        public int GamepadCount => _pads.Count;
+        /// <summary>All attached controllers, in SDL enumeration order.</summary>
+        internal IReadOnlyList<SdlDeviceSet.Device> Devices => _set.Devices;
+
+        /// <summary>The device id a port currently reads, or null (nothing attached / bound pad absent).</summary>
+        public string? PortDeviceId(int port) => port is >= 0 and < 4 ? _ports[port].Device?.Id : null;
+
+        /// <summary>The device id a port is bound to by configuration, or null when unbound.</summary>
+        public string? PortBoundId(int port) => port is >= 0 and < 4 ? _ports[port].BoundId : null;
 
         /// <summary>
         /// Drive a pad's rumble motors (libretro: strong = low-freq/left, weak = high-freq/right).
@@ -239,58 +246,91 @@ namespace Emutastic.Platform
         /// </summary>
         public bool SetRumble(int port, ushort strong, ushort weak)
         {
-            if (port < 0 || port >= _pads.Count) return false;
-            var h = _pads[port].handle;
-            return h != IntPtr.Zero && SDL_RumbleGamepad(h, strong, weak, 5000);
+            var d = DeviceFor(port);
+            if (d == null) return false;
+            _set.Rumble(d, strong, weak, 5000);
+            return true;
         }
 
         public string? FirstGamepadName =>
-            _pads.Count > 0 ? Marshal.PtrToStringUTF8(SDL_GetGamepadName(_pads[0].handle)) : null;
+            _set.Devices.Count > 0 ? _set.Devices[0].DisplayName : null;
 
-        /// <summary>Open newly-connected gamepads, drop removed ones.</summary>
-        private void Refresh()
+        private SdlDeviceSet.Device? DeviceFor(int port) =>
+            port is >= 0 and < 4 ? _ports[port].Device : null;
+
+        /// <summary>Re-enumerate devices now (the 1 Hz hot-plug rescan does this; tests call it directly).</summary>
+        public void RefreshDevices()
         {
-            IntPtr arr = SDL_GetGamepads(out int count);
-            var present = new HashSet<uint>();
-            for (int i = 0; i < count; i++) present.Add((uint)Marshal.ReadInt32(arr, i * 4));
-            if (arr != IntPtr.Zero) SDL_free(arr);
+            var added = new List<SdlDeviceSet.Device>();
+            var removed = new List<SdlDeviceSet.Device>();
+            if (!_set.Reconcile(added, removed)) return;
 
-            // close removed (read the name BEFORE closing the handle)
-            for (int i = _pads.Count - 1; i >= 0; i--)
-                if (!present.Contains(_pads[i].id))
-                {
-                    string name = Marshal.PtrToStringUTF8(SDL_GetGamepadName(_pads[i].handle)) ?? "?";
-                    Services.ControllerDiagLog.Write($"[session] Removed: id={_pads[i].id} \"{name}\"");
-                    SDL_CloseGamepad(_pads[i].handle);
-                    _pads.RemoveAt(i);
-                    if (_announceChanges) DeviceChanged?.Invoke(false, name);
-                }
+            foreach (var d in removed)
+            {
+                ControllerDiagLog.Write($"[session] Removed: \"{d.Id}\"");
+                if (_announceChanges) DeviceChanged?.Invoke(false, d.DisplayName);
+            }
+            foreach (var d in added)
+            {
+                ControllerDiagLog.Write($"[session] Detected: \"{d.Id}\" {(d.IsGamepad ? "(gamepad)" : "(raw joystick)")}");
+                if (_announceChanges) DeviceChanged?.Invoke(true, d.DisplayName);
+            }
+            ResolvePorts();
+        }
 
-            // open new
-            foreach (uint id in present)
-                if (!_pads.Exists(p => p.id == id))
-                {
-                    IntPtr h = SDL_OpenGamepad(id);
-                    if (h != IntPtr.Zero)
-                    {
-                        _pads.Add((id, h));
-                        string name = Marshal.PtrToStringUTF8(SDL_GetGamepadName(h)) ?? "?";
-                        Services.ControllerDiagLog.Write(
-                            $"[session] Detected: id={id} \"{name}\" (player {_pads.Count})");
-                        if (_announceChanges) DeviceChanged?.Invoke(true, name);
-                    }
-                    else
-                        Services.ControllerDiagLog.Write($"[session] Open FAILED for id={id}");
-                }
+        /// <summary>Assign a device to each port. See the class remarks for the three rules.</summary>
+        private void ResolvePorts()
+        {
+            var attached = new HashSet<SdlDeviceSet.Device>(_set.Devices);
+            var claimed  = new HashSet<SdlDeviceSet.Device>();
+            var before   = new SdlDeviceSet.Device?[4];
+            for (int i = 0; i < 4; i++) before[i] = _ports[i].Device;
+
+            // 1. Bound ports claim their device — or read nothing if it is absent.
+            foreach (var p in _ports)
+            {
+                if (p.BoundId == null) continue;
+                p.Device = _set.Get(p.BoundId);
+                if (p.Device != null) claimed.Add(p.Device);
+            }
+            // 2. Unbound ports keep what they have, if still attached and not claimed by a binding.
+            foreach (var p in _ports)
+            {
+                if (p.BoundId != null) continue;
+                if (p.Device != null && (!attached.Contains(p.Device) || claimed.Contains(p.Device)))
+                    p.Device = null;
+                if (p.Device != null) claimed.Add(p.Device);
+            }
+            // 3. Unbound, empty ports take the next unclaimed device in enumeration order.
+            foreach (var d in _set.Devices)
+            {
+                if (claimed.Contains(d)) continue;
+                Port? free = null;
+                foreach (var p in _ports) if (p.BoundId == null && p.Device == null) { free = p; break; }
+                if (free == null) break;
+                free.Device = d;
+                claimed.Add(d);
+            }
+
+            for (int i = 0; i < 4; i++)
+            {
+                if (ReferenceEquals(before[i], _ports[i].Device)) continue;
+                var p = _ports[i];
+                string source = p.BoundId != null ? $"bound \"{p.BoundId}\"" : "default (enumeration order)";
+                ControllerDiagLog.Write(p.Device != null
+                    ? $"[session] P{i + 1} <- \"{p.Device.Id}\"  [{source}]"
+                    : $"[session] P{i + 1} <- (none)  [{source}{(p.BoundId != null ? " — NOT ATTACHED" : "")}]");
+            }
         }
 
         /// <summary>Call once per emulation frame before reading input state.</summary>
         public void Poll()
         {
             if (!_initialized) return;
-            SDL_PumpEvents();      // ensure hotplug add/remove events are processed
-            SDL_UpdateGamepads();  // refresh open-gamepad button/axis state
-            if (++_refreshCounter >= 60) { _refreshCounter = 0; Refresh(); } // re-scan ~1×/sec for hotplug
+            SDL_PumpEvents();       // ensure hotplug add/remove events are processed
+            SDL_UpdateJoysticks();  // refresh raw-joystick button/axis/hat state
+            SDL_UpdateGamepads();   // refresh open-gamepad button/axis state
+            if (++_refreshCounter >= 60) { _refreshCounter = 0; RefreshDevices(); } // re-scan ~1×/sec for hotplug
         }
 
         /// <summary>Set keyboard fallback state for player 1 (libretro joypad id).</summary>
@@ -301,13 +341,12 @@ namespace Emutastic.Platform
 
         // Raw physical-button read on a pad, bypassing the per-console libretro mapping. Used for frontend
         // chords (Disk Swap = L3 + Start) that must register even on consoles that don't map L3/Start.
-        public const int SdlButtonStart = SDL_GAMEPAD_BUTTON_START;
-        public const int SdlButtonLeftStick = SDL_GAMEPAD_BUTTON_LEFT_STICK;
+        public const int SdlButtonStart = SdlDeviceSet.BTN_START;
+        public const int SdlButtonLeftStick = SdlDeviceSet.BTN_LEFT_STICK;
         public bool IsRawButtonDown(int sdlButton, int port = 0)
         {
-            if (port < 0 || port >= _pads.Count) return false;
-            var h = _pads[port].handle;
-            return h != IntPtr.Zero && SDL_GetGamepadButton(h, sdlButton);
+            var d = DeviceFor(port);
+            return d != null && _set.ReadButton(d, sdlButton);
         }
 
         /// <summary>Raw read in the panel's full id space (0..20 SDL button, 100/101 trigger,
@@ -315,9 +354,8 @@ namespace Emutastic.Platform
         /// capturable control, not just plain buttons.</summary>
         public bool IsRawControlDown(int rawId, int port = 0)
         {
-            if (port < 0 || port >= _pads.Count) return false;
-            var h = _pads[port].handle;
-            return h != IntPtr.Zero && ReadRawControl(h, rawId);
+            var d = DeviceFor(port);
+            return d != null && _set.ReadControl(d, rawId);
         }
 
         /// <summary>libretro retro_input_state_t backend.</summary>
@@ -332,26 +370,26 @@ namespace Emutastic.Platform
 
             bool pressed = false;
 
-            // gamepad for this player slot — configured mapping if present, else the default.
-            if (port < (uint)_pads.Count)
+            // the pad this port resolves to — configured mapping if present, else the default.
+            var d = port < 4 ? _ports[port].Device : null;
+            if (d != null)
             {
-                IntPtr h = _pads[(int)port].handle;
-                var map = port < 4 ? _ctrlMap[(int)port] : null;
+                var map = _ctrlMap[(int)port];
                 if (map != null)
                 {
-                    if (ReadRawControl(h, map[(int)id])) pressed = true;
+                    if (_set.ReadControl(d, map[(int)id])) pressed = true;
                 }
                 else
                 {
                     int sdlBtn = _retroToSdl[(int)id];
-                    if (sdlBtn >= 0 && SDL_GetGamepadButton(h, sdlBtn)) pressed = true;
+                    if (sdlBtn >= 0 && _set.ReadButton(d, sdlBtn)) pressed = true;
                     // Default L2/R2: the trigger axes (SDL has no digital trigger buttons).
                     // Matters out-of-the-box for NDS Touch — DeSmuME taps on the JOYPAD_R2
                     // wire, so the right trigger taps with no Controls-panel setup.
                     else if (sdlBtn < 0 && (int)id == RJ_L2)
-                        pressed = SDL_GetGamepadAxis(h, AXIS_LTRIG) > TRIG_THRESHOLD;
+                        pressed = _set.ReadAxis(d, SdlDeviceSet.AXIS_LTRIG) > SdlDeviceSet.TRIG_THRESHOLD;
                     else if (sdlBtn < 0 && (int)id == RJ_R2)
-                        pressed = SDL_GetGamepadAxis(h, AXIS_RTRIG) > TRIG_THRESHOLD;
+                        pressed = _set.ReadAxis(d, SdlDeviceSet.AXIS_RTRIG) > SdlDeviceSet.TRIG_THRESHOLD;
                 }
 
                 // Digital consoles: let the left analog stick drive the d-pad when no digital
@@ -359,10 +397,10 @@ namespace Emutastic.Platform
                 if (!pressed && PromoteAnalogStickToDpad)
                     pressed = (int)id switch
                     {
-                        RJ_UP    => SDL_GetGamepadAxis(h, AXIS_LEFTY) < -STICK_THRESHOLD,
-                        RJ_DOWN  => SDL_GetGamepadAxis(h, AXIS_LEFTY) >  STICK_THRESHOLD,
-                        RJ_LEFT  => SDL_GetGamepadAxis(h, AXIS_LEFTX) < -STICK_THRESHOLD,
-                        RJ_RIGHT => SDL_GetGamepadAxis(h, AXIS_LEFTX) >  STICK_THRESHOLD,
+                        RJ_UP    => _set.ReadAxis(d, SdlDeviceSet.AXIS_LEFTY) < -SdlDeviceSet.STICK_THRESHOLD,
+                        RJ_DOWN  => _set.ReadAxis(d, SdlDeviceSet.AXIS_LEFTY) >  SdlDeviceSet.STICK_THRESHOLD,
+                        RJ_LEFT  => _set.ReadAxis(d, SdlDeviceSet.AXIS_LEFTX) < -SdlDeviceSet.STICK_THRESHOLD,
+                        RJ_RIGHT => _set.ReadAxis(d, SdlDeviceSet.AXIS_LEFTX) >  SdlDeviceSet.STICK_THRESHOLD,
                         _        => false
                     };
             }
@@ -377,7 +415,7 @@ namespace Emutastic.Platform
             {
                 _wireLast[(int)id] = pressed;
                 int raw = _ctrlMap[0] != null ? _ctrlMap[0]![(int)id] : -2;   // -2 = no custom map (default table)
-                Services.ControllerDiagLog.Write(
+                ControllerDiagLog.Write(
                     $"[wire] {_rjName[(int)id]} -> {(pressed ? "DOWN" : "up")}  (raw={raw}; -1=unbound,-2=default-table)");
             }
 
@@ -390,7 +428,7 @@ namespace Emutastic.Platform
                 {
                     _r2WireLast = now;
                     int mapped = (_ctrlMap[0] != null) ? _ctrlMap[0]![RJ_R2] : -2;  // -2 = no custom map (default trigger path)
-                    Services.ControllerDiagLog.Write(
+                    ControllerDiagLog.Write(
                         $"[nds-touch] JOYPAD_R2 wire -> {(now ? "DOWN" : "up")}  (map[R2]={mapped}; -1=unbound, -2=defaults)");
                 }
             }
@@ -398,20 +436,20 @@ namespace Emutastic.Platform
             return pressed ? (short)1 : (short)0;
         }
 
-        // RETRO_DEVICE_ANALOG: index 0 = left stick, 1 = right; id 0 = X, 1 = Y. SDL_GetGamepadAxis
-        // already returns the -32768..32767 range libretro expects.
+        // RETRO_DEVICE_ANALOG: index 0 = left stick, 1 = right; id 0 = X, 1 = Y. SDL's axis range is
+        // the -32768..32767 libretro expects, and both are down-positive — no sign conversion.
         // index 2 = RETRO_DEVICE_INDEX_ANALOG_BUTTON, id = L2(12)/R2(13): analog trigger pressure.
         // Flycast queries Dreamcast L/R triggers this way (Crazy Taxi gas/brake); Dolphin queries
         // GC L/R the same way. SDL trigger axes already report libretro's 0..32767 range.
         private short ReadAnalog(uint port, uint index, uint id)
         {
-            if (port >= (uint)_pads.Count) return 0;
-            IntPtr h = _pads[(int)port].handle;
+            var d = port < 4 ? _ports[port].Device : null;
+            if (d == null) return 0;
             if (index == 2)
                 return id switch
                 {
-                    12u => SDL_GetGamepadAxis(h, AXIS_LTRIG),   // JOYPAD_L2
-                    13u => SDL_GetGamepadAxis(h, AXIS_RTRIG),   // JOYPAD_R2
+                    12u => _set.ReadAxis(d, SdlDeviceSet.AXIS_LTRIG),   // JOYPAD_L2
+                    13u => _set.ReadAxis(d, SdlDeviceSet.AXIS_RTRIG),   // JOYPAD_R2
                     _   => (short)0
                 };
 
@@ -419,17 +457,17 @@ namespace Emutastic.Platform
             // pointer) so we can tell a dead pointer from a dead tap. Throttled to meaningful motion.
             if (_inputDiag && index == 1 && port == 0)
             {
-                short ax = SDL_GetGamepadAxis(h, id == 0 ? AXIS_RIGHTX : AXIS_RIGHTY);
-                if (System.Math.Abs(ax) > 8000 && (id != _rsLastId || System.Math.Abs(ax - _rsLastVal) > 6000))
+                short ax = _set.ReadAxis(d, id == 0 ? SdlDeviceSet.AXIS_RIGHTX : SdlDeviceSet.AXIS_RIGHTY);
+                if (Math.Abs(ax) > 8000 && (id != _rsLastId || Math.Abs(ax - _rsLastVal) > 6000))
                 {
                     _rsLastId = id; _rsLastVal = ax;
-                    Services.ControllerDiagLog.Write($"[nds-touch] right-stick {(id==0?"X":"Y")} -> {ax} reaching core (pointer should move)");
+                    ControllerDiagLog.Write($"[nds-touch] right-stick {(id==0?"X":"Y")} -> {ax} reaching core (pointer should move)");
                 }
             }
             // Compose from the Controls panel's per-direction bindings when present
             // (slot order: LU, LD, LL, LR, RU, RD, RL, RR; id 0 = X → left/right pair,
             // id 1 = Y → up/down pair; libretro wants +X = right, +Y = down).
-            var amap = port < 4 ? _analogMap[(int)port] : null;
+            var amap = _analogMap[(int)port];
             if (amap != null && index <= 1)
             {
                 int slot   = (int)index * 4;
@@ -437,37 +475,37 @@ namespace Emutastic.Platform
                 int plus   = amap[slot + (id == 0 ? 3 : 1)];   // right / down
                 if (minus >= 0 || plus >= 0)
                 {
-                    int v = HalfMagnitude(h, plus) - HalfMagnitude(h, minus);
+                    int v = HalfMagnitude(d, plus) - HalfMagnitude(d, minus);
                     return (short)Math.Clamp(v, short.MinValue, short.MaxValue);
                 }
             }
 
             int axis = (index, id) switch
             {
-                (0u, 0u) => AXIS_LEFTX,  (0u, 1u) => AXIS_LEFTY,
-                (1u, 0u) => AXIS_RIGHTX, (1u, 1u) => AXIS_RIGHTY,
+                (0u, 0u) => SdlDeviceSet.AXIS_LEFTX,  (0u, 1u) => SdlDeviceSet.AXIS_LEFTY,
+                (1u, 0u) => SdlDeviceSet.AXIS_RIGHTX, (1u, 1u) => SdlDeviceSet.AXIS_RIGHTY,
                 _        => -1
             };
             if (axis < 0) return 0;
-            return SDL_GetGamepadAxis(h, axis);
+            return _set.ReadAxis(d, axis);
         }
 
         // Deflection magnitude (0..32767) of one bound direction: the matching half of a
         // stick axis (raw ids 110..117), trigger pressure (100/101), or a digital button
         // (0..20) at full scale. Unbound (-1) reads as 0.
-        private static short HalfMagnitude(IntPtr h, int rawId)
+        private short HalfMagnitude(SdlDeviceSet.Device d, int rawId)
         {
             switch (rawId)
             {
                 case < 0:  return 0;
-                case < 21: return SDL_GetGamepadButton(h, rawId) ? (short)32767 : (short)0;
-                case 100:  { short v = SDL_GetGamepadAxis(h, AXIS_LTRIG); return v > 0 ? v : (short)0; }
-                case 101:  { short v = SDL_GetGamepadAxis(h, AXIS_RTRIG); return v > 0 ? v : (short)0; }
-                case >= 110 and <= 117:
+                case < SdlDeviceSet.BTN_COUNT: return _set.ReadButton(d, rawId) ? (short)32767 : (short)0;
+                case SdlDeviceSet.RAW_L2: { short v = _set.ReadAxis(d, SdlDeviceSet.AXIS_LTRIG); return v > 0 ? v : (short)0; }
+                case SdlDeviceSet.RAW_R2: { short v = _set.ReadAxis(d, SdlDeviceSet.AXIS_RTRIG); return v > 0 ? v : (short)0; }
+                case >= SdlDeviceSet.RAW_STICK_FIRST and <= SdlDeviceSet.RAW_STICK_LAST:
                 {
-                    int axis  = (rawId - 110) / 2;        // LEFTX, LEFTY, RIGHTX, RIGHTY
-                    bool neg  = ((rawId - 110) & 1) == 0; // even ids = negative half
-                    int v     = SDL_GetGamepadAxis(h, axis);
+                    int axis  = (rawId - SdlDeviceSet.RAW_STICK_FIRST) / 2;        // LEFTX, LEFTY, RIGHTX, RIGHTY
+                    bool neg  = ((rawId - SdlDeviceSet.RAW_STICK_FIRST) & 1) == 0; // even ids = negative half
+                    int v     = _set.ReadAxis(d, axis);
                     if (neg) return v < 0 ? (short)Math.Min(-v, 32767) : (short)0;
                     return v > 0 ? (short)v : (short)0;
                 }
@@ -477,9 +515,9 @@ namespace Emutastic.Platform
 
         public void Dispose()
         {
-            foreach (var p in _pads) SDL_CloseGamepad(p.handle);
-            _pads.Clear();
-            if (_initialized) { SDL_QuitSubSystem(SDL_INIT_GAMEPAD); _initialized = false; }
+            _set.Dispose();
+            foreach (var p in _ports) p.Device = null;
+            if (_initialized) { SDL_QuitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMEPAD); _initialized = false; }
         }
     }
 }

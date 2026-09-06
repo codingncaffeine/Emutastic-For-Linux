@@ -2699,21 +2699,19 @@ public partial class PreferencesWindow : Window
         playerCombo.SelectedIndex = 0;
         playerCombo.SelectionChanged += (_, _) => { _currentPlayer = playerCombo.SelectedIndex + 1; StopWaiting(); LoadConsole(_currentConsole); };
 
-        var slotCombo = this.FindControl<ComboBox>("ControllerSlotComboBox")!;
-        slotCombo.SelectionChanged += (_, _) =>
-        {
-            if (_suppressControlsAutoSave) return;
-            var cfg = App.Configuration!.GetInputConfiguration(ConfigKey);
-            cfg.ControllerSlot = slotCombo.SelectedIndex <= 0 ? -1 : slotCombo.SelectedIndex - 1;  // 0=Default→-1
-            App.Configuration!.SetInputConfiguration(ConfigKey, cfg); App.Configuration!.ScheduleSave();
-        };
+        // CONTROLLER SLOT is hidden on Linux (see the .axaml): it is an XInput concept, and nothing
+        // in this port ever read the value it saved. The INPUT DEVICE dropdown below is the binding.
 
         var devCombo = this.FindControl<ComboBox>("InputDeviceComboBox")!;
         devCombo.SelectionChanged += (_, _) =>
         {
             _selectedDevice = devCombo.SelectedItem as string ?? "Keyboard";
             _isKeyboardMode = _selectedDevice == "Keyboard";
-            if (_ctrl != null) _ctrl.SetActiveDevice(Math.Max(0, devCombo.SelectedIndex - 1));
+            string? id = _isKeyboardMode ? null : DeviceIdForDisplayName(_selectedDevice);
+            _ctrl?.SetActiveDevice(id);
+            // Persist only a pick the USER made: populate re-selects under suppression, and a
+            // fallback the control chose on its own must never turn into a binding.
+            if (!_suppressControlsAutoSave) PersistDeviceBinding(id, explicitPick: true);
             StopWaiting();
             LoadConsole(_currentConsole);
         };
@@ -2759,16 +2757,60 @@ public partial class PreferencesWindow : Window
     {
         var devCombo = this.FindControl<ComboBox>("InputDeviceComboBox")!;
         var devices = new List<string> { "Keyboard" };
-        if (_ctrl != null) devices.AddRange(_ctrl.GetDeviceNames());
+        _deviceIdByDisplayName.Clear();
+        if (_ctrl != null)
+            foreach (var (id, display) in _ctrl.GetDevices()) { devices.Add(display); _deviceIdByDisplayName[display] = id; }
+
+        // Suppression covers the ItemsSource swap itself: replacing the items resets the selection
+        // and fires the handler, and none of that is the user's doing.
         _suppressControlsAutoSave = true;
         devCombo.ItemsSource = devices;
-        // Keep the user's in-session pick if it still exists; otherwise default to the
-        // first connected controller (devices[1] — Keyboard is always devices[0]).
-        devCombo.SelectedItem = _selectedDevice != null && devices.Contains(_selectedDevice) ? _selectedDevice
-            : devices.Count > 1 ? devices[1] : "Keyboard";
+        // The dropdown shows THIS console+player's binding, or Keyboard when there is none. It
+        // must not carry another player's pad over as a mere selection: that displayed a device
+        // the player was not bound to, and Save would then have persisted it — two players on
+        // one controller. Binding is always an explicit pick.
+        string? boundName = DisplayNameForDeviceId(App.Configuration?.GetInputConfiguration(ConfigKey).ControllerDeviceId);
+        devCombo.SelectedItem = boundName ?? "Keyboard";
         _suppressControlsAutoSave = false;
         _selectedDevice = devCombo.SelectedItem as string ?? "Keyboard";
         _isKeyboardMode = _selectedDevice == "Keyboard";
+        _ctrl?.SetActiveDevice(_isKeyboardMode ? null : DeviceIdForDisplayName(_selectedDevice));
+    }
+
+    // Display name (what the dropdown shows) <-> binding id (what is persisted and what the game
+    // session reads). Rebuilt on every populate from the same device list, so the two agree.
+    private readonly Dictionary<string, string> _deviceIdByDisplayName = new(StringComparer.Ordinal);
+    private string? DeviceIdForDisplayName(string? display) =>
+        display != null && _deviceIdByDisplayName.TryGetValue(display, out var id) ? id : null;
+    private string? DisplayNameForDeviceId(string? id)
+    {
+        if (string.IsNullOrEmpty(id)) return null;
+        foreach (var kv in _deviceIdByDisplayName) if (kv.Value == id) return kv.Key;
+        return null;
+    }
+
+    /// <summary>
+    /// Writes the current console+player's device binding. Keyboard clears it. A shown pad with no
+    /// id (just unplugged; the list refreshes on hot-plug, so this is rare) leaves the binding alone.
+    /// From Save (<paramref name="explicitPick"/> false) it never rebinds a player whose bound pad is
+    /// merely absent: populate falls back to some other pad or Keyboard in that case, and persisting
+    /// that would rebind — or clear — the player for having opened Preferences to change a theme.
+    /// </summary>
+    private void PersistDeviceBinding(string? id, bool explicitPick)
+    {
+        if (App.Configuration == null) return;
+        var cfg = App.Configuration.GetInputConfiguration(ConfigKey);
+        bool boundPadAbsent = !string.IsNullOrEmpty(cfg.ControllerDeviceId)
+                              && !_deviceIdByDisplayName.ContainsValue(cfg.ControllerDeviceId);
+        if (!explicitPick && boundPadAbsent) return;
+        if (!_isKeyboardMode && id == null) return;
+        string newId = _isKeyboardMode ? "" : id!;
+        if (cfg.ControllerDeviceId == newId) return;
+        cfg.ControllerDeviceId = newId;
+        App.Configuration.SetInputConfiguration(ConfigKey, cfg);
+        App.Configuration.ScheduleSave();
+        Services.ControllerDiagLog.Write(
+            $"[panel] {ConfigKey} bound -> {(newId == "" ? "(none: keyboard)" : $"\"{newId}\"")}{(explicitPick ? "" : " (Save)")}");
     }
 
     private void LoadConsole(string tag)
@@ -3001,10 +3043,17 @@ public partial class PreferencesWindow : Window
                 ChordIdentifier = isChord ? m.InputIdentifier : null,
             };
         }
-        _suppressControlsAutoSave = true;
-        int slot = config.ControllerSlot;
-        this.FindControl<ComboBox>("ControllerSlotComboBox")!.SelectedIndex = (slot >= 0 && slot <= 3) ? slot + 1 : 0;
-        _suppressControlsAutoSave = false;
+        // Follow this console+player's device binding, so switching player or console doesn't leave
+        // the dropdown showing the previous selection's pad. Assigning the value already selected
+        // raises no event, so this cannot loop back through the handler.
+        string target = DisplayNameForDeviceId(config.ControllerDeviceId) ?? "Keyboard";
+        var devCombo = this.FindControl<ComboBox>("InputDeviceComboBox")!;
+        if (!Equals(devCombo.SelectedItem, target))
+        {
+            _suppressControlsAutoSave = true;
+            devCombo.SelectedItem = target;
+            _suppressControlsAutoSave = false;
+        }
     }
 
     private void SaveMappingsToConfig()
@@ -3027,6 +3076,13 @@ public partial class PreferencesWindow : Window
                     InputType = Configuration.InputType.Controller, DisplayName = m.DisplayText });
         }
         App.Configuration!.SetInputConfiguration(ConfigKey, config);
+
+        // Persist the device the dropdown is showing. The selection handler only runs on a CHANGE,
+        // and populate auto-selects the first controller under suppression — so the most ordinary
+        // path (open Preferences, see your pad already selected, click Save) wrote no binding while
+        // the UI showed one. Save is an explicit act; honour what is on screen, with the
+        // absent-pad guard inside PersistDeviceBinding.
+        PersistDeviceBinding(_isKeyboardMode ? null : DeviceIdForDisplayName(_selectedDevice), explicitPick: false);
     }
 
     private void ResetControlsDefaults()
