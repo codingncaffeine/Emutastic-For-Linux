@@ -856,7 +856,7 @@ namespace Emutastic.Views
                 var rtb = new RenderTargetBitmap(new PixelSize(w, h), new Vector(96, 96));
                 rtb.Render(ThemePreviewHost);
                 string path = Path.Combine(AppPaths.GetFolder("Logs"), "emutv-snapshot.png");
-                rtb.Save(path);
+                rtb.Save(path, PngBitmapEncoderOptions.Default);
                 HintLabel.Text = "Snapshot saved";
             }
             catch { }

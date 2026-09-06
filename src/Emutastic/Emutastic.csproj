@@ -80,18 +80,19 @@
   </Target>
 
   <ItemGroup>
-    <!-- VENDORED: Avalonia 12.1.999 built from PR #20926 (Linux X11 drag-and-drop). Served from the
-         local feed in nuget.config. Avalonia.Desktop is intentionally NOT referenced — it drags in
-         macOS-only Avalonia.Native (can't build on Linux); we use Avalonia.X11 + Avalonia.Skia and
-         bootstrap with UseX11().UseSkia() in Program.cs. Revert to the released package + drop the
-         local feed when official Avalonia 12.1 ships. See memory: avalonia-x11-dnd-gap. -->
-    <PackageReference Include="Avalonia" Version="12.1.999" />
-    <PackageReference Include="Avalonia.X11" Version="12.1.999" />
-    <PackageReference Include="Avalonia.Skia" Version="12.1.999" />
-    <PackageReference Include="Avalonia.HarfBuzz" Version="12.1.999" />
+    <!-- Official Avalonia 12.1 from nuget.org. This project previously pinned a locally-built
+         12.1.999 from PR #20926 (Linux X11 drag-and-drop / XDND); that PR shipped in 12.1, so the
+         released package carries the same fix and the local feed is gone. Avalonia.Desktop is
+         intentionally NOT referenced — it drags in macOS-only Avalonia.Native (can't build on
+         Linux); we use Avalonia.X11 + Avalonia.Skia and bootstrap with UseX11().UseSkia() in
+         Program.cs. -->
+    <PackageReference Include="Avalonia" Version="12.1.2" />
+    <PackageReference Include="Avalonia.X11" Version="12.1.2" />
+    <PackageReference Include="Avalonia.Skia" Version="12.1.2" />
+    <PackageReference Include="Avalonia.HarfBuzz" Version="12.1.2" />
     <PackageReference Include="Avalonia.Controls.DataGrid" Version="12.0.0" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.999" />
-    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.999" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.2" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.2" />
     <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.1">
       <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
       <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
@@ -110,9 +111,4 @@
     <PackageReference Include="Svg.Skia" Version="5.1.1" />
   </ItemGroup>
 
-  <!-- REMINDER (kept as a comment so builds stay warning-clean): this project pins a VENDORED
-       Avalonia 12.1.999 from PR #20926 for Linux drag-and-drop. When official Avalonia 12.1 ships:
-       remove the avalonia-pr20926 source in nuget.config, repin these packages to the released
-       version, and restore Avalonia.Desktop + UsePlatformDetect() if desired. (Was an MSBuild
-       <Warning> that nagged every build; demoted to a comment — see memory: avalonia-x11-dnd-gap.) -->
 </Project>
