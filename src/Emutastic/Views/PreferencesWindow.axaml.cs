@@ -1977,7 +1977,15 @@ public partial class PreferencesWindow : Window
         var result = await Task.Run(() =>
         {
             int imported = 0, skipped = 0;
-            foreach (var src in paths)
+            // A BIOS pack normally arrives as a folder, and File.Exists() is false for
+            // a directory — without expanding one first, every file inside it is
+            // invisible and the drop reports "No BIOS files recognized". Subfolders
+            // are walked too: packs nest freely, and each match is placed by its own
+            // canonical path regardless of how deep it was found.
+            var files = ExpandDroppedPaths(paths, out bool truncated);
+            if (truncated)
+                messages.Add($"• Stopped after {MaxDroppedFiles} files — drop a narrower folder if something is missing");
+            foreach (var src in files)
             {
                 if (!System.IO.File.Exists(src)) { skipped++; continue; }
                 ProcessDroppedFile(src, sysDir, messages, ref imported, ref skipped);
@@ -1989,7 +1997,42 @@ public partial class PreferencesWindow : Window
         string summary = result.imported > 0
             ? $"Imported {result.imported} file{(result.imported == 1 ? "" : "s")}" + (result.skipped > 0 ? $" ({result.skipped} skipped)" : "")
             : "No BIOS files recognized";
-        await new ConfirmDialog("BIOS drop", summary + (messages.Count > 0 ? "\n\n" + string.Join("\n", messages) : ""), "OK", infoOnly: true).ShowDialog<bool>(this);
+        // A dropped folder can hold hundreds of files; listing every miss would bury
+        // the imports, so show a few and count the rest.
+        var shown  = messages.Where(m => !m.EndsWith(NotRecognizedSuffix, StringComparison.Ordinal)).ToList();
+        var misses = messages.Where(m =>  m.EndsWith(NotRecognizedSuffix, StringComparison.Ordinal)).ToList();
+        shown.AddRange(misses.Take(MaxMissesListed));
+        if (misses.Count > MaxMissesListed)
+            shown.Add($"• …and {misses.Count - MaxMissesListed} more not recognized as BIOS");
+        await new ConfirmDialog("BIOS drop", summary + (shown.Count > 0 ? "\n\n" + string.Join("\n", shown) : ""), "OK", infoOnly: true).ShowDialog<bool>(this);
+    }
+
+
+    // Folder drops are walked in full — a BIOS pack nests freely and the panel only
+    // ever reads the System folder's own layout, so depth on the source side is fine.
+    private const int MaxDroppedFiles = 2000;
+    private const int MaxMissesListed = 10;
+    private const string NotRecognizedSuffix = ": not a recognized BIOS";
+
+    private static List<string> ExpandDroppedPaths(List<string> paths, out bool truncated)
+    {
+        var files = new List<string>();
+        truncated = false;
+        foreach (var p in paths)
+        {
+            if (files.Count >= MaxDroppedFiles) { truncated = true; break; }
+            if (!System.IO.Directory.Exists(p)) { files.Add(p); continue; }
+            try
+            {
+                foreach (var f in System.IO.Directory.EnumerateFiles(p, "*", System.IO.SearchOption.AllDirectories))
+                {
+                    if (files.Count >= MaxDroppedFiles) { truncated = true; break; }
+                    files.Add(f);
+                }
+            }
+            catch { /* an unreadable subtree must not sink the rest of the drop */ }
+        }
+        return files;
     }
 
     private static void ProcessDroppedFile(string src, string sysDir, List<string> messages, ref int imported, ref int skipped)
@@ -2049,7 +2092,7 @@ public partial class PreferencesWindow : Window
 
         string? fileMd5 = anyHashed ? ComputeMd5(src) : null;
         var fileMatch = Services.KnownBios.MatchKnownBios(srcName, size, fileMd5, () => System.IO.File.OpenRead(src));
-        if (fileMatch == null) { messages.Add($"• {srcName}: not a recognized BIOS"); skipped++; return; }
+        if (fileMatch == null) { messages.Add($"• {srcName}{NotRecognizedSuffix}"); skipped++; return; }
         try
         {
             var targets = Services.KnownBios.GcIplTargets(fileMatch);
