@@ -9,6 +9,24 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# ── preflight: ScreenScraper developer registration ──────────────────────────
+# src/Emutastic/Secrets.cs is gitignored, so any fresh clone builds from the
+# empty template. ScreenScraper answers a request carrying no devid/devpassword
+# with its *user* credential error, so a build made that way tells every user
+# their own account password is wrong. 0.9.3 shipped exactly like that — fail
+# the release here instead of finding out from a bug report.
+SECRETS=src/Emutastic/Secrets.cs
+if grep -qF 'ScreenScraperDevId = ""' "$SECRETS" ||
+   grep -qF 'ScreenScraperDevPass = ""' "$SECRETS" ||
+   ! grep -qF 'ScreenScraperDevId = "' "$SECRETS" ||
+   ! grep -qF 'ScreenScraperDevPass = "' "$SECRETS"; then
+    echo "ERROR: $SECRETS carries no ScreenScraper developer registration." >&2
+    echo "       Scraping would be dead in every artifact this run produces," >&2
+    echo "       and the app would blame each user's own password. Fill it in first." >&2
+    exit 1
+fi
+echo "── preflight: ScreenScraper developer registration present"
+
 VER=$(grep -oPm1 '(?<=<Version>)[^<]+' src/Emutastic/Emutastic.csproj)
 OUT=packaging/out
 PUB=$OUT/publish
