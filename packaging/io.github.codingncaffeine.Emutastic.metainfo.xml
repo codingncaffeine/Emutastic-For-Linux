@@ -63,6 +63,12 @@
   </supports>
 
   <releases>
+    <release version="0.9.4" date="2026-09-07">
+      <description>
+        <p>Restores ScreenScraper scraping, which the 0.9.3 build shipped without
+           credentials for and misreported as an incorrect account password.</p>
+      </description>
+    </release>
     <release version="0.7.5" date="2026-06-05">
       <description>
         <p>Selection indicators, Delete-key removal, DS screen layouts, achievement
