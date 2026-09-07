@@ -20,6 +20,47 @@ namespace Emutastic.Services
         private static string DevId   => Secrets.ScreenScraperDevId;
         private static string DevPass => Secrets.ScreenScraperDevPass;
 
+        /// <summary>
+        /// False when this build carries no ScreenScraper developer registration.
+        /// </summary>
+        /// <remarks>
+        /// ScreenScraper answers a request that carries no devid/devpassword with its
+        /// *user* credential error ("Erreur de login : Verifier les identifiants
+        /// utilisateurs"), not its developer one, so an unregistered build looks
+        /// exactly like a wrong account password. Check our own state before asking.
+        /// </remarks>
+        private static bool DevCredentialsConfigured =>
+            !string.IsNullOrWhiteSpace(DevId) && !string.IsNullOrWhiteSpace(DevPass);
+
+        private const string NoDevCredentialsMessage =
+            "This build has no ScreenScraper developer credentials, so the server rejects every " +
+            "request before it ever checks your account — your username and password are not the problem.";
+
+        /// <summary>Shared devid/devpassword/softname/ssid/sspassword query string.</summary>
+        private static string AuthQuery(string username, string password) =>
+            $"devid={Uri.EscapeDataString(DevId)}&devpassword={Uri.EscapeDataString(DevPass)}" +
+            $"&softname={Uri.EscapeDataString(SoftName)}&output=json" +
+            $"&ssid={Uri.EscapeDataString(username)}&sspassword={Uri.EscapeDataString(password)}";
+
+        private static volatile bool _warnedNoDevCredentials;
+
+        /// <summary>
+        /// True when a scrape cannot even be attempted. Logs the developer-credential
+        /// case once per run, so an unregistered build never fails silently and reads
+        /// back as "no artwork found".
+        /// </summary>
+        private static bool CannotScrape(string username, string password)
+        {
+            if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password)) return true;
+            if (DevCredentialsConfigured) return false;
+            if (!_warnedNoDevCredentials)
+            {
+                _warnedNoDevCredentials = true;
+                Log("Scrape skipped: " + NoDevCredentialsMessage);
+            }
+            return true;
+        }
+
         private readonly HttpClient _http;
         private readonly string     _snapCacheFolder;
         private readonly string     _boxArt3DCacheFolder;
@@ -141,13 +182,13 @@ namespace Emutastic.Services
         {
             try
             {
-                string url = $"{BaseUrl}ssuserInfos.php" +
-                             $"?devid={Uri.EscapeDataString(DevId)}" +
-                             $"&devpassword={Uri.EscapeDataString(DevPass)}" +
-                             $"&softname={Uri.EscapeDataString(SoftName)}" +
-                             $"&output=json" +
-                             $"&ssid={Uri.EscapeDataString(username)}" +
-                             $"&sspassword={Uri.EscapeDataString(password)}";
+                if (!DevCredentialsConfigured)
+                {
+                    Log("Login aborted: this build carries no developer credentials");
+                    return (NoDevCredentialsMessage, 1);
+                }
+
+                string url = $"{BaseUrl}ssuserInfos.php?" + AuthQuery(username, password);
 
                 var response = await _http.GetAsync(url);
                 string json  = await response.Content.ReadAsStringAsync();
@@ -158,12 +199,14 @@ namespace Emutastic.Services
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    // ScreenScraper returns the reason as plain text (often with a 403), e.g.
-                    // "Erreur de login : Vérifier les identifiants utilisateurs !". Surface it
-                    // so the user knows it's their account login, not a server fault.
+                    // ScreenScraper returns the reason as plain text (usually with a 403).
+                    // Its two login errors differ by a single word — "developpeur" for the
+                    // devid/devpassword, "utilisateurs" for the account — so match the
+                    // ASCII stem of each and never let a dev fault read as a user fault.
                     string body = json.Trim();
                     string reason =
-                        body.Contains("identifiant", StringComparison.OrdinalIgnoreCase) ? "Incorrect ScreenScraper username or password. (Register a free account at screenscraper.fr.)"
+                        body.Contains("veloppeur", StringComparison.OrdinalIgnoreCase)    ? "ScreenScraper rejected this build's developer credentials — your account login is not the problem."
+                        : body.Contains("utilisateur", StringComparison.OrdinalIgnoreCase) ? "Incorrect ScreenScraper username or password. (Register a free account at screenscraper.fr.)"
                         : body.Contains("ferm", StringComparison.OrdinalIgnoreCase)        ? "The ScreenScraper API is temporarily closed — try again later."
                         : body.Contains("quota", StringComparison.OrdinalIgnoreCase)       ? "ScreenScraper daily quota reached — try again later."
                         : (body.Length is > 0 and < 200)                                   ? body
@@ -270,7 +313,7 @@ namespace Emutastic.Services
             string console,  string romHash,
             string romPath)
         {
-            if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
+            if (CannotScrape(username, password))
                 return null;
 
             if (!SystemIds.TryGetValue(console, out int systemId)) return null;
@@ -286,9 +329,7 @@ namespace Emutastic.Services
 
             try
             {
-                string auth   = $"devid={Uri.EscapeDataString(DevId)}&devpassword={Uri.EscapeDataString(DevPass)}" +
-                                $"&softname={Uri.EscapeDataString(SoftName)}&output=json" +
-                                $"&ssid={Uri.EscapeDataString(username)}&sspassword={Uri.EscapeDataString(password)}";
+                string auth = AuthQuery(username, password);
                 string md5Part = string.IsNullOrWhiteSpace(romHash)
                     ? ""
                     : $"&md5={romHash.ToUpperInvariant()}";
@@ -389,7 +430,7 @@ namespace Emutastic.Services
             string username, string password,
             string console, string romHash, string romPath)
         {
-            if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
+            if (CannotScrape(username, password))
                 return new BoxArt3DResult { ErrorMessage = "ScreenScraper not configured" };
 
             if (!SystemIds.TryGetValue(console, out int systemId))
@@ -417,9 +458,7 @@ namespace Emutastic.Services
 
             try
             {
-                string auth = $"devid={Uri.EscapeDataString(DevId)}&devpassword={Uri.EscapeDataString(DevPass)}" +
-                              $"&softname={Uri.EscapeDataString(SoftName)}&output=json" +
-                              $"&ssid={Uri.EscapeDataString(username)}&sspassword={Uri.EscapeDataString(password)}";
+                string auth = AuthQuery(username, password);
                 string md5Part = string.IsNullOrWhiteSpace(romHash)
                     ? ""
                     : $"&md5={romHash.ToUpperInvariant()}";
@@ -500,7 +539,7 @@ namespace Emutastic.Services
             string username, string password,
             string console, string romHash, string romPath)
         {
-            if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
+            if (CannotScrape(username, password))
                 return null;
 
             if (!SystemIds.TryGetValue(console, out int systemId)) return null;
@@ -523,9 +562,7 @@ namespace Emutastic.Services
 
             try
             {
-                string auth = $"devid={Uri.EscapeDataString(DevId)}&devpassword={Uri.EscapeDataString(DevPass)}" +
-                              $"&softname={Uri.EscapeDataString(SoftName)}&output=json" +
-                              $"&ssid={Uri.EscapeDataString(username)}&sspassword={Uri.EscapeDataString(password)}";
+                string auth = AuthQuery(username, password);
                 string md5Part = string.IsNullOrWhiteSpace(romHash)
                     ? ""
                     : $"&md5={romHash.ToUpperInvariant()}";
@@ -588,7 +625,7 @@ namespace Emutastic.Services
             string username, string password,
             string console, string romHash, string romPath)
         {
-            if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
+            if (CannotScrape(username, password))
                 return null;
             if (!SystemIds.TryGetValue(console, out int systemId))
                 return null;
@@ -598,9 +635,7 @@ namespace Emutastic.Services
 
             try
             {
-                string auth = $"devid={Uri.EscapeDataString(DevId)}&devpassword={Uri.EscapeDataString(DevPass)}" +
-                              $"&softname={Uri.EscapeDataString(SoftName)}&output=json" +
-                              $"&ssid={Uri.EscapeDataString(username)}&sspassword={Uri.EscapeDataString(password)}";
+                string auth = AuthQuery(username, password);
                 string md5Part = string.IsNullOrWhiteSpace(romHash)
                     ? ""
                     : $"&md5={romHash.ToUpperInvariant()}";
@@ -840,7 +875,7 @@ namespace Emutastic.Services
             string console, string title, string romHash, string romPath,
             Action<double>? progress = null)
         {
-            if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
+            if (CannotScrape(username, password))
                 return new ManualResult { ErrorMessage = "ScreenScraper not configured" };
             if (!SystemIds.TryGetValue(console, out int systemId))
                 return new ManualResult { ErrorMessage = $"Console '{console}' not supported" };
@@ -854,9 +889,7 @@ namespace Emutastic.Services
 
             try
             {
-                string auth = $"devid={Uri.EscapeDataString(DevId)}&devpassword={Uri.EscapeDataString(DevPass)}" +
-                              $"&softname={Uri.EscapeDataString(SoftName)}&output=json" +
-                              $"&ssid={Uri.EscapeDataString(username)}&sspassword={Uri.EscapeDataString(password)}";
+                string auth = AuthQuery(username, password);
                 string md5Part = string.IsNullOrWhiteSpace(romHash) ? "" : $"&md5={romHash.ToUpperInvariant()}";
                 try
                 {
