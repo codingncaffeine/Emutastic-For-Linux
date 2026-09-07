@@ -1654,19 +1654,36 @@ public partial class PreferencesWindow : Window
         catch { return; }
 
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        bool sweepingSystem = false;
         foreach (var root in baseRomDirs)
             Walk(root, 3);
+
+        // Sweep the System folder's own subfolders too. A pack unpacked in place as
+        // System/BIOS/ (or bios/, or the pack's own pcsx2/bios/ tree) is otherwise
+        // invisible: only the canonical layout is ever read, and nothing tells the
+        // user their file landed one folder off. Entries already present are excluded
+        // above, so a file sitting at its canonical path is never re-copied.
+        sweepingSystem = true;
+        try
+        {
+            foreach (var sub in System.IO.Directory.EnumerateDirectories(sysDir))
+                Walk(sub, 3);
+        }
+        catch { /* an unreadable System subtree must not break the scan */ }
 
         void Walk(string dir, int remainingDepth)
         {
             string full;
             try { full = System.IO.Path.GetFullPath(dir); } catch { return; }
-            if (!visited.Add(full)) return;
-            // Never treat the System folder itself as an import source, and skip
-            // dot-folders (.Trash-1000 on removable drives holds deleted copies).
-            if ((full.TrimEnd(System.IO.Path.DirectorySeparatorChar) + System.IO.Path.DirectorySeparatorChar)
+            // While sweeping ROM directories the System folder is not an import
+            // source — tested before the visited set, so the System pass can still
+            // walk it afterwards. Dot-folders are always skipped (.Trash-1000 on
+            // removable drives holds deleted copies).
+            if (!sweepingSystem
+                && (full.TrimEnd(System.IO.Path.DirectorySeparatorChar) + System.IO.Path.DirectorySeparatorChar)
                     .StartsWith(sysPrefix, StringComparison.OrdinalIgnoreCase)) return;
             if (System.IO.Path.GetFileName(full).StartsWith('.')) return;
+            if (!visited.Add(full)) return;
 
             IEnumerable<System.IO.FileInfo> files;
             try { files = new System.IO.DirectoryInfo(full).EnumerateFiles(); }
