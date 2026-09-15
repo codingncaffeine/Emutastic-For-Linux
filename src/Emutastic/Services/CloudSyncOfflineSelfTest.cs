@@ -21,7 +21,7 @@ namespace Emutastic.Services
     /// account, no network and no risk to a real repository. Run it from a copy of the build
     /// output whose PortableData has never been used. Checks that every PC gets its own
     /// repository (created before the first upload), that saves go up and come down intact,
-    /// that texture packs stay out in both directions, that files over 1 MB download through the
+    /// that texture packs, BIOS files and console system files stay out in both directions, that files over 1 MB download through the
     /// raw fallback, that progress reports carry the right totals, that a second FullSyncAsync
     /// joins the running one, that a repeat sync transfers no saves, and that the log narrates it.
     /// Exit 0 = pass, 1 = a check failed, 2 = incomplete.
@@ -75,7 +75,8 @@ namespace Emutastic.Services
                 .SetValue(svc, "offline-token");
             Check(await svc.ValidateTokenAsync() && svc.Username == "tester", "signed in against the fake API");
 
-            // Cloud side: two saves (one over 1 MB, which GitHub does not inline) and a texture pack.
+            // Cloud side: two saves (one over 1 MB, which GitHub does not inline), a texture pack, a
+            // GameCube BIOS copy and a 3DS system archive.
             DateTime cloudTime = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
             byte[] smallSave = RandomNumberGenerator.GetBytes(4096);
             byte[] bigSave = RandomNumberGenerator.GetBytes(1_500_000);   // random, so it stays over 1 MB gzipped
@@ -83,14 +84,22 @@ namespace Emutastic.Services
             const string SmallPath = "BatterySaves/PSP/PSP/SAVEDATA/ULUS00001/DATA.BIN";
             const string BigPath = "BatterySaves/PSP/PSP/SAVEDATA/ULUS00002/BIG.BIN";
             const string CloudTexturePath = "BatterySaves/PSP/PSP/TEXTURES/ULUS00001/tex.png";
+            const string CloudBiosPath = "BatterySaves/GameCube/User/GC/EUR/IPL.bin";
+            const string CloudSystemPath = "BatterySaves/3DS/Azahar/nand/title/0004009b/00010202/content/00000000.app";
+            byte[] cloudBios = RandomNumberGenerator.GetBytes(2048);
+            byte[] cloudSystem = RandomNumberGenerator.GetBytes(2048);
             fake.Seed(SmallPath, Gzip(smallSave));
             fake.Seed(BigPath, Gzip(bigSave));
             fake.Seed(CloudTexturePath, Gzip(cloudTexture));
+            fake.Seed(CloudBiosPath, Gzip(cloudBios));
+            fake.Seed(CloudSystemPath, Gzip(cloudSystem));
             fake.SeedManifest(new Dictionary<string, (DateTime, long)>
             {
                 [SmallPath] = (cloudTime, smallSave.Length),
                 [BigPath] = (cloudTime, bigSave.Length),
                 [CloudTexturePath] = (cloudTime, cloudTexture.Length),
+                [CloudBiosPath] = (cloudTime, cloudBios.Length),
+                [CloudSystemPath] = (cloudTime, cloudSystem.Length),
             });
 
             // This PC: one save of its own and a texture pack.
@@ -101,6 +110,26 @@ namespace Emutastic.Services
             File.WriteAllBytes(localSave, RandomNumberGenerator.GetBytes(3000));
             Directory.CreateDirectory(Path.GetDirectoryName(localTexture)!);
             File.WriteAllBytes(localTexture, RandomNumberGenerator.GetBytes(3000));
+            // GameCube: a memory card (a save, inside the allowlisted User/GC) beside a BIOS copy.
+            string localCard = Path.Combine(saves, "GameCube", "User", "GC", "USA", "Card A", "01-TEST-save.gci");
+            string localBios = Path.Combine(saves, "GameCube", "User", "GC", "USA", "IPL.bin");
+            Directory.CreateDirectory(Path.GetDirectoryName(localCard)!);
+            File.WriteAllBytes(localCard, RandomNumberGenerator.GetBytes(3000));
+            File.WriteAllBytes(localBios, RandomNumberGenerator.GetBytes(3000));
+            // A PlayStation BIOS in a console folder that syncs whole, and Azahar's NAND and SD card:
+            // a system archive and its ticket stay out, while a game save under title/.../data and
+            // the system settings under nand/data are saves.
+            const string Id = "00000000000000000000000000000000";
+            string localPs1Bios = Path.Combine(saves, "PS1", "scph5501.bin");
+            string local3dsSystem = Path.Combine(saves, "3DS", "Azahar", "nand", "title", "0004009b", "00014002", "content", "00000000.app");
+            string local3dsTicket = Path.Combine(saves, "3DS", "Azahar", "nand", "dbs", "ticket.db", "0004009B00014002.0000000000000000.tik");
+            string local3dsSave = Path.Combine(saves, "3DS", "Azahar", "sdmc", "Nintendo 3DS", Id, Id, "title", "00040000", "00012300", "data", "00000001", "main");
+            string local3dsSettings = Path.Combine(saves, "3DS", "Azahar", "nand", "data", Id, "sysdata", "00010017", "00000000", "config");
+            foreach (string file in new[] { localPs1Bios, local3dsSystem, local3dsTicket, local3dsSave, local3dsSettings })
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+                File.WriteAllBytes(file, RandomNumberGenerator.GetBytes(3000));
+            }
 
             var reports = new ConcurrentQueue<GitHubSyncService.SyncProgress>();
             var states = new ConcurrentQueue<bool>();
@@ -115,16 +144,26 @@ namespace Emutastic.Services
             var result = await first;
 
             Check(fake.RepoCreated && fake.RejectedBeforeCreate == 0, "this PC's repository was created before anything was uploaded");
-            Check(result == new GitHubSyncService.SyncResult(2, 2, 0),
-                  $"2 up (the save and the library), 2 down, 0 errors — got {result.Uploaded} up, {result.Downloaded} down, {result.Errors} errors");
+            Check(result == new GitHubSyncService.SyncResult(5, 2, 0),
+                  $"5 up (four saves and the library), 2 down, 0 errors — got {result.Uploaded} up, {result.Downloaded} down, {result.Errors} errors");
             Check(fake.Has("BatterySaves/PSP/PSP/SAVEDATA/ULUS00003/LOCAL.BIN"), "this PC's save was uploaded");
             Check(!fake.PutPaths.Any(p => p.Contains("/TEXTURES/")), "no texture pack was uploaded");
+            Check(fake.Has("BatterySaves/GameCube/User/GC/USA/Card A/01-TEST-save.gci"), "a GameCube memory card was uploaded");
+            Check(!fake.PutPaths.Any(p => p.EndsWith("/IPL.bin", StringComparison.OrdinalIgnoreCase)), "no GameCube BIOS copy was uploaded");
+            Check(!fake.PutPaths.Any(p => p.EndsWith("/scph5501.bin", StringComparison.OrdinalIgnoreCase)), "no PlayStation BIOS was uploaded");
+            Check(fake.Has($"BatterySaves/3DS/Azahar/sdmc/Nintendo 3DS/{Id}/{Id}/title/00040000/00012300/data/00000001/main")
+                  && fake.Has($"BatterySaves/3DS/Azahar/nand/data/{Id}/sysdata/00010017/00000000/config"),
+                  "a 3DS game save and the 3DS system settings were uploaded");
+            Check(!fake.PutPaths.Any(p => p.Contains("/content/") || p.Contains("/nand/dbs/")), "no 3DS system archive or ticket was uploaded");
             string downloadedSmall = Path.Combine(saves, "PSP", "PSP", "SAVEDATA", "ULUS00001", "DATA.BIN");
             string downloadedBig = Path.Combine(saves, "PSP", "PSP", "SAVEDATA", "ULUS00002", "BIG.BIN");
             Check(File.Exists(downloadedSmall) && File.ReadAllBytes(downloadedSmall).SequenceEqual(smallSave), "a small cloud save came down intact");
             Check(File.Exists(downloadedBig) && File.ReadAllBytes(downloadedBig).SequenceEqual(bigSave), "a cloud save over 1 MB came down intact");
             Check(fake.RawRequests.Contains(BigPath), "…fetched raw, because the JSON response carried no content");
             Check(!File.Exists(Path.Combine(saves, "PSP", "PSP", "TEXTURES", "ULUS00001", "tex.png")), "the cloud texture pack was not downloaded");
+            Check(!File.Exists(Path.Combine(saves, "GameCube", "User", "GC", "EUR", "IPL.bin")), "the cloud BIOS copy was not downloaded");
+            Check(!File.Exists(Path.Combine(saves, "3DS", "Azahar", "nand", "title", "0004009b", "00010202", "content", "00000000.app")),
+                  "the cloud 3DS system archive was not downloaded");
             Check(File.Exists(downloadedSmall) && File.GetLastWriteTimeUtc(downloadedSmall) == cloudTime, "a downloaded save carries the cloud's modified time");
             Check(fake.ManifestKeys().Contains("BatterySaves/PSP/PSP/SAVEDATA/ULUS00003/LOCAL.BIN"), "the manifest was saved with the upload in it");
 
@@ -132,8 +171,8 @@ namespace Emutastic.Services
             var up = list.Where(p => p.Phase == GitHubSyncService.SyncPhase.Uploading).ToList();
             var down = list.Where(p => p.Phase == GitHubSyncService.SyncPhase.Downloading).ToList();
             Check(list.Count > 0 && list[0].Phase == GitHubSyncService.SyncPhase.Checking, "progress starts in the checking phase");
-            Check(up.Count > 0 && up.All(p => p.Total == 1) && up[0].Done == 0 && up[^1].Done == 1,
-                  $"upload progress runs 0 → 1 of 1 ({up.Count} report(s))");
+            Check(up.Count > 0 && up.All(p => p.Total == 4) && up[0].Done == 0 && up[^1].Done == 4,
+                  $"upload progress runs 0 → 4 of 4 ({up.Count} report(s))");
             Check(down.Count > 0 && down.All(p => p.Total == 2) && down[0].Done == 0 && down[^1].Done == 2,
                   $"download progress runs 0 → 2 of 2 ({down.Count} report(s))");
             Check(down.Zip(down.Skip(1)).All(z => z.Second.Done >= z.First.Done), "download progress never goes backwards");
@@ -145,10 +184,10 @@ namespace Emutastic.Services
             string logPath = Path.Combine(AppPaths.GetFolder("Logs"), "cloudsync.log");
             string log = File.Exists(logPath) ? File.ReadAllText(logPath) : "";
             Check(log.Contains($"Full sync started: tester/{RepoName}"), "the log records the start and the repository");
-            Check(log.Contains("Upload: 1 of 1 local save file(s)"), "the log records the upload plan");
-            Check(log.Contains("Download: 2 cloud file(s)") && log.Contains("1 skipped as non-save data"),
-                  "the log records the download plan and the skipped texture pack");
-            Check(log.Contains("Full sync: 2 up, 2 down, 0 errors"), "the log records the result");
+            Check(log.Contains("Upload: 4 of 4 local save file(s)"), "the log records the upload plan");
+            Check(log.Contains("Download: 2 cloud file(s)") && log.Contains("3 skipped as non-save data"),
+                  "the log records the download plan and the skipped texture pack, BIOS copy and 3DS system archive");
+            Check(log.Contains("Full sync: 5 up, 2 down, 0 errors"), "the log records the result");
 
             Console.WriteLine("--- repeat sync");
             int putsBefore = fake.PutPaths.Count(p => p.StartsWith("BatterySaves/", StringComparison.Ordinal));

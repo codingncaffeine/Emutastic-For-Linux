@@ -210,7 +210,8 @@ manual). The status bar shows each sync's progress.
 - **One repository per PC** — every PC backs up to its own `emutastic-saves-<hostname>` repository
   and never reads another PC's saves, so a new or reinstalled machine can't overwrite progress made
   elsewhere. Signing in again on a reinstalled PC with the same hostname restores its backup.
-- **Saves only** — HD texture packs, shader caches and save states stay out of the backup.
+- **Saves only** — HD texture packs, BIOS and console system files, shader caches and save states stay
+  out of the backup.
 - **Optional encryption** — AES-256-GCM with a passphrase you choose; restoring the backup needs the
   same passphrase.
 - **Sign-in kept in your keyring** — the GitHub token and the passphrase live in your desktop

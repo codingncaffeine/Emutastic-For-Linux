@@ -897,11 +897,30 @@ namespace Emutastic.Services
             return slash > 0 && IsExcludedSavePath(rest[(slash + 1)..]);
         }
 
+        // BIOS files, by the names System Files knows them under. They belong in the System folder,
+        // but copies land in save trees too (GameCubeHandler mirrors IPL.bin into Dolphin's
+        // User/GC/<region> at launch), and a backup of saves is no place for any of them.
+        private static readonly HashSet<string> BiosFileNames =
+            KnownBios.All.Select(b => Path.GetFileName(b.Filename)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         private static bool IsExcludedSavePath(string rel)
         {
             if (rel.EndsWith(".srm", StringComparison.OrdinalIgnoreCase)) return true;
-            foreach (var seg in rel.Split('/', '\\'))
-                if (ExcludedSaveSegments.Contains(seg)) return true;
+            string[] segs = rel.Split('/', '\\');
+            if (BiosFileNames.Contains(segs[^1])) return true;
+            bool underTitle = false;
+            for (int i = 0; i < segs.Length; i++)
+            {
+                if (ExcludedSaveSegments.Contains(segs[i])) return true;
+                if (i == segs.Length - 1) break;   // the rules below match folders, never a save's own name
+                // Console system files: installed title content (3DS system archives and installed
+                // titles in Azahar's nand/ and sdmc/, Wii channels in Dolphin's User/Wii) and Azahar's
+                // ticket database. A title's saves sit beside its content, under title/.../data.
+                if (underTitle && segs[i].Equals("content", StringComparison.OrdinalIgnoreCase)) return true;
+                if (segs[i].Equals("title", StringComparison.OrdinalIgnoreCase)) underTitle = true;
+                if (i > 0 && segs[i].Equals("dbs", StringComparison.OrdinalIgnoreCase)
+                    && segs[i - 1].Equals("nand", StringComparison.OrdinalIgnoreCase)) return true;
+            }
             return false;
         }
 
@@ -1224,7 +1243,7 @@ namespace Emutastic.Services
                 }
                 CloudSyncLog.Write($"Download: {toDownload.Count:N0} cloud file(s) are new or newer than this PC's copy " +
                                    $"({Megabytes(toDownload.Sum(d => d.SizeBytes))})" +
-                                   (skippedNonSave > 0 ? $"; {skippedNonSave:N0} skipped as non-save data (texture packs, caches)" : ""));
+                                   (skippedNonSave > 0 ? $"; {skippedNonSave:N0} skipped as non-save data (texture packs, BIOS and system files, caches)" : ""));
 
                 done = 0;
                 progress.Report(new SyncProgress(SyncPhase.Downloading, 0, toDownload.Count, uploaded, downloaded, errors));

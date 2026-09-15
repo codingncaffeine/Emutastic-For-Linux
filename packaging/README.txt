@@ -142,7 +142,8 @@ new or reinstalled machine can't overwrite progress made elsewhere.
   - "Sync Now" backs up everything that changed and restores anything
     missing from this PC (for example after a reinstall)
   - The status bar shows each sync's progress
-  - HD texture packs, caches and save states are not backed up
+  - HD texture packs, BIOS and console system files, caches and save
+    states are not backed up
 
 Optional AES-256-GCM encryption with a passphrase you choose — saves
 are encrypted before they leave your machine. The passphrase never
