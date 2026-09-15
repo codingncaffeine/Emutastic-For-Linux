@@ -16,7 +16,8 @@ conflicts=('emutastic')
 # vlc-plugin-ffmpeg: snap previews need the avcodec plugin — Arch splits it out of the
 # base plugins, and without it LibVLC h264 decode (every snap video) is unavailable.
 depends=('libvlc' 'vlc-plugins-base' 'vlc-plugin-ffmpeg' 'ffmpeg' 'sdl3' 'fontconfig')
-optdepends=('vlc-plugins-video-output: hardware-accelerated snap previews on some setups')
+optdepends=('vlc-plugins-video-output: hardware-accelerated snap previews on some setups'
+            'libsecret: keep the cloud-sync sign-in in the desktop keyring')
 options=('!strip')   # self-contained .NET bundle — stripping breaks it
 # The icon ships INSIDE the .dll as an Avalonia resource (not loose in the publish
 # tarball), so fetch it from the repo at the tag — same as LICENSE. %20 = the space

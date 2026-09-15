@@ -27,6 +27,18 @@ if grep -qF 'ScreenScraperDevId = ""' "$SECRETS" ||
 fi
 echo "── preflight: ScreenScraper developer registration present"
 
+# ── preflight: GitHub OAuth client id (cloud sync) ───────────────────────────
+# Same trap: an empty GitHubOAuthClientId compiles fine, and Preferences → Backups
+# then greys out "Sign in with GitHub". Cloud sync was unusable in every release
+# through 0.9.6 for exactly this reason. The id is the Windows app's OAuth App
+# (device flow enabled), so both apps share one consent screen and one repository.
+if ! grep -qE 'GitHubOAuthClientId = "[^"]+"' "$SECRETS"; then
+    echo "ERROR: $SECRETS carries no GitHub OAuth client id." >&2
+    echo "       Cloud sync sign-in would be disabled in every artifact this run produces." >&2
+    exit 1
+fi
+echo "── preflight: GitHub OAuth client id present"
+
 VER=$(grep -oPm1 '(?<=<Version>)[^<]+' src/Emutastic/Emutastic.csproj)
 OUT=packaging/out
 PUB=$OUT/publish
@@ -91,7 +103,7 @@ Priority: optional
 Architecture: amd64
 Installed-Size: $INSTALLED_KB
 Depends: libc6, libgcc-s1, libstdc++6, libicu76 | libicu74 | libicu72, libx11-6, libxext6, libxi6, libxrandr2, libxcursor1, libxfixes3, libice6, libsm6, libfontconfig1, libegl1, libgl1, libsdl3-0, libwayland-client0, libwayland-egl1, libpng16-16t64 | libpng16-16, ffmpeg
-Recommends: libvlc5, vlc-plugin-base
+Recommends: libvlc5, vlc-plugin-base, libsecret-1-0
 Maintainer: codingncaffeine <codingncaffeine@users.noreply.github.com>
 Description: Retro game library and emulator frontend
  Linux port of the Emutastic libretro frontend: game library, save states,
