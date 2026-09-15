@@ -214,6 +214,9 @@ on game close / every 15 minutes / manual), or sync everything on demand with **
   to its own `emutastic-saves-<hostname>` repository instead — other machines never read or write it.
 - **Optional encryption** — AES-256-GCM with a passphrase you choose; the same passphrase is
   required on every PC that shares the repository.
+- **Sign-in kept in your keyring** — the GitHub token and the passphrase live in your desktop
+  keyring (GNOME Keyring, KWallet, or anything else speaking the Secret Service API, via libsecret).
+  Without one they fall back to `config.json`, which only your user can read.
 - The library database syncs last-writer-wins. If you run established libraries on two machines,
   take a backup (**Back Up Now**) before your first sync on each.
 

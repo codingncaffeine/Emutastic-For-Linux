@@ -1176,7 +1176,7 @@ public partial class PreferencesWindow : Window
         (this.FindControl<ComboBox>(name)!.SelectedItem as ComboBoxItem)?.Content as string;
 
     // ════════════════════════════════════════════════════════════════════════
-    //  U5 P3 — Backups panel (local recursive-copy backup; cloud sync deferred)
+    //  U5 P3 — Backups panel (local recursive-copy backup + GitHub cloud sync)
     // ════════════════════════════════════════════════════════════════════════
 
     private void WireBackups()
@@ -1195,6 +1195,7 @@ public partial class PreferencesWindow : Window
 
     private bool _cloudSyncWired;
     private bool _suppressCloudSave;
+    private bool _cloudRestorePending;
 
     private void LoadBackupsSettings()
     {
@@ -1216,11 +1217,35 @@ public partial class PreferencesWindow : Window
                 status.Text = "Cloud sync isn't configured in this build (missing OAuth app id).";
                 signIn.IsEnabled = false;
             }
+            else if (!svc.RestoreTask.IsCompleted)
+            {
+                // The saved sign-in is still being read from the keyring, which may be waiting
+                // on an unlock prompt. Say so, and redraw the panel once there is an answer.
+                status.Text = "Checking saved sign-in…";
+                signIn.IsEnabled = false;
+                if (!_cloudRestorePending)
+                {
+                    _cloudRestorePending = true;
+                    _ = svc.RestoreTask.ContinueWith(_ => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                    {
+                        _cloudRestorePending = false;
+                        status.Text = "Not signed in";
+                        signIn.IsEnabled = true;
+                        LoadBackupsSettings();
+                    }), System.Threading.Tasks.TaskScheduler.Default);
+                }
+            }
             else if (svc.IsAuthenticated && !string.IsNullOrEmpty(svc.Username))
             {
-                status.Text = $"Signed in as {svc.Username}";
+                status.Text = SignedInText(svc);
                 signIn.Content = "Sign Out";
                 settings.IsVisible = true;
+                if (svc.RestoreProblem != null)
+                    this.FindControl<TextBlock>("SyncStatusText")!.Text = svc.RestoreProblem;
+            }
+            else if (svc.RestoreProblem != null)
+            {
+                status.Text = svc.RestoreProblem;
             }
 
             if (cfg != null)
@@ -1244,7 +1269,7 @@ public partial class PreferencesWindow : Window
         _cloudSyncWired = true;
         this.FindControl<Button>("CloudSyncSignInBtn")!.Click += (_, _) => _ = CloudSyncSignInAsync();
         this.FindControl<Button>("SyncNowBtn")!.Click += (_, _) => _ = SyncNowAsync();
-        this.FindControl<Button>("SyncPassphraseSaveBtn")!.Click += (_, _) => SyncPassphraseSave();
+        this.FindControl<Button>("SyncPassphraseSaveBtn")!.Click += (_, _) => _ = SyncPassphraseSaveAsync();
         foreach (var name in new[] { "SyncOnClose", "SyncPeriodic", "SyncManual" })
             this.FindControl<RadioButton>(name)!.IsCheckedChanged += (_, _) => SyncTimingChanged();
         this.FindControl<CheckBox>("SyncEncryptionEnabled")!.IsCheckedChanged += (_, _) => SyncEncryptionChanged();
@@ -1268,6 +1293,12 @@ public partial class PreferencesWindow : Window
         this.FindControl<TextBlock>("SyncRepoNameText")!.Text =
             $"Repository in use: {Services.GitHubSyncService.EffectiveRepoName}";
     }
+
+    // Where the sign-in is kept only needs saying when it is NOT the keyring.
+    private static string SignedInText(Services.GitHubSyncService svc) =>
+        Services.GitHubSyncService.TokenInKeyring
+            ? $"Signed in as {svc.Username}"
+            : $"Signed in as {svc.Username} (no system keyring found, so the sign-in is saved in config.json)";
 
     private void SyncPerPcRepoChanged()
     {
@@ -1322,7 +1353,7 @@ public partial class PreferencesWindow : Window
             {
                 await svc.EnsureRepoExistsAsync();
                 await svc.RefreshShaCacheAsync();
-                status.Text = $"Signed in as {svc.Username}";
+                status.Text = SignedInText(svc);
                 signIn.Content = "Sign Out";
                 settings.IsVisible = true;
 
@@ -1368,18 +1399,19 @@ public partial class PreferencesWindow : Window
         App.Configuration!.ScheduleSave();
     }
 
-    private void SyncPassphraseSave()
+    private async Task SyncPassphraseSaveAsync()
     {
-        var cfg = App.Configuration?.GetCloudSyncConfiguration();
-        if (cfg == null) return;
         var box = this.FindControl<TextBox>("SyncPassphraseBox")!;
         string passphrase = box.Text ?? "";
         if (string.IsNullOrEmpty(passphrase)) return;
-        cfg.PassphraseProtected = Services.GitHubSyncService.ProtectString(passphrase);
-        App.Configuration!.SetCloudSyncConfiguration(cfg);
-        App.Configuration!.ScheduleSave();
         box.Text = "";
-        this.FindControl<TextBlock>("SyncStatusText")!.Text = "Passphrase saved";
+        var status = this.FindControl<TextBlock>("SyncStatusText")!;
+        status.Text = "Saving passphrase…";
+        // The keyring write can wait on an unlock prompt; it runs off this thread.
+        bool inKeyring = await Services.GitHubSyncService.Instance.SetPassphraseAsync(passphrase);
+        status.Text = inKeyring
+            ? "Passphrase saved"
+            : "Passphrase saved (no system keyring found, so it is kept in config.json)";
     }
 
     private async Task SyncNowAsync()

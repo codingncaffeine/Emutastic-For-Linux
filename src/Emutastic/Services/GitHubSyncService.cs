@@ -21,9 +21,10 @@ namespace Emutastic.Services
     /// last-write-wins, optional AES-256-GCM with a PBKDF2-derived key.
     ///
     /// Linux deltas from upstream:
-    ///  - DPAPI (ProtectedData) doesn't exist here; Protect/UnprotectString are
-    ///    pass-throughs. The token/passphrase rest in config.json with the same
-    ///    protection level as the RA token and ScreenScraper password already do.
+    ///  - DPAPI (ProtectedData) doesn't exist here. The token and the encryption
+    ///    passphrase live in the desktop keyring instead (Platform.SecretStore), and
+    ///    config.json carries only <see cref="KeyringSentinel"/>. Without a keyring
+    ///    they fall back to config.json, which is written owner-only.
     ///  - Local battery saves live at Saves/&lt;romstem&gt;.srm (the session's
     ///    RetroArch-style scheme), not upstream's BatterySaves/&lt;Console&gt;/ tree.
     ///    The REPO layout keeps upstream's hash-keyed convention so Windows and
@@ -111,6 +112,7 @@ namespace Emutastic.Services
         }
 
         private volatile string? _token;
+        private volatile string? _passphrase;   // encryption passphrase as restored or saved this session
         private string? _username;
         private readonly ConcurrentDictionary<string, string> _shaCache = new();
         private SyncManifest _manifestCache = new();
@@ -120,6 +122,14 @@ namespace Emutastic.Services
         public bool IsConfigured => !string.IsNullOrEmpty(ClientId);
         public string? Username => _username;
         public SyncManifest ManifestCache => _manifestCache;
+
+        /// <summary>Why the saved sign-in or passphrase could not be restored this session, or
+        /// null. Preferences shows it instead of a bare "Not signed in".</summary>
+        public string? RestoreProblem { get; private set; }
+
+        /// <summary>True when the sign-in lives in the desktop keyring rather than config.json.</summary>
+        public static bool TokenInKeyring =>
+            App.Configuration?.GetCloudSyncConfiguration().GitHubTokenProtected == KeyringSentinel;
 
         public SemaphoreSlim GetGameLock(string romHash)
             => _gameLocks.GetOrAdd(romHash, _ => new SemaphoreSlim(1, 1));
@@ -182,7 +192,7 @@ namespace Emutastic.Services
                 {
                     _token = tokenProp.GetString();
                     await ValidateTokenAsync(ct).ConfigureAwait(false);
-                    SaveTokenToConfig();
+                    await SaveTokenToConfigAsync().ConfigureAwait(false);
                     return true;
                 }
                 if (root.TryGetProperty("error", out var err))
@@ -219,41 +229,188 @@ namespace Emutastic.Services
         {
             _token = null;
             _username = null;
+            RestoreProblem = null;
             _shaCache.Clear();
             _manifestCache = new SyncManifest();
             var cfg = App.Configuration?.GetCloudSyncConfiguration();
             if (cfg != null && App.Configuration != null)
             {
+                bool inKeyring = cfg.GitHubTokenProtected == KeyringSentinel;
                 cfg.GitHubTokenProtected = "";
                 cfg.GitHubUsername = "";
                 cfg.Enabled = false;
                 App.Configuration.SetCloudSyncConfiguration(cfg);
                 App.Configuration.ScheduleSave();
+                if (inKeyring)
+                    _ = OnKeyringQueue(() =>
+                    {
+                        if (!Emutastic.Platform.SecretStore.TryClear(TokenCredential, out string? err))
+                            CloudSyncLog.Write($"Keyring: could not remove the sign-in: {err}");
+                        return true;
+                    });
             }
         }
 
-        public void LoadFromConfig()
+        // ── Credentials at rest (Linux delta) ────────────────────────────────
+        // Upstream keeps the token and passphrase in config under DPAPI. Here they live in the
+        // desktop keyring (Secret Service through libsecret, where gh keeps its GitHub token on
+        // Linux too) and config.json holds only KeyringSentinel. Without a keyring (libsecret
+        // missing, nothing on the session bus) the value itself stays in config.json, which
+        // JsonConfigurationService writes owner-only. Keyring calls block — an unlock prompt
+        // can hold one indefinitely — so they run on the thread pool, one at a time and in the
+        // order requested: a sign-out's delete can never land after the next sign-in's store.
+
+        /// <summary>Config value meaning "stored in the desktop keyring".</summary>
+        internal const string KeyringSentinel = "secret-service";
+        internal const string TokenCredential = "github-token";
+        internal const string PassphraseCredential = "sync-passphrase";
+
+        private const string KeyringUnreadable =
+            "Your saved sign-in is in the system keyring, which could not be read (locked or not running). Unlock it and restart Emutastic, or sign in again.";
+        private const string TokenMissing =
+            "Your saved sign-in is no longer in the system keyring. Sign in again.";
+        private const string PassphraseMissing =
+            "Encryption is on, but its passphrase is missing from the system keyring. Enter it again to resume syncing.";
+
+        private static readonly object _keyringGate = new();
+        private static Task _keyringTail = Task.CompletedTask;
+        private Task<bool>? _restore;
+
+        private static Task<T> OnKeyringQueue<T>(Func<T> op)
         {
-            var cfg = App.Configuration?.GetCloudSyncConfiguration();
-            if (cfg == null) return;
-            string token = UnprotectString(cfg.GitHubTokenProtected);
-            if (!string.IsNullOrEmpty(token))
+            lock (_keyringGate)
             {
-                _token = token;
-                _username = string.IsNullOrEmpty(cfg.GitHubUsername) ? null : cfg.GitHubUsername;
+                var next = _keyringTail.ContinueWith(_ => op(), CancellationToken.None,
+                    TaskContinuationOptions.None, TaskScheduler.Default);
+                _keyringTail = next;
+                return next;
             }
         }
 
-        private void SaveTokenToConfig()
+        /// <summary>Completes once the saved sign-in has been restored, or found absent.</summary>
+        public Task RestoreTask => _restore ?? Task.CompletedTask;
+
+        /// <summary>
+        /// Restores the saved sign-in and encryption passphrase: from the keyring, or from
+        /// config.json, moving them into the keyring when one is available now. Queued on the
+        /// thread pool and returns at once; runs once per process. True = signed in.
+        /// </summary>
+        public Task<bool> RestoreSessionAsync()
         {
+            lock (_keyringGate) return _restore ??= OnKeyringQueue(RestoreSession);
+        }
+
+        private bool RestoreSession()
+        {
+            try
+            {
+                var cfg = App.Configuration?.GetCloudSyncConfiguration();
+                if (cfg == null || App.Configuration == null) return false;
+
+                // Passphrase first: once the token is set a sync may start, and it needs this.
+                var pass = ReadStoredSecret(cfg.PassphraseProtected, PassphraseCredential);
+                _passphrase = pass.Value;
+                var token = ReadStoredSecret(cfg.GitHubTokenProtected, TokenCredential);
+                if (!string.IsNullOrEmpty(token.Value))
+                {
+                    _username = string.IsNullOrEmpty(cfg.GitHubUsername) ? null : cfg.GitHubUsername;
+                    _token = token.Value;
+                }
+
+                if (token.Unreadable || pass.Unreadable)
+                    RestoreProblem = KeyringUnreadable;
+                else if (cfg.GitHubTokenProtected == KeyringSentinel && token.Value == null)
+                    RestoreProblem = TokenMissing;
+                else if (cfg.EncryptionEnabled && cfg.PassphraseProtected == KeyringSentinel && pass.Value == null)
+                    RestoreProblem = PassphraseMissing;
+
+                if (pass.MovedToKeyring || token.MovedToKeyring)
+                {
+                    if (pass.MovedToKeyring) cfg.PassphraseProtected = KeyringSentinel;
+                    if (token.MovedToKeyring) cfg.GitHubTokenProtected = KeyringSentinel;
+                    App.Configuration.SetCloudSyncConfiguration(cfg);
+                    App.Configuration.ScheduleSave();
+                }
+                return IsAuthenticated;
+            }
+            catch (Exception ex)
+            {
+                CloudSyncLog.Write($"Restoring the saved sign-in failed: {ex.Message}");
+                return false;
+            }
+        }
+
+        private readonly record struct StoredSecret(string? Value, bool Unreadable, bool MovedToKeyring);
+
+        /// <summary>
+        /// One stored credential field: "" = nothing saved; the sentinel = read the keyring;
+        /// anything else = the value itself (an older build, or a session without a keyring),
+        /// which moves into the keyring when one is available now.
+        /// </summary>
+        private static StoredSecret ReadStoredSecret(string stored, string credential)
+        {
+            if (string.IsNullOrEmpty(stored)) return default;
+            if (stored == KeyringSentinel)
+            {
+                if (!Emutastic.Platform.SecretStore.TryLookup(credential, out string? secret, out string? err))
+                {
+                    CloudSyncLog.Write($"Keyring: could not read {credential}: {err}");
+                    return new StoredSecret(null, Unreadable: true, MovedToKeyring: false);
+                }
+                if (secret == null) CloudSyncLog.Write($"Keyring: no {credential} stored");
+                return new StoredSecret(secret, Unreadable: false, MovedToKeyring: false);
+            }
+            bool moved = Emutastic.Platform.SecretStore.TryStore(credential, stored, LabelFor(credential), out string? storeErr);
+            CloudSyncLog.Write(moved
+                ? $"Keyring: moved {credential} out of config.json"
+                : $"Keyring unavailable, {credential} stays in config.json: {storeErr}");
+            return new StoredSecret(stored, Unreadable: false, MovedToKeyring: moved);
+        }
+
+        private async Task SaveTokenToConfigAsync()
+        {
+            string token = _token ?? "";
+            string field = await OnKeyringQueue(() => StoreSecretField(TokenCredential, token)).ConfigureAwait(false);
             var cfg = App.Configuration?.GetCloudSyncConfiguration();
             if (cfg == null || App.Configuration == null) return;
-            cfg.GitHubTokenProtected = ProtectString(_token ?? "");
+            cfg.GitHubTokenProtected = field;
             cfg.GitHubUsername = _username ?? "";
             cfg.Enabled = true;
+            if (RestoreProblem != PassphraseMissing) RestoreProblem = null;
             App.Configuration.SetCloudSyncConfiguration(cfg);
             App.Configuration.ScheduleSave();
         }
+
+        /// <summary>
+        /// Saves the encryption passphrase: keyring first, config.json without one. It takes
+        /// effect in memory at once, so a sync that starts before the keyring write finishes
+        /// already encrypts with it. True when it went into the keyring.
+        /// </summary>
+        public async Task<bool> SetPassphraseAsync(string passphrase)
+        {
+            _passphrase = passphrase;
+            string field = await OnKeyringQueue(() => StoreSecretField(PassphraseCredential, passphrase)).ConfigureAwait(false);
+            var cfg = App.Configuration?.GetCloudSyncConfiguration();
+            if (cfg == null || App.Configuration == null) return false;
+            cfg.PassphraseProtected = field;
+            if (RestoreProblem == PassphraseMissing) RestoreProblem = null;
+            App.Configuration.SetCloudSyncConfiguration(cfg);
+            App.Configuration.ScheduleSave();
+            return field == KeyringSentinel;
+        }
+
+        // Keyring first; the value itself (config.json, owner-only) when there is no keyring.
+        private static string StoreSecretField(string credential, string secret)
+        {
+            if (Emutastic.Platform.SecretStore.TryStore(credential, secret, LabelFor(credential), out string? err))
+                return KeyringSentinel;
+            CloudSyncLog.Write($"Keyring unavailable, {credential} saved in config.json instead: {err}");
+            return secret;
+        }
+
+        private static string LabelFor(string credential) => credential == TokenCredential
+            ? "Emutastic cloud sync: GitHub sign-in"
+            : "Emutastic cloud sync: encryption passphrase";
 
         private HttpRequestMessage AuthedRequest(HttpMethod method, string url)
         {
@@ -480,14 +637,32 @@ namespace Emutastic.Services
         }
 
         // ── Protection-at-rest ───────────────────────────────────────────────
-        // Upstream used Windows DPAPI (ProtectedData, CurrentUser scope). Linux
-        // has no OS-blessed equivalent without a keyring dependency; the values
-        // rest in config.json like this port's other credentials (RA token,
-        // ScreenScraper password). The names survive so ported call sites and
-        // the config field names stay upstream-identical.
+        // Upstream decrypts the passphrase from config (DPAPI) at every call site. Here it is
+        // resolved once per session (see RestoreSession) and every sync operation asks this gate.
 
-        public static string ProtectString(string plaintext) => plaintext ?? "";
-        public static string UnprotectString(string protectedValue) => protectedValue ?? "";
+        /// <summary>
+        /// The passphrase one sync operation encrypts with. Null = encryption off, or on with no
+        /// passphrase ever saved (upstream syncs in the clear then). False = encryption is on but
+        /// its passphrase is not known this session — a keyring that could not be read, or a
+        /// stored value not restored yet. The caller must not sync then: it would upload saves
+        /// under the wrong key and fail to read the real ones.
+        /// </summary>
+        internal static bool ResolvePassphrase(bool encryptionEnabled, string storedField, string? known, out string? passphrase)
+        {
+            passphrase = null;
+            if (!encryptionEnabled) return true;
+            if (string.IsNullOrEmpty(known)) return string.IsNullOrEmpty(storedField);
+            passphrase = known;
+            return true;
+        }
+
+        private bool TryGetPassphrase(CloudSyncConfiguration? cfg, out string? passphrase)
+        {
+            if (ResolvePassphrase(cfg?.EncryptionEnabled == true, cfg?.PassphraseProtected ?? "", _passphrase, out passphrase))
+                return true;
+            CloudSyncLog.Write("Encryption is on but its passphrase is not available (keyring locked or unreadable) — sync skipped");
+            return false;
+        }
 
         // ── Encryption (AES-256-GCM, PBKDF2-SHA256 key) ──────────────────────
 
@@ -535,8 +710,8 @@ namespace Emutastic.Services
             try
             {
                 var cfg = App.Configuration?.GetCloudSyncConfiguration();
-                bool encrypted = cfg is { EncryptionEnabled: true }
-                    && !string.IsNullOrEmpty(cfg.PassphraseProtected);
+                if (!TryGetPassphrase(cfg, out string? passphrase)) return;
+                bool encrypted = passphrase != null;
                 string path = encrypted ? "manifest.json.enc" : "manifest.json";
 
                 byte[]? data = await DownloadFileAsync(path, ct).ConfigureAwait(false);
@@ -544,7 +719,7 @@ namespace Emutastic.Services
 
                 if (encrypted)
                 {
-                    byte[] key = DeriveKey(UnprotectString(cfg!.PassphraseProtected), _username ?? "");
+                    byte[] key = DeriveKey(passphrase!, _username ?? "");
                     data = Decrypt(data, key);
                 }
                 string json = Encoding.UTF8.GetString(data);
@@ -566,11 +741,11 @@ namespace Emutastic.Services
                     JsonSerializer.Serialize(_manifestCache, new JsonSerializerOptions { WriteIndented = true }));
 
                 var cfg = App.Configuration?.GetCloudSyncConfiguration();
-                bool encrypted = cfg is { EncryptionEnabled: true }
-                    && !string.IsNullOrEmpty(cfg.PassphraseProtected);
+                if (!TryGetPassphrase(cfg, out string? passphrase)) return;
+                bool encrypted = passphrase != null;
                 if (encrypted)
                 {
-                    byte[] key = DeriveKey(UnprotectString(cfg!.PassphraseProtected), _username ?? "");
+                    byte[] key = DeriveKey(passphrase!, _username ?? "");
                     data = Encrypt(data, key);
                 }
                 string path = encrypted ? "manifest.json.enc" : "manifest.json";
@@ -793,11 +968,9 @@ namespace Emutastic.Services
             try
             {
                 var cfg = App.Configuration?.GetCloudSyncConfiguration();
-                bool encrypted = cfg is { EncryptionEnabled: true }
-                    && !string.IsNullOrEmpty(cfg.PassphraseProtected);
-                byte[]? encKey = encrypted
-                    ? DeriveKey(UnprotectString(cfg!.PassphraseProtected), _username ?? "")
-                    : null;
+                if (!TryGetPassphrase(cfg, out string? passphrase)) return new SyncResult(0, 0, 1);
+                bool encrypted = passphrase != null;
+                byte[]? encKey = encrypted ? DeriveKey(passphrase!, _username ?? "") : null;
                 string encSuffix = encrypted ? ".enc" : "";
 
                 await RefreshShaCacheAsync(ct).ConfigureAwait(false);
@@ -1072,6 +1245,7 @@ namespace Emutastic.Services
             var cfg = App.Configuration?.GetCloudSyncConfiguration();
             if (!IsAuthenticated || cfg is not { Enabled: true }) return;
             if (string.IsNullOrEmpty(game.RomHash) || string.IsNullOrEmpty(game.Console)) return;
+            if (!TryGetPassphrase(cfg, out string? passphrase)) return;
 
             var gameLock = GetGameLock(game.RomHash);
             if (!await gameLock.WaitAsync(5000, ct).ConfigureAwait(false))
@@ -1081,7 +1255,7 @@ namespace Emutastic.Services
             }
             try
             {
-                bool encrypted = cfg.EncryptionEnabled && !string.IsNullOrEmpty(cfg.PassphraseProtected);
+                bool encrypted = passphrase != null;
                 string repoPath = RepoPathFor(game.Console!, game.RomHash) + (encrypted ? ".enc" : "");
                 string localPath = LocalSrmPathFor(game.Console!, AppPaths.FromStoragePath(game.RomPath), game.HasPatch, game.RomHash);
 
@@ -1103,7 +1277,7 @@ namespace Emutastic.Services
                 {
                     if (encrypted)
                     {
-                        byte[] key = DeriveKey(UnprotectString(cfg.PassphraseProtected), _username ?? "");
+                        byte[] key = DeriveKey(passphrase!, _username ?? "");
                         remote = Decrypt(remote, key);
                     }
                     Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
@@ -1132,10 +1306,11 @@ namespace Emutastic.Services
 
             string localPath = LocalSrmPathFor(game.Console!, AppPaths.FromStoragePath(game.RomPath), game.HasPatch, game.RomHash);
             if (!File.Exists(localPath)) return;
+            if (!TryGetPassphrase(cfg, out string? passphrase)) return;
 
             try
             {
-                bool encrypted = cfg.EncryptionEnabled && !string.IsNullOrEmpty(cfg.PassphraseProtected);
+                bool encrypted = passphrase != null;
                 string repoPath = RepoPathFor(game.Console!, game.RomHash) + (encrypted ? ".enc" : "");
 
                 // Newest-wins, no clobber: don't replace a newer (or equal) remote save with
@@ -1156,7 +1331,7 @@ namespace Emutastic.Services
                 byte[] srmBytes = File.ReadAllBytes(localPath);
                 if (encrypted)
                 {
-                    byte[] key = DeriveKey(UnprotectString(cfg.PassphraseProtected), _username ?? "");
+                    byte[] key = DeriveKey(passphrase!, _username ?? "");
                     srmBytes = Encrypt(srmBytes, key);
                 }
                 if (await UploadFileAsync(repoPath, srmBytes, ct).ConfigureAwait(false))
@@ -1191,10 +1366,10 @@ namespace Emutastic.Services
             var cfg = App.Configuration?.GetCloudSyncConfiguration();
             if (!IsAuthenticated || cfg is not { Enabled: true }) return 0;
             if (cfg.SyncTiming == "manual" || string.IsNullOrEmpty(console)) return 0;
+            if (!TryGetPassphrase(cfg, out string? passphrase)) return 0;
 
-            bool encrypted = cfg.EncryptionEnabled && !string.IsNullOrEmpty(cfg.PassphraseProtected);
-            byte[]? key = encrypted
-                ? DeriveKey(UnprotectString(cfg.PassphraseProtected), _username ?? "") : null;
+            bool encrypted = passphrase != null;
+            byte[]? key = encrypted ? DeriveKey(passphrase!, _username ?? "") : null;
             string encSuffix = encrypted ? ".enc" : "";
             string prefix = $"BatterySaves/{console}/";
 
@@ -1248,10 +1423,10 @@ namespace Emutastic.Services
         {
             var cfg = App.Configuration?.GetCloudSyncConfiguration();
             if (!IsAuthenticated || cfg is not { Enabled: true } || string.IsNullOrEmpty(console)) return 0;
+            if (!TryGetPassphrase(cfg, out string? passphrase)) return 0;
 
-            bool encrypted = cfg.EncryptionEnabled && !string.IsNullOrEmpty(cfg.PassphraseProtected);
-            byte[]? key = encrypted
-                ? DeriveKey(UnprotectString(cfg.PassphraseProtected), _username ?? "") : null;
+            bool encrypted = passphrase != null;
+            byte[]? key = encrypted ? DeriveKey(passphrase!, _username ?? "") : null;
             string prefix = $"BatterySaves/{console}/";
 
             int n = 0;

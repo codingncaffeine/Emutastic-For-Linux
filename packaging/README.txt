@@ -145,6 +145,11 @@ Optional AES-256-GCM encryption with a passphrase you choose — saves
 are encrypted before they leave your machine. The passphrase never
 leaves your PC; you'll enter it once per PC.
 
+Your GitHub sign-in and the passphrase are kept in your desktop
+keyring (GNOME Keyring, KWallet, ...) through libsecret. On a system
+without a keyring they are saved in config.json instead, which only
+your user can read.
+
 Save states are NOT included in cloud sync — they get too large for
 some consoles. Use the local backup option above for save states.
 

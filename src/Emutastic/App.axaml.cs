@@ -187,25 +187,27 @@ public partial class App : Application
 
             // Cloud sync: restore the saved GitHub session, then validate + load the
             // remote manifest AFTER a 10s grace so first-launch rendering and artwork
-            // aren't competing with network calls (upstream's timing).
-            Services.GitHubSyncService.Instance.LoadFromConfig();
-            if (Services.GitHubSyncService.Instance.IsAuthenticated)
-                _ = System.Threading.Tasks.Task.Run(async () =>
+            // aren't competing with network calls (upstream's timing). The restore reads
+            // the desktop keyring, which can sit on an unlock prompt, so it is queued on
+            // the thread pool; starting it here means Preferences already sees it in flight.
+            var cloudRestore = Services.GitHubSyncService.Instance.RestoreSessionAsync();
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                if (!await cloudRestore) return;
+                await System.Threading.Tasks.Task.Delay(System.TimeSpan.FromSeconds(10));
+                await Services.GitHubSyncService.Instance.ValidateTokenAsync();
+                if (Services.GitHubSyncService.Instance.IsAuthenticated)
                 {
-                    await System.Threading.Tasks.Task.Delay(System.TimeSpan.FromSeconds(10));
-                    await Services.GitHubSyncService.Instance.ValidateTokenAsync();
-                    if (Services.GitHubSyncService.Instance.IsAuthenticated)
-                    {
-                        await Services.GitHubSyncService.Instance.LoadManifestAsync();
-                        // Pull everything (incl. memory cards / save trees) in the background
-                        // so saves are local before any game launches — the per-game launch
-                        // hook then just does a quick check. Progress shows in MainWindow's
-                        // banner via SyncStateChanged. Fresh DatabaseService keeps this off the
-                        // UI's connection. No-op for direct-launch (files.Length >= 2).
-                        if (files.Length < 2)
-                            Services.GitHubSyncService.Instance.StartBackgroundSync(new Services.DatabaseService());
-                    }
-                });
+                    await Services.GitHubSyncService.Instance.LoadManifestAsync();
+                    // Pull everything (incl. memory cards / save trees) in the background
+                    // so saves are local before any game launches — the per-game launch
+                    // hook then just does a quick check. Progress shows in MainWindow's
+                    // banner via SyncStateChanged. Fresh DatabaseService keeps this off the
+                    // UI's connection. No-op for direct-launch (files.Length >= 2).
+                    if (files.Length < 2)
+                        Services.GitHubSyncService.Instance.StartBackgroundSync(new Services.DatabaseService());
+                }
+            });
 
             // Finish any recording encode that a crash or hard power-off interrupted — the raw
             // frames + .meta.json sidecar are still on disk. Library launches only (the game-host

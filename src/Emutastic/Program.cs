@@ -49,6 +49,14 @@ sealed class Program
             Environment.Exit(Emutastic.Services.CloudSyncSelfTest.Run());
             return;
         }
+        // Dev-only: cloud-sync credential storage against this session's desktop keyring —
+        // `Emutastic --selftest-secrets --portable` (run the apphost so PortableData lands beside
+        // it). Throwaway items only, removed afterwards. Exit 0 = pass, 1 = fail, 2 = incomplete.
+        if (args.Length >= 1 && args[0] == "--selftest-secrets")
+        {
+            Environment.Exit(Emutastic.Platform.SecretStoreSelfTest.Run());
+            return;
+        }
         // Dev-only: in-app-update selftest — `Emutastic --selftest-update` runs the
         // full check→pick→download→apply pipeline headlessly against EMUTASTIC_UPDATE_API
         // (a local mock in tests). On success the process hands off to the relaunch
