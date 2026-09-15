@@ -109,7 +109,7 @@ namespace Emutastic.Configuration
                 // Atomic write: write to temp file first, then rename over the real file.
                 // This prevents corruption if the app crashes mid-write.
                 string tmpPath = _configPath + ".tmp";
-                await File.WriteAllTextAsync(tmpPath, json);
+                await WriteOwnerOnlyAsync(tmpPath, json);
                 File.Move(tmpPath, _configPath, overwrite: true);
             }
             catch (Exception ex)
@@ -120,6 +120,46 @@ namespace Emutastic.Configuration
             finally
             {
                 _saveLock.Release();
+            }
+        }
+
+        // config.json holds sign-in secrets — the RetroAchievements token, the ScreenScraper
+        // password, and the cloud-sync sign-in when no desktop keyring is available — so it is
+        // created readable by its owner only. The mode is set at creation, so there is no moment
+        // where the file exists with wider permissions, and it survives the rename over config.json.
+        private static async Task WriteOwnerOnlyAsync(string path, string contents)
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                await File.WriteAllTextAsync(path, contents);
+                return;
+            }
+            File.Delete(path);   // a temp left by a crashed write would keep its old mode
+            var options = new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            };
+            await using var stream = new FileStream(path, options);
+            await using var writer = new StreamWriter(stream);   // UTF-8 without a BOM, as File.WriteAllTextAsync
+            await writer.WriteAsync(contents);
+        }
+
+        // Earlier builds wrote this file with the default umask, which usually leaves it readable
+        // by every user. Narrow it on load instead of waiting for the next save.
+        private void RestrictToOwner(string path)
+        {
+            if (OperatingSystem.IsWindows()) return;
+            try
+            {
+                const UnixFileMode ownerReadWrite = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+                UnixFileMode mode = File.GetUnixFileMode(path);
+                if ((mode & ~ownerReadWrite) != 0) File.SetUnixFileMode(path, mode & ownerReadWrite);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Could not restrict config.json to its owner");
             }
         }
 
@@ -194,6 +234,7 @@ namespace Emutastic.Configuration
                     return;
                 }
 
+                RestrictToOwner(_configPath);
                 string json = await File.ReadAllTextAsync(_configPath);
                 var loaded = JsonSerializer.Deserialize<ConfigData>(json, _jsonOptions);
                 _data = loaded ?? new ConfigData();
