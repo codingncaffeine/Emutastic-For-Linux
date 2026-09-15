@@ -118,20 +118,39 @@ namespace Emutastic.ViewModels
         [NotifyPropertyChangedFor(nameof(BannerProgressPercent))]
         private double _manualDownloadProgressPercent;
 
-        public bool IsBannerVisible => IsImporting || IsCoreUpdating || IsNotification || IsDownloadingManual;
-        public bool IsProgressBarVisible => IsImporting || IsCoreUpdating || IsDownloadingManual;
+        // Surfaced from a running cloud full sync (launch, sign-in, Sync Now) so the banner says which
+        // phase it is in and how far along, instead of a bare "Syncing saves…".
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(IsBannerVisible))]
+        [NotifyPropertyChangedFor(nameof(IsProgressBarVisible))]
+        [NotifyPropertyChangedFor(nameof(BannerText))]
+        [NotifyPropertyChangedFor(nameof(BannerProgressPercent))]
+        private bool _isCloudSyncing;
 
-        // Priority: import > core-update > manual-download > notification (most-active-task wins).
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(BannerText))]
+        private string _cloudSyncText = "";
+
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(BannerProgressPercent))]
+        private double _cloudSyncProgressPercent;
+
+        public bool IsBannerVisible => IsImporting || IsCoreUpdating || IsNotification || IsDownloadingManual || IsCloudSyncing;
+        public bool IsProgressBarVisible => IsImporting || IsCoreUpdating || IsDownloadingManual || IsCloudSyncing;
+
+        // Priority: import > core-update > manual-download > cloud sync > notification (most-active-task wins).
         public string BannerText =>
             IsImporting         ? ImportStatusText :
             IsCoreUpdating      ? CoreUpdateText :
             IsDownloadingManual ? ManualDownloadText :
+            IsCloudSyncing      ? CloudSyncText :
                                   NotificationText;
 
         public double BannerProgressPercent =>
             IsImporting         ? ImportProgressPercent :
             IsCoreUpdating      ? CoreUpdateProgressPercent :
             IsDownloadingManual ? ManualDownloadProgressPercent :
+            IsCloudSyncing      ? CloudSyncProgressPercent :
                                   0;
 
         private ObservableCollection<ConsoleGroup> _groupedGames = new();

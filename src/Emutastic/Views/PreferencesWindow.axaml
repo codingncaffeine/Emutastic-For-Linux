@@ -738,7 +738,7 @@
                             <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,24,0,16"/>
                             <TextBlock Text="CLOUD SYNC (GITHUB)" Theme="{StaticResource PrefLabel}"/>
                             <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,0,0,12"/>
-                            <TextBlock Text="Sync battery saves and your database file across PCs using a private GitHub repository. Sign in with your GitHub account — a private repo is created automatically."
+                            <TextBlock Text="Back up this PC's battery saves, memory cards and game library to a private GitHub repository. Every PC keeps its own repository, so a new or reinstalled PC can never overwrite another PC's saves. Sign in with your GitHub account and the repository is created for you."
                                        TextWrapping="Wrap" FontSize="12" FontFamily="{DynamicResource PrimaryFont}"
                                        Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,12"/>
 
@@ -791,22 +791,17 @@
                                     <Button Name="SyncPassphraseSaveBtn" Content="Save" Theme="{StaticResource PrefSecondaryBtn}"
                                             Margin="8,0,0,0" Padding="14,6"/>
                                 </StackPanel>
-                                <TextBlock Name="PassphraseHint" Text="Same passphrase required on all PCs" IsVisible="False"
+                                <TextBlock Name="PassphraseHint" Text="Keep this passphrase safe: restoring this backup needs it" IsVisible="False"
                                            FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextMutedBrush}"
                                            FontSize="11" Margin="22,0,0,12"/>
 
                                 <TextBlock Text="REPOSITORY" Theme="{StaticResource PrefLabel}" Margin="0,16,0,8"/>
-                                <CheckBox Name="SyncPerPcRepo"
-                                          Content="Make this PC unique — don't share saves or library with other PCs"
-                                          FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextPrimaryBrush}"
-                                          FontSize="13" Margin="0,0,0,4"/>
-                                <TextBlock Name="SyncRepoExplainText"
-                                           FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextMutedBrush}"
-                                           FontSize="11" Margin="22,0,0,2" TextWrapping="Wrap"
-                                           Text="Off: this PC shares one cloud repository with your other PCs — saves and your game library follow you between machines."/>
                                 <TextBlock Name="SyncRepoNameText"
-                                           FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextMutedBrush}"
-                                           FontSize="11" Margin="22,2,0,0"/>
+                                           FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextPrimaryBrush}"
+                                           FontSize="13" Margin="0,0,0,4"/>
+                                <TextBlock FontFamily="{DynamicResource PrimaryFont}" Foreground="{DynamicResource TextMutedBrush}"
+                                           FontSize="11" Margin="0,0,0,2" TextWrapping="Wrap"
+                                           Text="Only this PC reads and writes this repository. Your other PCs back up to their own."/>
 
                                 <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
                                     <Button Name="SyncNowBtn" Content="Sync Now" Theme="{StaticResource PrefActionBtn}" Padding="14,8"/>

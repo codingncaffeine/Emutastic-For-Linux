@@ -55,8 +55,8 @@ GETTING STARTED
      ScreenScraper misses.
    - Preferences -> Achievements: Sign in to RetroAchievements
      (see RETROACHIEVEMENTS section below) to track unlocks.
-   - Preferences -> Backups: Sign in to GitHub for free cloud sync of
-     battery saves and your library database across PCs (see BACKUPS
+   - Preferences -> Backups: Sign in to GitHub for a free cloud backup
+     of this PC's battery saves and library database (see BACKUPS
      section below).
 
 
@@ -132,18 +132,21 @@ easy to re-download, ROMs are easy to re-import).
 
 Cloud Sync (GitHub)
 ~~~~~~~~~~~~~~~~~~~
-Sync your battery saves and library database across multiple PCs
-using your GitHub account. Sign in once, and a private repo called
-"emutastic-saves" is created automatically on your account.
+Back up this PC's battery saves, memory cards and library database
+with your GitHub account. Sign in once, and a private repo called
+"emutastic-saves-<this PC's hostname>" is created on your account.
+Every PC gets its own repo and never reads another PC's saves, so a
+new or reinstalled machine can't overwrite progress made elsewhere.
 
   - Battery saves upload when you close a game
-  - The newer save is pulled when you launch a game on another PC
-  - "Sync Now" runs a full bidirectional sync of all saves and
-    the library database
+  - "Sync Now" backs up everything that changed and restores anything
+    missing from this PC (for example after a reinstall)
+  - The status bar shows each sync's progress
+  - HD texture packs, caches and save states are not backed up
 
 Optional AES-256-GCM encryption with a passphrase you choose — saves
 are encrypted before they leave your machine. The passphrase never
-leaves your PC; you'll enter it once per PC.
+leaves your PC; restoring the backup needs it again.
 
 Your GitHub sign-in and the passphrase are kept in your desktop
 keyring (GNOME Keyring, KWallet, ...) through libsecret. On a system

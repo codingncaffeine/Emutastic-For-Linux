@@ -15,12 +15,16 @@ using Emutastic.Configuration;
 namespace Emutastic.Services
 {
     /// <summary>
-    /// GitHub Cloud Sync (port of upstream GitHubSyncService): battery saves +
-    /// library.db synced through a private "emutastic-saves" repo via the
+    /// GitHub Cloud Sync (port of upstream GitHubSyncService): battery saves, console
+    /// save folders and library.db backed up through a private repository via the
     /// Contents API. OAuth device flow (no client secret), manifest-based
     /// last-write-wins, optional AES-256-GCM with a PBKDF2-derived key.
     ///
     /// Linux deltas from upstream:
+    ///  - Every PC syncs to its own repository (emutastic-saves-&lt;machine&gt;). Upstream
+    ///    shares one repository between PCs unless "Make this PC unique" is ticked; one
+    ///    shared save set let a newer-but-behind save from one PC replace another PC's
+    ///    progress, and let a new PC pull saves it never made.
     ///  - DPAPI (ProtectedData) doesn't exist here. The token and the encryption
     ///    passphrase live in the desktop keyring instead (Platform.SecretStore), and
     ///    config.json carries only <see cref="KeyringSentinel"/>. Without a keyring
@@ -35,17 +39,16 @@ namespace Emutastic.Services
         public static GitHubSyncService Instance { get; } = new();
 
         private const string SharedRepoName = "emutastic-saves";
-        private const string ApiBase = "https://api.github.com";
         private static string ClientId => Emutastic.Secrets.GitHubOAuthClientId;
 
-        // Active repo: the shared one by default, or this machine's own when
-        // the per-PC toggle is on. Read from config on every access so a
-        // toggle flip takes effect on the very next operation.
-        private static string RepoName =>
-            RepoNameOverride
-            ?? (App.Configuration?.GetCloudSyncConfiguration() is { UsePerPcRepo: true }
-                ? PerPcRepoName
-                : SharedRepoName);
+        /// <summary>GitHub REST root. Test-only override: the offline sync self-test points it at an
+        /// in-process fake so a whole sync runs without an account or a network.</summary>
+        internal static string ApiBase { get; set; } = "https://api.github.com";
+
+        // Every PC syncs to its own repository. Sharing one save set between PCs meant a newer
+        // save from one machine replaced another machine's further-along save, and a new PC
+        // pulled saves it never made. RepoNameOverride exists for the self-tests only.
+        private static string RepoName => RepoNameOverride ?? PerPcRepoName;
 
         /// <summary>
         /// Test-only: points every operation at another repository. The cloud-sync
@@ -82,31 +85,19 @@ namespace Emutastic.Services
         public static string EffectiveRepoName => RepoName;
 
         /// <summary>
-        /// The library.db filename THIS machine reads/writes in the sync repo.
-        /// Namespaced per machine so several OSes/boxes can share ONE repo without
-        /// ever clobbering each other's library: library.db is non-portable anyway
-        /// (it stores absolute, OS-specific ROM paths and back-/forward-slash art
-        /// paths), so each machine keeps its own. Game saves stay SHARED — they're
-        /// keyed by ROM hash and synced as an additive union, untouched by this.
+        /// The library.db filename THIS machine reads/writes in its repository. The
+        /// per-machine name predates per-PC repositories (it kept machines apart inside
+        /// one shared repository) and stays so the layout matches the Windows app's.
         /// </summary>
         public static string DbRepoFileName { get; } = $"library.{MachineSuffix}.db";
 
-        /// <summary>
-        /// Drops every piece of state bound to the previous repo (sha cache,
-        /// manifest). Call when the per-PC toggle flips so the next sync
-        /// starts clean against the newly selected repo. The db side-car is
-        /// per-repo by filename and needs no reset.
-        /// </summary>
-        public void ResetRepoBinding()
+        private static readonly HttpClient Http = CreateHttp(TimeSpan.FromSeconds(30));
+        // Files over 1 MB have to be fetched as raw bytes (see DownloadFileAsync); those
+        // transfers can be up to 100 MB, so they get a longer timeout of their own.
+        private static readonly HttpClient RawHttp = CreateHttp(TimeSpan.FromMinutes(10));
+        private static HttpClient CreateHttp(TimeSpan timeout)
         {
-            _shaCache.Clear();
-            _manifestCache = new SyncManifest();
-        }
-
-        private static readonly HttpClient Http = CreateHttp();
-        private static HttpClient CreateHttp()
-        {
-            var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            var http = new HttpClient { Timeout = timeout };
             http.DefaultRequestHeaders.UserAgent.ParseAdd("Emutastic-CloudSync");
             return http;
         }
@@ -506,7 +497,7 @@ namespace Emutastic.Services
                     return true;
                 }
 
-                CloudSyncLog.Write($"Upload failed {repoPath}: {resp.StatusCode}");
+                CloudSyncLog.Write($"Upload failed {repoPath}: {FailureText(resp)}");
                 return false;
             }
             catch (Exception ex)
@@ -547,7 +538,7 @@ namespace Emutastic.Services
                     return true;
                 }
 
-                CloudSyncLog.Write($"Delete failed {repoPath}: {resp.StatusCode}");
+                CloudSyncLog.Write($"Delete failed {repoPath}: {FailureText(resp)}");
                 return false;
             }
             catch (Exception ex)
@@ -582,14 +573,22 @@ namespace Emutastic.Services
                 _manifestCache.Files.TryRemove(counterpart, out _);
         }
 
-        public async Task<byte[]?> DownloadFileAsync(string repoPath, CancellationToken ct = default)
+        /// <param name="quietIfMissing">A 404 is an expected answer for this caller (a manifest before
+        /// the first sync, a game with no cloud save yet) rather than a failure worth logging.</param>
+        public async Task<byte[]?> DownloadFileAsync(string repoPath, CancellationToken ct = default, bool quietIfMissing = false)
         {
             if (string.IsNullOrEmpty(_token) || string.IsNullOrEmpty(_username)) return null;
             try
             {
-                using var req = AuthedRequest(HttpMethod.Get, $"{ApiBase}/repos/{_username}/{RepoName}/contents/{repoPath}");
+                string url = $"{ApiBase}/repos/{_username}/{RepoName}/contents/{repoPath}";
+                using var req = AuthedRequest(HttpMethod.Get, url);
                 using var resp = await Http.SendAsync(req, ct).ConfigureAwait(false);
-                if (!resp.IsSuccessStatusCode) return null;
+                if (!resp.IsSuccessStatusCode)
+                {
+                    if (!(quietIfMissing && resp.StatusCode == HttpStatusCode.NotFound))
+                        CloudSyncLog.Write($"Download failed {repoPath}: {FailureText(resp)}");
+                    return null;
+                }
 
                 string json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
                 using var doc = JsonDocument.Parse(json);
@@ -599,6 +598,12 @@ namespace Emutastic.Services
                     .Replace("\n", "").Replace("\r", "");
                 if (root.TryGetProperty("sha", out var shaProp))
                     _shaCache[repoPath] = shaProp.GetString() ?? "";
+
+                // The Contents API inlines files only up to 1 MB. A bigger one (up to 100 MB) comes
+                // back with an empty "content" and encoding "none" and has to be fetched as raw bytes;
+                // decoding the empty string instead returned zero bytes, which callers skipped silently.
+                if (base64.Length == 0 && root.TryGetProperty("size", out var sizeProp) && sizeProp.GetInt64() > 0)
+                    return await DownloadRawAsync(url, repoPath, ct).ConfigureAwait(false);
                 return Convert.FromBase64String(base64);
             }
             catch (Exception ex)
@@ -606,6 +611,34 @@ namespace Emutastic.Services
                 CloudSyncLog.Write($"Download exception {repoPath}: {ex.Message}");
                 return null;
             }
+        }
+
+        private async Task<byte[]?> DownloadRawAsync(string url, string repoPath, CancellationToken ct)
+        {
+            using var req = AuthedRequest(HttpMethod.Get, url);
+            req.Headers.Accept.Clear();
+            req.Headers.Accept.ParseAdd("application/vnd.github.raw");
+            using var resp = await RawHttp.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode)
+            {
+                CloudSyncLog.Write($"Download failed {repoPath} (raw): {FailureText(resp)}");
+                return null;
+            }
+            return await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+        }
+
+        // Status of a failed response, plus GitHub's rate-limit headers when they are the reason.
+        private static string FailureText(HttpResponseMessage resp)
+        {
+            var text = new StringBuilder($"{(int)resp.StatusCode} {resp.ReasonPhrase}");
+            if (resp.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)
+            {
+                if (resp.Headers.TryGetValues("X-RateLimit-Remaining", out var remaining))
+                    text.Append($", rate limit remaining {string.Join(",", remaining)}");
+                if (resp.Headers.RetryAfter?.Delta is { } retry)
+                    text.Append($", retry after {retry.TotalSeconds:0} s");
+            }
+            return text.ToString();
         }
 
         public async Task RefreshShaCacheAsync(CancellationToken ct = default)
@@ -714,7 +747,7 @@ namespace Emutastic.Services
                 bool encrypted = passphrase != null;
                 string path = encrypted ? "manifest.json.enc" : "manifest.json";
 
-                byte[]? data = await DownloadFileAsync(path, ct).ConfigureAwait(false);
+                byte[]? data = await DownloadFileAsync(path, ct, quietIfMissing: true).ConfigureAwait(false);
                 if (data == null || data.Length == 0) { _manifestCache = new SyncManifest(); return; }
 
                 if (encrypted)
@@ -763,8 +796,8 @@ namespace Emutastic.Services
         // change since *my* last sync?", which is per-machine state. Lives in
         // DataRoot so portable installs carry it with their data.
 
-        // Keyed by repo name so flipping the per-PC toggle back and forth
-        // keeps an accurate "what did I last sync HERE" per repository.
+        // Keyed by repo name, so the side-car written while this PC still synced to the
+        // shared repository never passes for the state of its own repository.
         private static string DbStatePath
             => Path.Combine(AppPaths.DataRoot, $"cloudsync_dbstate_{RepoName}.txt");
 
@@ -787,8 +820,8 @@ namespace Emutastic.Services
         // ── Local save mapping (Linux delta) ─────────────────────────────────
         // The session writes battery saves per-console: Saves/<Console>/<romstem>.srm
         // (SaveLayoutMigrator moved any legacy flat saves into place). The REPO keeps
-        // upstream's hash-keyed layout (BatterySaves/<Console>/<RomHash>.srm) so one
-        // repo serves Windows and Linux installs alike.
+        // upstream's hash-keyed layout (BatterySaves/<Console>/<RomHash>.srm), so a
+        // repository looks the same whichever app wrote it.
         //
         // Compress = gzip the payload before upload (used for console-managed saves,
         // which are often mostly-empty fixed-size cards that shrink hugely).
@@ -831,8 +864,8 @@ namespace Emutastic.Services
         // keyed by relative path (shared / console-level, not per-game), gzip-compressed,
         // with caches, shader caches, save-states and unsupported consoles excluded.
         //
-        // Repo paths keep upstream's "BatterySaves/<Console>/<rel>" convention so a
-        // Windows and a Linux install share one repo (local "Saves/" ↔ repo "BatterySaves/").
+        // Repo paths keep upstream's "BatterySaves/<Console>/<rel>" convention (local "Saves/" ↔
+        // repo "BatterySaves/"), so a repository looks the same whichever app wrote it.
 
         private static readonly HashSet<string> UnsupportedSaveConsoles =
             new(StringComparer.OrdinalIgnoreCase) { "DOS" };
@@ -841,13 +874,28 @@ namespace Emutastic.Services
             => UnsupportedSaveConsoles.Contains(console);
 
         // Path segments that are never battery saves: emulator caches, shader caches,
-        // save-states (synced separately), dumps, logs, screenshots.
+        // save-states (synced separately), dumps, logs, screenshots, and HD texture packs —
+        // HdPackService installs PSP packs into <saves>/PSP/PSP/TEXTURES, where they synced
+        // as if they were saves (a single pack runs to thousands of files and hundreds of MB).
         private static readonly HashSet<string> ExcludedSaveSegments =
             new(StringComparer.OrdinalIgnoreCase)
             {
                 "Cache", "Shaders", "ShaderCache", "StateSaves", "PPSSPP_STATE",
-                "Dump", "Logs", "ScreenShots", "Screenshots", "Triforce", "WFS"
+                "Dump", "Logs", "ScreenShots", "Screenshots", "Triforce", "WFS",
+                "TEXTURES"
             };
+
+        // A cloud path under BatterySaves/<Console>/ that the exclusions keep out of sync (counted
+        // for the log, so skipped texture packs are visible rather than silently ignored).
+        private static bool IsExcludedRepoPath(string repoPath)
+        {
+            string p = repoPath.EndsWith(".enc", StringComparison.Ordinal) ? repoPath[..^4] : repoPath;
+            if (!p.StartsWith("BatterySaves/", StringComparison.Ordinal)
+                || p.EndsWith(".srm", StringComparison.OrdinalIgnoreCase)) return false;
+            string rest = p["BatterySaves/".Length..];
+            int slash = rest.IndexOf('/');
+            return slash > 0 && IsExcludedSavePath(rest[(slash + 1)..]);
+        }
 
         private static bool IsExcludedSavePath(string rel)
         {
@@ -956,25 +1004,112 @@ namespace Emutastic.Services
 
         public sealed record SyncResult(int Uploaded, int Downloaded, int Errors);
 
-        private readonly SemaphoreSlim _fullSyncLock = new(1, 1);
+        public enum SyncPhase { Checking, Uploading, Downloading, Library, Finishing }
 
-        public async Task<SyncResult> FullSyncAsync(DatabaseService db, CancellationToken ct = default)
+        /// <summary>One report from a running full sync. Done/Total count files within the current
+        /// phase; Library and Finishing are single steps.</summary>
+        public sealed record SyncProgress(SyncPhase Phase, int Done, int Total, int Uploaded, int Downloaded, int Errors);
+
+        /// <summary>Raised from the sync's own thread: on every phase change and phase end, and at
+        /// most every 100 ms in between.</summary>
+        public event Action<SyncProgress>? SyncProgressChanged;
+
+        /// <summary>The latest report of the running full sync, or null when none is running.</summary>
+        public SyncProgress? CurrentProgress { get; private set; }
+
+        /// <summary>The result of the last full sync that finished this session, or null.</summary>
+        public SyncResult? LastResult { get; private set; }
+
+        public static string DescribeProgress(SyncProgress p) => p.Phase switch
         {
-            if (!IsAuthenticated) return new SyncResult(0, 0, 0);
-            if (!await _fullSyncLock.WaitAsync(0, ct).ConfigureAwait(false))
-                return new SyncResult(0, 0, 0);   // a sync is already running
+            SyncPhase.Checking    => "checking what changed…",
+            SyncPhase.Uploading   => $"uploading {p.Done:N0} of {p.Total:N0}",
+            SyncPhase.Downloading => $"downloading {p.Done:N0} of {p.Total:N0}",
+            SyncPhase.Library     => "syncing the library database…",
+            _                     => "saving the sync manifest…",
+        };
 
+        public static string DescribeResult(SyncResult r) => r.Errors > 0
+            ? $"{r.Uploaded:N0} up, {r.Downloaded:N0} down, {r.Errors:N0} failed (details in Logs/cloudsync.log)"
+            : $"{r.Uploaded:N0} up, {r.Downloaded:N0} down";
+
+        private static string Megabytes(long bytes) =>
+            bytes >= 1_000_000 ? $"{bytes / 1_000_000.0:0.#} MB" : $"{bytes / 1000.0:0.#} KB";
+
+        // Keeps progress events at a UI-friendly rate — every phase change and phase end goes out,
+        // otherwise at most one report per 100 ms — and leaves a trail in cloudsync.log every 250
+        // files or 30 seconds, so a long sync is never silent.
+        private sealed class ProgressThrottle
+        {
+            private readonly GitHubSyncService _owner;
+            private readonly Stopwatch _clock = Stopwatch.StartNew();
+            private long _lastEventMs = -1000, _lastLogMs;
+            private SyncPhase? _phase;
+            private int _lastLoggedDone;
+
+            public ProgressThrottle(GitHubSyncService owner) => _owner = owner;
+
+            public void Report(SyncProgress p)
+            {
+                long now = _clock.ElapsedMilliseconds;
+                bool phaseChanged = _phase != p.Phase;
+                if (phaseChanged) { _phase = p.Phase; _lastLogMs = now; _lastLoggedDone = 0; }
+                bool phaseEnd = p.Total > 0 && p.Done >= p.Total;
+                _owner.CurrentProgress = p;
+                if (phaseChanged || phaseEnd || now - _lastEventMs >= 100)
+                {
+                    _lastEventMs = now;
+                    try { _owner.SyncProgressChanged?.Invoke(p); } catch { }
+                }
+                if (p.Phase is SyncPhase.Uploading or SyncPhase.Downloading && p.Done > _lastLoggedDone
+                    && (phaseEnd || p.Done - _lastLoggedDone >= 250 || now - _lastLogMs >= 30_000))
+                {
+                    CloudSyncLog.Write($"{p.Phase}: {p.Done:N0} of {p.Total:N0} ({p.Errors:N0} failed so far)");
+                    _lastLoggedDone = p.Done;
+                    _lastLogMs = now;
+                }
+            }
+        }
+
+        private readonly object _fullSyncGate = new();
+        private Task<SyncResult>? _fullSync;
+
+        /// <summary>
+        /// Runs a full two-way sync. While one is already running this returns THAT sync, so a second
+        /// caller (Sync Now during the sync started at sign-in or launch) waits for its real result —
+        /// it used to get an empty "0 up, 0 down" back at once.
+        /// </summary>
+        public Task<SyncResult> FullSyncAsync(DatabaseService db, CancellationToken ct = default)
+        {
+            if (!IsAuthenticated) return Task.FromResult(new SyncResult(0, 0, 0));
+            lock (_fullSyncGate)
+            {
+                if (_fullSync is { IsCompleted: false }) return _fullSync;
+                return _fullSync = Task.Run(() => RunFullSyncAsync(db, ct));
+            }
+        }
+
+        private async Task<SyncResult> RunFullSyncAsync(DatabaseService db, CancellationToken ct)
+        {
+            var clock = Stopwatch.StartNew();
+            var progress = new ProgressThrottle(this);
             int uploaded = 0, downloaded = 0, errors = 0;
+            try { SyncStateChanged?.Invoke(true); } catch { }
+            progress.Report(new SyncProgress(SyncPhase.Checking, 0, 0, 0, 0, 0));
             try
             {
                 var cfg = App.Configuration?.GetCloudSyncConfiguration();
-                if (!TryGetPassphrase(cfg, out string? passphrase)) return new SyncResult(0, 0, 1);
+                if (!TryGetPassphrase(cfg, out string? passphrase)) return Finish(new SyncResult(0, 0, 1));
                 bool encrypted = passphrase != null;
                 byte[]? encKey = encrypted ? DeriveKey(passphrase!, _username ?? "") : null;
                 string encSuffix = encrypted ? ".enc" : "";
+                CloudSyncLog.Write($"Full sync started: {_username}/{RepoName}{(encrypted ? " (encrypted)" : "")}");
 
+                // This PC's repository may not exist yet (a sign-in from before every PC had its own).
+                await EnsureRepoExistsAsync(ct).ConfigureAwait(false);
                 await RefreshShaCacheAsync(ct).ConfigureAwait(false);
                 await LoadManifestAsync(ct).ConfigureAwait(false);
+                CloudSyncLog.Write($"Cloud manifest lists {_manifestCache.Files.Count:N0} file(s)");
 
                 // Converge the repo to one variant per file. An encryption toggle
                 // re-uploads everything under the other suffix but historically left
@@ -997,17 +1132,25 @@ namespace Emutastic.Services
                 // console-managed memory cards / save trees (gzip-flagged via Compress).
                 var localSaves = BuildLocalSaveMap(db);
                 localSaves.AddRange(BuildExtraSaveMap());
+                var toUpload = new List<LocalSave>();
                 foreach (var local in localSaves)
+                {
+                    if (_manifestCache.Files.TryGetValue(local.RepoPath + encSuffix, out var entry)
+                        && DateTime.TryParse(entry.LastModifiedUtc, null,
+                            System.Globalization.DateTimeStyles.RoundtripKind, out var remoteMtime)
+                        && local.LastModifiedUtc <= remoteMtime)
+                        continue;
+                    toUpload.Add(local);
+                }
+                CloudSyncLog.Write($"Upload: {toUpload.Count:N0} of {localSaves.Count:N0} local save file(s) are new or newer here " +
+                                   $"({Megabytes(toUpload.Sum(l => l.SizeBytes))})");
+
+                int done = 0;
+                progress.Report(new SyncProgress(SyncPhase.Uploading, 0, toUpload.Count, uploaded, downloaded, errors));
+                foreach (var local in toUpload)
                 {
                     if (ct.IsCancellationRequested) break;
                     string repoPath = local.RepoPath + encSuffix;
-                    bool shouldUpload = true;
-                    if (_manifestCache.Files.TryGetValue(repoPath, out var entry)
-                        && DateTime.TryParse(entry.LastModifiedUtc, null,
-                            System.Globalization.DateTimeStyles.RoundtripKind, out var remoteMtime))
-                        shouldUpload = local.LastModifiedUtc > remoteMtime;
-
-                    if (!shouldUpload) continue;
                     try
                     {
                         byte[] bytes = File.ReadAllBytes(local.LocalPath);
@@ -1022,9 +1165,14 @@ namespace Emutastic.Services
                             };
                             uploaded++;
                         }
-                        else errors++;
+                        else errors++;   // UploadFileAsync logged why
                     }
-                    catch { errors++; }
+                    catch (Exception ex)
+                    {
+                        errors++;
+                        CloudSyncLog.Write($"Upload failed {repoPath}: {ex.Message}");
+                    }
+                    progress.Report(new SyncProgress(SyncPhase.Uploading, ++done, toUpload.Count, uploaded, downloaded, errors));
                 }
 
                 // DOWNLOAD: remote saves newer than local (or missing locally). Build a
@@ -1041,10 +1189,12 @@ namespace Emutastic.Services
                     repoToLocalPath[extra.RepoPath + encSuffix] = (extra.LocalPath, true);
 
                 // Covers per-game .srm (via repoToLocalPath) and console-managed extra
-                // saves — including ones never seen on this PC (second-machine restore).
+                // saves — including ones missing locally (restoring this PC's backup after a reinstall).
+                var toDownload = new List<(string RepoPath, string TargetPath, bool Compressed,
+                                           bool HasRemoteMtime, DateTime RemoteMtime, long SizeBytes)>();
+                int skippedNonSave = 0;
                 foreach (var (repoPath, entry) in _manifestCache.Files)
                 {
-                    if (ct.IsCancellationRequested) break;
                     if (!repoPath.StartsWith("BatterySaves/")) continue;
 
                     string targetPath;
@@ -1059,33 +1209,56 @@ namespace Emutastic.Services
                         targetPath = resolved;
                         compressed = true;
                     }
-                    else continue;
+                    else
+                    {
+                        if (IsExcludedRepoPath(repoPath)) skippedNonSave++;
+                        continue;
+                    }
 
                     bool hasRemoteMtime = DateTime.TryParse(entry.LastModifiedUtc, null,
                         System.Globalization.DateTimeStyles.RoundtripKind, out var remoteMtime);
                     bool shouldDownload = !File.Exists(targetPath)
                         || (hasRemoteMtime && remoteMtime > File.GetLastWriteTimeUtc(targetPath));
-                    if (!shouldDownload) continue;
+                    if (shouldDownload)
+                        toDownload.Add((repoPath, targetPath, compressed, hasRemoteMtime, remoteMtime, entry.SizeBytes));
+                }
+                CloudSyncLog.Write($"Download: {toDownload.Count:N0} cloud file(s) are new or newer than this PC's copy " +
+                                   $"({Megabytes(toDownload.Sum(d => d.SizeBytes))})" +
+                                   (skippedNonSave > 0 ? $"; {skippedNonSave:N0} skipped as non-save data (texture packs, caches)" : ""));
+
+                done = 0;
+                progress.Report(new SyncProgress(SyncPhase.Downloading, 0, toDownload.Count, uploaded, downloaded, errors));
+                foreach (var d in toDownload)
+                {
+                    if (ct.IsCancellationRequested) break;
                     try
                     {
-                        byte[]? data = await DownloadFileAsync(repoPath, ct).ConfigureAwait(false);
-                        if (data != null && data.Length > 0)
+                        byte[]? data = await DownloadFileAsync(d.RepoPath, ct).ConfigureAwait(false);
+                        if (data == null)
+                            errors++;   // listed in the manifest but not fetched; DownloadFileAsync logged why
+                        else if (data.Length > 0)
                         {
                             if (encrypted && encKey != null) data = Decrypt(data, encKey);
-                            if (compressed) data = GzipDecompress(data);
-                            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
-                            File.WriteAllBytes(targetPath, data);
+                            if (d.Compressed) data = GzipDecompress(data);
+                            Directory.CreateDirectory(Path.GetDirectoryName(d.TargetPath)!);
+                            File.WriteAllBytes(d.TargetPath, data);
                             // Stamp the manifest's mtime back onto the file — WriteAllBytes
                             // sets "now", which is newer than the manifest entry, so the NEXT
                             // full sync would see every save we just downloaded as locally
                             // modified and re-upload the lot (the "90 up with no changes" bug).
-                            if (hasRemoteMtime) File.SetLastWriteTimeUtc(targetPath, remoteMtime);
+                            if (d.HasRemoteMtime) File.SetLastWriteTimeUtc(d.TargetPath, d.RemoteMtime);
                             downloaded++;
                         }
                     }
-                    catch { errors++; }
+                    catch (Exception ex)
+                    {
+                        errors++;
+                        CloudSyncLog.Write($"Download failed {d.RepoPath}: {ex.Message}");
+                    }
+                    progress.Report(new SyncProgress(SyncPhase.Downloading, ++done, toDownload.Count, uploaded, downloaded, errors));
                 }
 
+                progress.Report(new SyncProgress(SyncPhase.Library, 0, 1, uploaded, downloaded, errors));
                 // LIBRARY DB: VACUUM INTO for a consistent snapshot
                 // (raw File.ReadAllBytes on a WAL-mode DB risks partial checkpoint reads).
                 //
@@ -1102,9 +1275,9 @@ namespace Emutastic.Services
                 try
                 {
                     string dbPath = Path.Combine(AppPaths.DataRoot, "library.db");
-                    // Per-machine remote filename (library.<host>.db): each OS/box owns
-                    // its own DB in the shared repo, so last-writer-wins can never clobber
-                    // another machine's library. The LOCAL path is always library.db.
+                    // Per-machine remote filename (library.<host>.db), kept from the shared
+                    // repository so the layout matches the Windows app's. The LOCAL path is
+                    // always library.db.
                     string dbRepoPath = DbRepoFileName + encSuffix;
                     string? lastSyncedHash = LoadLastSyncedDbHash();
                     string? myHash = null;
@@ -1173,8 +1346,8 @@ namespace Emutastic.Services
                         }
                     }
 
-                    // Download the remote DB when it changed and I didn't (second-PC
-                    // restore + continuous adoption of the other machine's db).
+                    // Download the remote DB when it changed and I didn't (restoring this
+                    // PC's backup after a reinstall).
                     if (_manifestCache.Files.TryGetValue(dbRepoPath, out var remoteDbEntry)
                         && DateTime.TryParse(remoteDbEntry.LastModifiedUtc, null,
                             System.Globalization.DateTimeStyles.RoundtripKind, out var remoteDbMtime))
@@ -1229,11 +1402,28 @@ namespace Emutastic.Services
                     errors++;
                 }
 
+                progress.Report(new SyncProgress(SyncPhase.Finishing, 0, 1, uploaded, downloaded, errors));
                 await SaveManifestAsync(ct).ConfigureAwait(false);
-                CloudSyncLog.Write($"Full sync: {uploaded} up, {downloaded} down, {errors} errors");
-                return new SyncResult(uploaded, downloaded, errors);
+                return Finish(new SyncResult(uploaded, downloaded, errors));
             }
-            finally { _fullSyncLock.Release(); }
+            catch (Exception ex)
+            {
+                CloudSyncLog.Write($"Full sync failed: {ex.Message}");
+                return Finish(new SyncResult(uploaded, downloaded, errors + 1));
+            }
+            finally
+            {
+                CurrentProgress = null;
+                try { SyncStateChanged?.Invoke(false); } catch { }
+            }
+
+            SyncResult Finish(SyncResult result)
+            {
+                LastResult = result;
+                CloudSyncLog.Write($"Full sync: {result.Uploaded} up, {result.Downloaded} down, {result.Errors} errors " +
+                                   $"in {(int)clock.Elapsed.TotalMinutes}m {clock.Elapsed.Seconds:00}s");
+                return result;
+            }
         }
 
         // ── Per-game hooks (called by GameHostLauncher / session end) ────────
@@ -1272,7 +1462,7 @@ namespace Emutastic.Services
                 bool shouldDownload = !File.Exists(localPath)
                     || (hasRemoteMtime && remoteMtime > File.GetLastWriteTimeUtc(localPath));
 
-                byte[]? remote = shouldDownload ? await DownloadFileAsync(repoPath, ct).ConfigureAwait(false) : null;
+                byte[]? remote = shouldDownload ? await DownloadFileAsync(repoPath, ct, quietIfMissing: true).ConfigureAwait(false) : null;
                 if (remote != null && remote.Length > 0)
                 {
                     if (encrypted)
@@ -1470,12 +1660,11 @@ namespace Emutastic.Services
         // instead of a multi-MB download. Fires SyncStateChanged so the main window can
         // show a "Syncing saves…" banner.
 
-        private Task? _backgroundSync;
+        /// <summary>True while a full sync is in flight (background or Sync Now).</summary>
+        public bool IsSyncing => _fullSync is { IsCompleted: false };
 
-        /// <summary>True while a background full-sync is in flight.</summary>
-        public bool IsSyncing => _backgroundSync is { IsCompleted: false };
-
-        /// <summary>Raised with true when a background sync starts, false when it ends.</summary>
+        /// <summary>Raised with true when a full sync starts and false when it ends (after
+        /// <see cref="LastResult"/> is set).</summary>
         public event Action<bool>? SyncStateChanged;
 
         /// <summary>
@@ -1486,17 +1675,15 @@ namespace Emutastic.Services
         /// </summary>
         public void StartBackgroundSync(DatabaseService db)
         {
-            if (!IsAuthenticated) return;
-            if (App.Configuration?.GetCloudSyncConfiguration() is not { Enabled: true }) return;
-            if (_backgroundSync is { IsCompleted: false }) return;
-
-            SyncStateChanged?.Invoke(true);
-            _backgroundSync = Task.Run(async () =>
+            if (!IsAuthenticated) { CloudSyncLog.Write("Background sync skipped: not signed in"); return; }
+            if (App.Configuration?.GetCloudSyncConfiguration() is not { Enabled: true })
             {
-                try { await FullSyncAsync(db).ConfigureAwait(false); }
-                catch (Exception ex) { CloudSyncLog.Write($"Background sync failed: {ex.Message}"); }
-                finally { SyncStateChanged?.Invoke(false); }
-            });
+                CloudSyncLog.Write("Background sync skipped: sync is turned off");
+                return;
+            }
+            if (IsSyncing) { CloudSyncLog.Write("Background sync skipped: a sync is already running"); return; }
+            CloudSyncLog.Write("Background sync starting");
+            _ = FullSyncAsync(db);   // reports its own progress, result and failures
         }
 
         /// <summary>
@@ -1509,7 +1696,7 @@ namespace Emutastic.Services
         {
             if (!IsAuthenticated || string.IsNullOrEmpty(console)) return;
 
-            var bg = _backgroundSync;
+            var bg = _fullSync;
             if (bg is { IsCompleted: false })
             {
                 try { await bg.WaitAsync(TimeSpan.FromSeconds(15), ct).ConfigureAwait(false); }

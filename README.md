@@ -198,27 +198,24 @@ combos are rebindable per system under **Preferences → Controls**.
 ## Cloud Sync
 
 Sign in with your GitHub account (**Preferences → Backups** — device flow, no password stored) and
-your battery saves + game library sync through a private repository on your account.
+this PC's battery saves, memory cards and game library are backed up to a private repository on
+your account.
 
 <details>
 <summary><strong>How it works</strong> (click to expand)</summary>
 
-Saves pull automatically before a game launches and upload when the session ends (configurable:
-on game close / every 15 minutes / manual), or sync everything on demand with **Sync Now**.
+Saves upload when a game session ends (or only on demand with **Sync Now**, if sync is set to
+manual). The status bar shows each sync's progress.
 
-- **Cross-platform** — the same repository serves the Windows app and this port: save on one
-  machine, pick up on the other. Battery saves are keyed by ROM hash, so both installs must import
-  the same ROM files.
-- **Shared or per-PC** — by default every PC shares one `emutastic-saves` repository, so your saves
-  and library follow you between machines. Toggle *"Make this PC unique"* and that machine backs up
-  to its own `emutastic-saves-<hostname>` repository instead — other machines never read or write it.
-- **Optional encryption** — AES-256-GCM with a passphrase you choose; the same passphrase is
-  required on every PC that shares the repository.
+- **One repository per PC** — every PC backs up to its own `emutastic-saves-<hostname>` repository
+  and never reads another PC's saves, so a new or reinstalled machine can't overwrite progress made
+  elsewhere. Signing in again on a reinstalled PC with the same hostname restores its backup.
+- **Saves only** — HD texture packs, shader caches and save states stay out of the backup.
+- **Optional encryption** — AES-256-GCM with a passphrase you choose; restoring the backup needs the
+  same passphrase.
 - **Sign-in kept in your keyring** — the GitHub token and the passphrase live in your desktop
   keyring (GNOME Keyring, KWallet, or anything else speaking the Secret Service API, via libsecret).
   Without one they fall back to `config.json`, which only your user can read.
-- The library database syncs last-writer-wins. If you run established libraries on two machines,
-  take a backup (**Back Up Now**) before your first sync on each.
 
 Sync activity is logged to `Logs/cloudsync.log`.
 

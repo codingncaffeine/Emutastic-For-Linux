@@ -1240,7 +1240,13 @@ public partial class PreferencesWindow : Window
                 status.Text = SignedInText(svc);
                 signIn.Content = "Sign Out";
                 settings.IsVisible = true;
-                if (svc.RestoreProblem != null)
+                if (svc.IsSyncing)
+                {
+                    this.FindControl<TextBlock>("SyncStatusText")!.Text = "Syncing — " +
+                        (svc.CurrentProgress is { } p ? Services.GitHubSyncService.DescribeProgress(p) : "checking what changed…");
+                    this.FindControl<Button>("SyncNowBtn")!.IsEnabled = false;
+                }
+                else if (svc.RestoreProblem != null)
                     this.FindControl<TextBlock>("SyncStatusText")!.Text = svc.RestoreProblem;
             }
             else if (svc.RestoreProblem != null)
@@ -1256,8 +1262,8 @@ public partial class PreferencesWindow : Window
                 this.FindControl<CheckBox>("SyncEncryptionEnabled")!.IsChecked = cfg.EncryptionEnabled;
                 this.FindControl<StackPanel>("PassphrasePanel")!.IsVisible = cfg.EncryptionEnabled;
                 this.FindControl<TextBlock>("PassphraseHint")!.IsVisible = cfg.EncryptionEnabled;
-                this.FindControl<CheckBox>("SyncPerPcRepo")!.IsChecked = cfg.UsePerPcRepo;
-                UpdatePerPcRepoCopy(cfg.UsePerPcRepo);
+                this.FindControl<TextBlock>("SyncRepoNameText")!.Text =
+                    $"{svc.Username ?? "your-account"}/{Services.GitHubSyncService.EffectiveRepoName}";
             }
         }
         finally { _suppressCloudSave = false; }
@@ -1267,31 +1273,22 @@ public partial class PreferencesWindow : Window
     {
         if (_cloudSyncWired) return;
         _cloudSyncWired = true;
+        // Live progress of whichever full sync is running (sign-in, launch or Sync Now). The service
+        // outlives this window, so the handlers come off again when it closes.
+        var sync = Services.GitHubSyncService.Instance;
+        sync.SyncProgressChanged += OnCloudSyncProgress;
+        sync.SyncStateChanged += OnCloudSyncStateChanged;
+        Closed += (_, _) =>
+        {
+            sync.SyncProgressChanged -= OnCloudSyncProgress;
+            sync.SyncStateChanged -= OnCloudSyncStateChanged;
+        };
         this.FindControl<Button>("CloudSyncSignInBtn")!.Click += (_, _) => _ = CloudSyncSignInAsync();
         this.FindControl<Button>("SyncNowBtn")!.Click += (_, _) => _ = SyncNowAsync();
         this.FindControl<Button>("SyncPassphraseSaveBtn")!.Click += (_, _) => _ = SyncPassphraseSaveAsync();
         foreach (var name in new[] { "SyncOnClose", "SyncPeriodic", "SyncManual" })
             this.FindControl<RadioButton>(name)!.IsCheckedChanged += (_, _) => SyncTimingChanged();
         this.FindControl<CheckBox>("SyncEncryptionEnabled")!.IsCheckedChanged += (_, _) => SyncEncryptionChanged();
-        this.FindControl<CheckBox>("SyncPerPcRepo")!.IsCheckedChanged += (_, _) => SyncPerPcRepoChanged();
-    }
-
-    /// <summary>
-    /// Mode-specific explainer under the per-PC repo toggle. The wording
-    /// must make the tradeoff unmistakable: shared = follows you between
-    /// PCs, separate = backup unique to this machine that other PCs never
-    /// touch.
-    /// </summary>
-    private void UpdatePerPcRepoCopy(bool perPc)
-    {
-        this.FindControl<TextBlock>("SyncRepoExplainText")!.Text = perPc
-            ? "On: this PC backs up to its own repository. Saves and the game "
-              + "library on this PC stay unique to it — they will not appear on "
-              + "your other machines, and other machines can't overwrite them."
-            : "Off: this PC shares one cloud repository with your other PCs — "
-              + "saves and your game library follow you between machines.";
-        this.FindControl<TextBlock>("SyncRepoNameText")!.Text =
-            $"Repository in use: {Services.GitHubSyncService.EffectiveRepoName}";
     }
 
     // Where the sign-in is kept only needs saying when it is NOT the keyring.
@@ -1299,26 +1296,6 @@ public partial class PreferencesWindow : Window
         Services.GitHubSyncService.TokenInKeyring
             ? $"Signed in as {svc.Username}"
             : $"Signed in as {svc.Username} (no system keyring found, so the sign-in is saved in config.json)";
-
-    private void SyncPerPcRepoChanged()
-    {
-        if (_suppressCloudSave) return;
-        var cfg = App.Configuration?.GetCloudSyncConfiguration();
-        if (cfg == null) return;
-        cfg.UsePerPcRepo = this.FindControl<CheckBox>("SyncPerPcRepo")!.IsChecked == true;
-        App.Configuration!.SetCloudSyncConfiguration(cfg);
-        App.Configuration!.ScheduleSave();
-
-        // Everything cached from the previous repo is now wrong.
-        var svc = Services.GitHubSyncService.Instance;
-        svc.ResetRepoBinding();
-        UpdatePerPcRepoCopy(cfg.UsePerPcRepo);
-
-        // The shared repo was created at sign-in; a per-PC repo may not
-        // exist yet — create it now so the first sync doesn't 404.
-        if (svc.IsAuthenticated && cfg.UsePerPcRepo)
-            _ = svc.EnsureRepoExistsAsync();
-    }
 
     private async Task CloudSyncSignInAsync()
     {
@@ -1356,10 +1333,12 @@ public partial class PreferencesWindow : Window
                 status.Text = SignedInText(svc);
                 signIn.Content = "Sign Out";
                 settings.IsVisible = true;
+                this.FindControl<TextBlock>("SyncRepoNameText")!.Text =
+                    $"{svc.Username}/{Services.GitHubSyncService.EffectiveRepoName}";
 
-                // Pull everything down right after first login (fresh-PC restore: battery
-                // saves, memory cards, save trees, library db), off the UI thread — progress
-                // shows in the main window's banner via SyncStateChanged.
+                // Sync right after sign-in (after a reinstall this restores the PC's own backup:
+                // battery saves, memory cards, save trees, library db), off the UI thread —
+                // progress shows in the main window's banner and beside Sync Now.
                 svc.StartBackgroundSync(new Services.DatabaseService());
             }
             else
@@ -1414,6 +1393,25 @@ public partial class PreferencesWindow : Window
             : "Passphrase saved (no system keyring found, so it is kept in config.json)";
     }
 
+    private void OnCloudSyncProgress(Services.GitHubSyncService.SyncProgress p) =>
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            if (!Services.GitHubSyncService.Instance.IsSyncing) return;   // landed after the sync ended
+            this.FindControl<TextBlock>("SyncStatusText")!.Text = "Syncing — " + Services.GitHubSyncService.DescribeProgress(p);
+            this.FindControl<Button>("SyncNowBtn")!.IsEnabled = false;
+        });
+
+    private void OnCloudSyncStateChanged(bool syncing) =>
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            var status = this.FindControl<TextBlock>("SyncStatusText")!;
+            this.FindControl<Button>("SyncNowBtn")!.IsEnabled = !syncing;
+            if (syncing)
+                status.Text = "Syncing — checking what changed…";
+            else if (Services.GitHubSyncService.Instance.LastResult is { } result)
+                status.Text = $"Synced at {DateTime.Now:h:mm tt} — {Services.GitHubSyncService.DescribeResult(result)}";
+        });
+
     private async Task SyncNowAsync()
     {
         var svc = Services.GitHubSyncService.Instance;
@@ -1421,13 +1419,13 @@ public partial class PreferencesWindow : Window
         var btn = this.FindControl<Button>("SyncNowBtn")!;
         var status = this.FindControl<TextBlock>("SyncStatusText")!;
         btn.IsEnabled = false;
-        status.Text = "Syncing…";
+        status.Text = svc.IsSyncing ? "A sync is already running — waiting for it…" : "Syncing…";
         try
         {
-            var db = new Services.DatabaseService();
-            var result = await Task.Run(() => svc.FullSyncAsync(db));
-            status.Text = $"Synced at {DateTime.Now:h:mm tt} — {result.Uploaded} up, {result.Downloaded} down"
-                + (result.Errors > 0 ? $", {result.Errors} errors" : "");
+            // Joins a sync that is already running (the one started at sign-in or launch) and waits for
+            // its real result; the progress handlers above keep the status line current meanwhile.
+            var result = await Task.Run(() => svc.FullSyncAsync(new Services.DatabaseService()));
+            status.Text = $"Synced at {DateTime.Now:h:mm tt} — {Services.GitHubSyncService.DescribeResult(result)}";
         }
         catch (Exception ex) { status.Text = $"Sync failed: {ex.Message}"; }
         finally { btn.IsEnabled = true; }
