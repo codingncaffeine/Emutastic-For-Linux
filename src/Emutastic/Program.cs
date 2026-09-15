@@ -57,6 +57,14 @@ sealed class Program
             Environment.Exit(Emutastic.Platform.SecretStoreSelfTest.Run());
             return;
         }
+        // Dev-only: a whole cloud sync against an in-process fake GitHub API — no account, no
+        // network. `Emutastic --selftest-cloudsync-offline --portable` from a fresh copy of the build
+        // output (it refuses a PortableData that has been used). Exit 0 = pass, 1 = fail, 2 = incomplete.
+        if (args.Length >= 1 && args[0] == "--selftest-cloudsync-offline")
+        {
+            Environment.Exit(Emutastic.Services.CloudSyncOfflineSelfTest.Run());
+            return;
+        }
         // Dev-only: in-app-update selftest — `Emutastic --selftest-update` runs the
         // full check→pick→download→apply pipeline headlessly against EMUTASTIC_UPDATE_API
         // (a local mock in tests). On success the process hands off to the relaunch
