@@ -73,6 +73,10 @@ smoke_one() {
         return 2
     fi
 
+    # Portable mode (portable.txt beside the apphost) keeps the launch in a throwaway data
+    # folder inside $tmp. Without it the app opens the real profile, and with a saved
+    # cloud sign-in it starts a sync against the user's real backup repository.
+    touch "$payload/portable.txt"
     local log=$tmp/launch.log pid i
     ( cd "$payload" && ./Emutastic ) > "$log" 2>&1 &
     pid=$!
