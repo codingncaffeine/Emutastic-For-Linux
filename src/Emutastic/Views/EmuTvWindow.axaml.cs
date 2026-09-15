@@ -793,20 +793,28 @@ namespace Emutastic.Views
         private RenderedView? _themePreview;
         private EmuTvThemeParseResult? _activeThemeRes;
         private string? _activeThemeId;
+        // Themes ship per-system include files (metadata variables, layout tweaks), so the parse is per
+        // selected system. Cached per system; cleared when the theme (or an axis) changes, which is
+        // signalled by _activeThemeRes being nulled.
+        private readonly Dictionary<string, EmuTvThemeParseResult?> _themeResBySystem = new();
 
         // Renders the active theme's current view (system/gamelist) into the window. Re-run on every
-        // navigation/selection/mode change so the themed UI tracks input. The active theme is parsed
-        // once and cached; image loads are cached too, so re-renders are cheap.
+        // navigation/selection/mode change so the themed UI tracks input. Parses are cached per system;
+        // image loads are cached too, so re-renders are cheap.
         private void RenderActiveView()
         {
             try
             {
                 string id = EmuTvThemeService.Instance.ActiveThemeId;
+                string esSystem = EsSystemName.For((SystemCarousel.SelectedItem as ConsoleGroup)?.ConsoleName);
                 if (_activeThemeRes == null || _activeThemeId != id)
                 {
-                    _activeThemeRes = EmuTvThemeService.Instance.LoadActiveTheme();
+                    _themeResBySystem.Clear();
                     _activeThemeId = id;
                 }
+                if (!_themeResBySystem.TryGetValue(esSystem, out var res) || res == null)
+                    _themeResBySystem[esSystem] = res = EmuTvThemeService.Instance.LoadActiveTheme(esSystem);
+                _activeThemeRes = res;
                 var variant = _activeThemeRes?.Theme.Variants.Values.FirstOrDefault();
                 if (variant == null) return;
 
@@ -820,8 +828,7 @@ namespace Emutastic.Views
                 // The faithful engine binds all data (system logos, game art, metadata text, help)
                 // directly from the snapshot during render — no post-pass slot filling needed.
                 _themePreview = new EmuTvThemeRenderer(_activeThemeRes!.Theme.RootPath).Render(view, w, h,
-                    EsSystemName.For((SystemCarousel.SelectedItem as ConsoleGroup)?.ConsoleName),
-                    BuildThemeItems());
+                    esSystem, BuildThemeItems());
 
                 ThemePreviewHost.Child = _themePreview.Root;
                 ThemePreviewHost.IsVisible = true;
@@ -1153,6 +1160,8 @@ namespace Emutastic.Views
                         RatingStars = g.RatingStars,
                         Rating = Math.Clamp(g.Rating / 5.0, 0, 1),
                         Favorite = g.IsFavorite,
+                        LastPlayed = g.LastPlayed,
+                        PlayCount = g.PlayCount,
                     });
 
             var saves = new List<ThemeSaveEntry>();

@@ -101,6 +101,8 @@ namespace Emutastic.Services
         public bool Kidgame { get; init; }
         public bool Broken { get; init; }
         public int Players { get; init; }
+        public DateTime? LastPlayed { get; init; }
+        public int PlayCount { get; init; }
     }
 
     /// <summary>
@@ -128,6 +130,9 @@ namespace Emutastic.Services
             _systemTheme = systemTheme;
             _items = items;
             _viewKind = view.Kind;
+            // ES-DE: game-bound elements in the SYSTEM view show the game picked by the view's
+            // <gameselector> (Last Played panels etc.); without one they stay unbound, as before.
+            _selectorGame = view.Kind == ThemeViewKind.System ? PickSelectorGame(view) : null;
 
             var rv = new RenderedView { Kind = view.Kind };
             rv.Root.Width = _w;
@@ -378,9 +383,23 @@ namespace Emutastic.Services
             };
             RenderOptions.SetBitmapInterpolationMode(img, ScalingOf(im.Interpolation));
 
-            // Colour tint (multiply). ES applies <color> as a per-pixel multiply.
+            // Colour tint. ES-DE applies <color> as a per-pixel MULTIPLY. A solid tint on a bitmap gets a
+            // true multiply (white = identity, so a coloured texture stays untouched instead of washing
+            // out to the tint). The colourise-by-mask fallback remains for gradient tints, where themes
+            // use (near-)monochrome art and the two are equivalent.
             if (hasColor)
             {
+                bool gradientTint = im.Color != null && im.ColorEnd != null
+                    && !string.Equals(im.Color, im.ColorEnd, StringComparison.OrdinalIgnoreCase);
+                if (!gradientTint)
+                {
+                    var tint = ColorFromHex(im.Color ?? im.ColorEnd);
+                    if (tint is { R: 255, G: 255, B: 255 })
+                        img.Opacity = tint.A / 255.0;
+                    else
+                        img.Source = MultiplyTint(src, tint);
+                    return Boxed(img, boxW, boxH, crop);
+                }
                 var rect = new Rectangle
                 {
                     Width = boxW,
@@ -427,23 +446,37 @@ namespace Emutastic.Services
             else if (src.Size.Width > 0)          { cellW = src.Size.Width; cellH = src.Size.Height; }
             else                                  { cellH = 0.1 * _h; cellW = cellH * aspect; }
 
+            // ES-DE multiplies the tile by <color>. Solid tints get the true multiply (white = identity, as
+            // in BuildImage); the mask trick remains for gradient tints, where the common "tiled white/
+            // neutral spacer + background colour" pattern (art-book-next) makes the two equivalent.
+            bool hasTint = im.Color != null || im.ColorEnd != null;
+            double tileOpacity = 1;
+            if (hasTint)
+            {
+                bool gradientTint = im.Color != null && im.ColorEnd != null
+                    && !string.Equals(im.Color, im.ColorEnd, StringComparison.OrdinalIgnoreCase);
+                if (!gradientTint)
+                {
+                    var tint = ColorFromHex(im.Color ?? im.ColorEnd);
+                    if (tint is { R: 255, G: 255, B: 255 }) tileOpacity = tint.A / 255.0;
+                    else src = MultiplyTint(src, tint);
+                    hasTint = false;
+                }
+            }
             var tiled = new ImageBrush(src)
             {
                 TileMode = TileMode.Tile,
                 DestinationRect = new RelativeRect(0, 0, cellW, cellH, RelativeUnit.Absolute),
                 Stretch = Stretch.Fill,
             };
-            // ES-DE multiplies the tile by <color>. The very common "tiled white/neutral spacer + a
-            // background colour" pattern (art-book-next) is effectively a solid colour fill; reproduce it
-            // by masking the colour brush with the tile so the colour shows wherever the spacer is opaque.
-            Control rect = (im.Color != null || im.ColorEnd != null)
+            Control rect = hasTint
                 ? new Rectangle
                   {
                       Width = boxW, Height = boxH,
                       Fill = BuildBrush(im.Color, im.ColorEnd, im.Gradient),
                       OpacityMask = tiled,
                   }
-                : new Rectangle { Width = boxW, Height = boxH, Fill = tiled };
+                : new Rectangle { Width = boxW, Height = boxH, Fill = tiled, Opacity = tileOpacity };
             return Boxed(rect, boxW, boxH, crop);
         }
 
@@ -1026,8 +1059,28 @@ namespace Emutastic.Services
 
         private int ItemCount() => _viewKind == ThemeViewKind.System ? (_items?.Systems.Count ?? 0) : (_items?.Games.Count ?? 0);
         private int SelectedIndex() => _viewKind == ThemeViewKind.System ? (_items?.SelectedSystem ?? 0) : (_items?.SelectedGame ?? 0);
+        private ThemeGameEntry? _selectorGame;   // system-view game picked by <gameselector>
         private ThemeGameEntry? SelectedGame => _viewKind == ThemeViewKind.Gamelist && _items != null
-            && _items.SelectedGame >= 0 && _items.SelectedGame < _items.Games.Count ? _items.Games[_items.SelectedGame] : null;
+            && _items.SelectedGame >= 0 && _items.SelectedGame < _items.Games.Count ? _items.Games[_items.SelectedGame]
+            : _selectorGame;
+
+        private ThemeGameEntry? PickSelectorGame(ThemeView view)
+        {
+            var sel = view.Elements.OfType<GameSelectorElement>().FirstOrDefault();
+            var games = _items?.Games;
+            if (sel == null || games == null || games.Count == 0) return null;
+            switch (sel.Selection.Trim().ToLowerInvariant())
+            {
+                case "lastplayed":
+                    return games.Where(g => g.LastPlayed != null).OrderByDescending(g => g.LastPlayed).FirstOrDefault()
+                           ?? games[0];
+                case "mostplayed":
+                    return games.OrderByDescending(g => g.PlayCount).First();
+                default: // "random" — seeded per system so re-renders within a session don't reshuffle
+                    int seed = (_systemTheme ?? "").GetHashCode() ^ games.Count;
+                    return games[new Random(seed).Next(games.Count)];
+            }
+        }
 
         private string ItemLabel(int idx)
         {
@@ -1246,6 +1299,45 @@ namespace Emutastic.Services
                 };
             }
             return new SolidColorBrush(c1);
+        }
+
+        // True per-pixel multiply of a bitmap by a solid colour (ES-DE <color> semantics). Cached —
+        // sources are themselves cached per path, so (source, colour) pairs are few and stable.
+        private static readonly ConcurrentDictionary<(Bitmap, Color), Bitmap> _tintCache = new();
+        private static Bitmap MultiplyTint(Bitmap src, Color c)
+        {
+            if (_tintCache.TryGetValue((src, c), out var hit)) return hit;
+            Bitmap result = src;
+            try
+            {
+                var tinted = new WriteableBitmap(src.PixelSize, src.Dpi, PixelFormat.Bgra8888, AlphaFormat.Premul);
+                using (var fb = tinted.Lock())
+                {
+                    src.CopyPixels(fb);
+                    // The framebuffer is premultiplied, so the straight-alpha multiply (colour·t, alpha·tA)
+                    // becomes colour·t·tA and alpha·tA once re-premultiplied.
+                    int ca = c.A, cb = c.B * ca, cg = c.G * ca, cr = c.R * ca;   // colour factors scaled by 255²
+                    int w = fb.Size.Width, h = fb.Size.Height, stride = fb.RowBytes;
+                    var row = new byte[stride];
+                    for (int y = 0; y < h; y++)
+                    {
+                        IntPtr line = fb.Address + y * stride;
+                        System.Runtime.InteropServices.Marshal.Copy(line, row, 0, stride);
+                        for (int x = 0, i = 0; x < w; x++, i += 4)
+                        {
+                            row[i]     = (byte)(row[i]     * cb / 65025);
+                            row[i + 1] = (byte)(row[i + 1] * cg / 65025);
+                            row[i + 2] = (byte)(row[i + 2] * cr / 65025);
+                            row[i + 3] = (byte)(row[i + 3] * ca / 255);
+                        }
+                        System.Runtime.InteropServices.Marshal.Copy(row, 0, line, stride);
+                    }
+                }
+                result = tinted;
+            }
+            catch { /* keep the untinted source */ }
+            _tintCache[(src, c)] = result;
+            return result;
         }
 
         // ES colours are RRGGBB or RRGGBBAA (NOT AARRGGBB). 6 digits ⇒ opaque.
