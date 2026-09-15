@@ -41,9 +41,17 @@ namespace Emutastic.Services
         // the per-PC toggle is on. Read from config on every access so a
         // toggle flip takes effect on the very next operation.
         private static string RepoName =>
-            App.Configuration?.GetCloudSyncConfiguration() is { UsePerPcRepo: true }
+            RepoNameOverride
+            ?? (App.Configuration?.GetCloudSyncConfiguration() is { UsePerPcRepo: true }
                 ? PerPcRepoName
-                : SharedRepoName;
+                : SharedRepoName);
+
+        /// <summary>
+        /// Test-only: points every operation at another repository. The cloud-sync
+        /// self-test sets it so it never writes into a real saves repository — its
+        /// manifest round-trip replaces the remote manifest wholesale.
+        /// </summary>
+        internal static string? RepoNameOverride { get; set; }
 
         // ⚠ MachineSuffix MUST be declared before PerPcRepoName / DbRepoFileName: static
         // auto-property initializers run in TEXTUAL order, so if it came later it would

@@ -7,9 +7,11 @@ namespace Emutastic.Services
     /// <summary>
     /// `EMUTASTIC_SYNC_TOKEN=… Emutastic --selftest-cloudsync`: exercises the cloud
     /// sync engine against the REAL GitHub API with an injected token (bypasses the
-    /// device flow, which needs the OAuth client id). Validates: token → username,
-    /// repo bootstrap, plain + encrypted upload/download round-trips, manifest
-    /// save/load. Exit 0 = all stages byte-identical.
+    /// device flow). Validates: token → username, repo bootstrap, plain + encrypted
+    /// upload/download round-trips, manifest save/load. Exit 0 = all stages
+    /// byte-identical. It works in its own emutastic-saves-selftest repository and
+    /// never a real saves repository: the manifest round-trip replaces the remote
+    /// manifest wholesale, which would drop every entry other machines synced.
     /// </summary>
     internal static class CloudSyncSelfTest
     {
@@ -27,8 +29,9 @@ namespace Emutastic.Services
                 return 1;
             }
 
+            GitHubSyncService.RepoNameOverride = "emutastic-saves-selftest";
             var svc = GitHubSyncService.Instance;
-            // Inject the token through the same field LoadFromConfig fills.
+            // Inject the token through the same field the session restore fills.
             typeof(GitHubSyncService).GetField("_token",
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
                 .SetValue(svc, token);
