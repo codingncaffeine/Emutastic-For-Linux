@@ -73,78 +73,10 @@
                         <Rectangle Height="1" Fill="{DynamicResource BorderSubtleBrush}" Margin="12,8"/>
                         <TextBlock Text="CONSOLES" Theme="{DynamicResource LabelMuted}" Margin="16,4,0,4"/>
 
-                        <!-- Arcade (top of consoles) -->
-                        <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="Arcade">
-                            <StackPanel Orientation="Horizontal" Spacing="8"><TextBlock Text="🕹" FontSize="16" Width="20" TextAlignment="Center" VerticalAlignment="Center"/><TextBlock Text="Arcade" VerticalAlignment="Center"/></StackPanel></Button>
-
-                        <Expander Theme="{StaticResource SidebarExpander}" Header="ATARI" Margin="6,4,0,0" IsExpanded="True">
-                            <StackPanel>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="Atari2600"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='Atari2600'}"/><TextBlock Text="Atari 2600" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="Atari7800"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='Atari7800'}"/><TextBlock Text="Atari 7800" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="Jaguar"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='Jaguar'}"/><TextBlock Text="Atari Jaguar" VerticalAlignment="Center"/></StackPanel></Button>
-                            </StackPanel>
-                        </Expander>
-
-                        <Expander Theme="{StaticResource SidebarExpander}" Header="NINTENDO" Margin="6,2,0,0" IsExpanded="True">
-                            <StackPanel>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="NES"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='NES'}"/><TextBlock Text="Nintendo (NES)" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="FDS"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='FDS'}"/><TextBlock Text="Famicom Disk System" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="SNES"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='SNES'}"/><TextBlock Text="Super Nintendo" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="N64"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='N64'}"/><TextBlock Text="Nintendo 64" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="GameCube"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='GameCube'}"/><TextBlock Text="GameCube" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="GB"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='GB'}"/><TextBlock Text="Game Boy" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="GBC"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='GBC'}"/><TextBlock Text="Game Boy Color" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="GBA"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='GBA'}"/><TextBlock Text="Game Boy Advance" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="3DS"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='3DS'}"/><TextBlock Text="Nintendo 3DS" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="NDS"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='NDS'}"/><TextBlock Text="Nintendo DS" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="VirtualBoy"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='VirtualBoy'}"/><TextBlock Text="Virtual Boy" VerticalAlignment="Center"/></StackPanel></Button>
-                            </StackPanel>
-                        </Expander>
-
-                        <Expander Theme="{StaticResource SidebarExpander}" Header="SEGA" Margin="6,2,0,0" IsExpanded="True">
-                            <StackPanel>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="SMS"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='SMS'}"/><TextBlock Text="Sega Master System" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="Genesis"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='Genesis'}"/><TextBlock Text="Sega Genesis" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="SegaCD"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='SegaCD'}"/><TextBlock Text="Sega CD" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="Sega32X"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='Sega32X'}"/><TextBlock Text="Sega 32X" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="Saturn"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='Saturn'}"/><TextBlock Text="Sega Saturn" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="GameGear"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='GameGear'}"/><TextBlock Text="Sega Game Gear" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="SG1000"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='SG1000'}"/><TextBlock Text="SG-1000" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="Dreamcast"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='Dreamcast'}"/><TextBlock Text="Dreamcast" VerticalAlignment="Center"/></StackPanel></Button>
-                            </StackPanel>
-                        </Expander>
-
-                        <Expander Theme="{StaticResource SidebarExpander}" Header="SONY" Margin="6,2,0,0" IsExpanded="True">
-                            <StackPanel>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="PS1"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='PS1'}"/><TextBlock Text="PlayStation" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="PS2"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='PS2'}"/><TextBlock Text="PlayStation 2" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="PSP"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='PSP'}"/><TextBlock Text="PSP" VerticalAlignment="Center"/></StackPanel></Button>
-                            </StackPanel>
-                        </Expander>
-
-                        <Expander Theme="{StaticResource SidebarExpander}" Header="NEC" Margin="6,2,0,0" IsExpanded="True">
-                            <StackPanel>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="TG16"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='TG16'}"/><TextBlock Text="TurboGrafx-16" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="TGCD"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='TGCD'}"/><TextBlock Text="TurboGrafx-CD" VerticalAlignment="Center"/></StackPanel></Button>
-                            </StackPanel>
-                        </Expander>
-
-                        <Expander Theme="{StaticResource SidebarExpander}" Header="SNK" Margin="6,2,0,0" IsExpanded="True">
-                            <StackPanel>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="NeoGeo"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='NeoGeo'}"/><TextBlock Text="Neo Geo" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="NeoCD"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='NeoCD'}"/><TextBlock Text="Neo Geo CD" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="NGP"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='NGP'}"/><TextBlock Text="NeoGeo Pocket" VerticalAlignment="Center"/></StackPanel></Button>
-                            </StackPanel>
-                        </Expander>
-
-                        <Expander Theme="{StaticResource SidebarExpander}" Header="OTHER" Margin="6,2,0,0" IsExpanded="True">
-                            <StackPanel>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="3DO"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='3DO'}"/><TextBlock Text="3DO" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="CDi"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='CDi'}"/><TextBlock Text="Philips CD-i" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="ColecoVision"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='ColecoVision'}"/><TextBlock Text="ColecoVision" VerticalAlignment="Center"/></StackPanel></Button>
-                                <Button Theme="{DynamicResource SidebarItemStyle}" Command="{Binding NavigateToConsoleCommand}" CommandParameter="Vectrex"><StackPanel Orientation="Horizontal" Spacing="8"><Image Width="20" Height="20" Source="{Binding Converter={StaticResource ConsoleTagToIcon}, Source='Vectrex'}"/><TextBlock Text="Vectrex" VerticalAlignment="Center"/></StackPanel></Button>
-                            </StackPanel>
-                        </Expander>
+                        <!-- Console list is built at runtime from ConsoleCatalog; order,
+                             hiding and grouping come from Preferences -> Library. See
+                             MainWindow.Sidebar.cs. Defaults render exactly as before. -->
+                        <StackPanel Name="ConsoleNavPanel"/>
 
                         <Rectangle Height="1" Fill="{DynamicResource BorderSubtleBrush}" Margin="12,10,12,0"/>
                         <Grid ColumnDefinitions="*,Auto" Margin="16,8,8,0">

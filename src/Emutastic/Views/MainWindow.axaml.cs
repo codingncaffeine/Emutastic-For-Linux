@@ -1078,7 +1078,16 @@ public partial class MainWindow : Window
         // confirm + install; core-update notice → Preferences → Cores.
         var banner = this.FindControl<Border>("StatusBanner");
         if (banner != null) banner.PointerPressed += OnBannerPressed;
+        BuildConsoleSidebar();
         RefreshCollectionsSidebar();
+
+        // Test hook, in the spirit of EMUTASTIC_SHOT / EMUTASTIC_OVERLAY_TEST: open
+        // Preferences on a nav section at startup so a panel that only builds when you
+        // click to it can be exercised without a human clicking.
+        //   EMUTASTIC_PREFS_NAV=NavLibrary ./Emutastic
+        if (Environment.GetEnvironmentVariable("EMUTASTIC_PREFS_NAV") is { Length: > 0 } prefsNav)
+            Dispatcher.UIThread.Post(() => PreferencesWindow.OpenOrFocus(this, null, prefsNav),
+                DispatcherPriority.Loaded);
 
         Task.Run(() =>
         {

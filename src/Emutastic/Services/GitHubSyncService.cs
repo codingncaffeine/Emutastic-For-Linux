@@ -1453,6 +1453,8 @@ namespace Emutastic.Services
         {
             var cfg = App.Configuration?.GetCloudSyncConfiguration();
             if (!IsAuthenticated || cfg is not { Enabled: true }) return;
+            // "Manual only": nothing is pulled automatically either — only Sync Now acts.
+            if (cfg.IsManualTiming) return;
             if (string.IsNullOrEmpty(game.RomHash) || string.IsNullOrEmpty(game.Console)) return;
             if (!TryGetPassphrase(cfg, out string? passphrase)) return;
 
@@ -1504,13 +1506,66 @@ namespace Emutastic.Services
             finally { gameLock.Release(); }
         }
 
+        // ── "Every N minutes during play" uploader ───────────────────────────────
+        // The game runs in a child process, so this timer lives in the library process,
+        // which owns the token and the manifest. The child's own SRAM autosave (~10 s)
+        // keeps the .srm current on disk, so the timer only uploads the file — it never
+        // touches the core and so can never race the emu thread.
+        private System.Threading.Timer? _periodicTimer;
+
+        /// <summary>
+        /// Whether the "Every N minutes during play" uploader should arm, and at what
+        /// interval. Kept separate from the timer so the offline self-test can assert the
+        /// decision without starting a session.
+        /// </summary>
+        public bool ShouldArmPeriodicUpload(out int minutes)
+        {
+            minutes = 0;
+            var cfg = App.Configuration?.GetCloudSyncConfiguration();
+            if (!IsAuthenticated || cfg is not { Enabled: true } || !cfg.IsPeriodicTiming) return false;
+            minutes = Math.Max(1, cfg.PeriodicIntervalMinutes);
+            return true;
+        }
+
+        /// <summary>
+        /// Arms the periodic upload for a session that just started. No-op unless sync is
+        /// on AND the user picked "Every N minutes during play". Re-arming replaces any
+        /// previous timer, so the most recent launch is the one being tracked.
+        /// </summary>
+        public void StartPeriodicSync(Models.Game game)
+        {
+            StopPeriodicSync();
+            if (!ShouldArmPeriodicUpload(out int minutes)) return;
+            var period = TimeSpan.FromMinutes(minutes);
+            _periodicTimer = new System.Threading.Timer(_ =>
+            {
+                try
+                {
+                    _ = UploadSaveAfterSessionAsync(game);
+                    if (!string.IsNullOrEmpty(game.Console)) _ = UploadConsoleExtraSavesAsync(game.Console!);
+                }
+                catch (Exception ex) { CloudSyncLog.Write($"Periodic upload failed: {ex.Message}"); }
+            }, null, period, period);
+            CloudSyncLog.Write($"Periodic save upload armed: every {minutes} min");
+        }
+
+        /// <summary>Disarms the periodic upload when the session ends.</summary>
+        public void StopPeriodicSync()
+        {
+            var t = System.Threading.Interlocked.Exchange(ref _periodicTimer, null);
+            if (t == null) return;
+            t.Dispose();
+            CloudSyncLog.Write("Periodic save upload disarmed");
+        }
+
         /// <summary>Upload the battery save after a session ends (fire-and-forget
-        /// at the call site, like upstream's game-close hook).</summary>
+        /// at the call site, like upstream's game-close hook). Also used by the
+        /// periodic during-play timer above.</summary>
         public async Task UploadSaveAfterSessionAsync(Models.Game game, CancellationToken ct = default)
         {
             var cfg = App.Configuration?.GetCloudSyncConfiguration();
             if (!IsAuthenticated || cfg is not { Enabled: true }) return;
-            if (cfg.SyncTiming == "manual") return;
+            if (cfg.IsManualTiming) return;
             if (string.IsNullOrEmpty(game.RomHash) || string.IsNullOrEmpty(game.Console)) return;
 
             string localPath = LocalSrmPathFor(game.Console!, AppPaths.FromStoragePath(game.RomPath), game.HasPatch, game.RomHash);
@@ -1574,7 +1629,7 @@ namespace Emutastic.Services
         {
             var cfg = App.Configuration?.GetCloudSyncConfiguration();
             if (!IsAuthenticated || cfg is not { Enabled: true }) return 0;
-            if (cfg.SyncTiming == "manual" || string.IsNullOrEmpty(console)) return 0;
+            if (cfg.IsManualTiming || string.IsNullOrEmpty(console)) return 0;
             if (!TryGetPassphrase(cfg, out string? passphrase)) return 0;
 
             bool encrypted = passphrase != null;
@@ -1701,6 +1756,13 @@ namespace Emutastic.Services
                 return;
             }
             if (IsSyncing) { CloudSyncLog.Write("Background sync skipped: a sync is already running"); return; }
+            // "Manual only" means exactly that: the startup pass and the post-login pass
+            // both come through here, so one gate covers both.
+            if (App.Configuration?.GetCloudSyncConfiguration()?.IsManualTiming == true)
+            {
+                CloudSyncLog.Write("Background sync skipped: Sync Timing is \"Manual only\"");
+                return;
+            }
             CloudSyncLog.Write("Background sync starting");
             _ = FullSyncAsync(db);   // reports its own progress, result and failures
         }
@@ -1714,6 +1776,7 @@ namespace Emutastic.Services
         public async Task EnsureConsoleSavesReadyAsync(string console, CancellationToken ct = default)
         {
             if (!IsAuthenticated || string.IsNullOrEmpty(console)) return;
+            if (App.Configuration?.GetCloudSyncConfiguration()?.IsManualTiming == true) return;
 
             var bg = _fullSync;
             if (bg is { IsCompleted: false })

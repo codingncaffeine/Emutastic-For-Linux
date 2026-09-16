@@ -300,6 +300,27 @@
                             <Button Name="LibrarySaveBtn" Content="Save" Theme="{StaticResource PrefActionBtn}" HorizontalAlignment="Left" Margin="0,24,0,0"/>
                             <TextBlock Name="LibraryStatusText" FontSize="11" FontFamily="{DynamicResource PrimaryFont}"
                                        Foreground="{DynamicResource TextMutedBrush}" Margin="0,10,0,0"/>
+
+                            <Rectangle Height="1" Fill="{DynamicResource BorderNormalBrush}" Margin="0,24,0,16"/>
+
+                            <!-- Sidebar layout. Rows are built in code (PreferencesWindow.SidebarLayout.cs)
+                                 because the list is the console catalog, not fixed markup. Applies live —
+                                 no Save button here on purpose, so it can't be confused with the one above,
+                                 which governs the import settings. -->
+                            <TextBlock Text="SIDEBAR LAYOUT" Theme="{StaticResource PrefLabel}" Margin="0,0,0,4"/>
+                            <TextBlock TextWrapping="Wrap" FontSize="12" FontFamily="{DynamicResource PrimaryFont}" Margin="0,0,0,12"
+                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                       Text="Choose which consoles the sidebar lists and the order they appear in. Hiding a console never deletes anything — its games stay in your library and under All Games. Changes apply immediately."/>
+
+                            <CheckBox Name="HideEmptyConsolesCheck" Content="Hide consoles with no games"
+                                      Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" Margin="0,0,0,14"/>
+
+                            <StackPanel Name="SidebarLayoutPanel"/>
+
+                            <Button Name="RestoreSidebarDefaultsBtn" Content="Restore Default Layout"
+                                    Theme="{StaticResource PrefSecondaryBtn}" HorizontalAlignment="Left" Margin="0,16,0,0"/>
+                            <TextBlock Name="SidebarLayoutStatusText" FontSize="11" FontFamily="{DynamicResource PrimaryFont}"
+                                       Foreground="{DynamicResource TextMutedBrush}" Margin="0,10,0,0"/>
                         </StackPanel>
                     </ScrollViewer>
                 </Grid>

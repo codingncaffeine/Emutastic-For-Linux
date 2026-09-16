@@ -196,6 +196,40 @@ namespace Emutastic.Services
             Check(again.Downloaded == 0 && again.Errors == 0 && putsAfter == putsBefore,
                   $"nothing changed, so no save moves either way (got {again.Downloaded} down, {putsAfter - putsBefore} save upload(s), {again.Errors} errors)");
 
+            // ── Sync Timing ────────────────────────────────────────────────────────────
+            // "Every 15 minutes during play" shipped dead here (nothing read the setting for
+            // it), and on Windows "Manual only" was ignored too. Each check below is paired
+            // with its opposite so a gate that blocks everything (or nothing) fails just as
+            // loudly as the original bug did.
+            Console.WriteLine("--- sync timing");
+            string timingSave = Path.Combine(saves, "PSP", "PSP", "SAVEDATA", "ULUS00009", "TIMING.BIN");
+            Directory.CreateDirectory(Path.GetDirectoryName(timingSave)!);
+            File.WriteAllBytes(timingSave, RandomNumberGenerator.GetBytes(2048));
+            const string TimingRepoPath = "BatterySaves/PSP/PSP/SAVEDATA/ULUS00009/TIMING.BIN";
+
+            cloud.SyncTiming = "manual";
+            config.SetCloudSyncConfiguration(cloud);
+            Check(cloud.IsManualTiming && !cloud.IsPeriodicTiming, "\"manual\" reads as manual timing");
+            svc.StartBackgroundSync(new DatabaseService());
+            Check(File.ReadAllText(logPath).Contains("Background sync skipped: Sync Timing is \"Manual only\""),
+                  "Manual only: a background sync does not start");
+            int manualUploaded = await svc.UploadConsoleExtraSavesAsync("PSP");
+            Check(manualUploaded == 0 && !fake.Has(TimingRepoPath), "Manual only: the on-close upload sends nothing");
+            Check(!svc.ShouldArmPeriodicUpload(out _), "Manual only: the during-play uploader does not arm");
+
+            cloud.SyncTiming = "on_close";
+            config.SetCloudSyncConfiguration(cloud);
+            int closeUploaded = await svc.UploadConsoleExtraSavesAsync("PSP");
+            Check(closeUploaded > 0 && fake.Has(TimingRepoPath),
+                  $"…and that very same call DOES upload on \"On game close\" ({closeUploaded} file(s)) — the gate is the setting, not the data");
+            Check(!svc.ShouldArmPeriodicUpload(out _), "On game close: the during-play uploader does not arm either");
+
+            cloud.SyncTiming = "periodic";
+            config.SetCloudSyncConfiguration(cloud);
+            Check(cloud.IsPeriodicTiming, "\"periodic\" reads as periodic timing");
+            Check(svc.ShouldArmPeriodicUpload(out int everyMin) && everyMin == cloud.PeriodicIntervalMinutes,
+                  $"Every N minutes during play: the uploader arms, every {everyMin} min");
+
             Console.WriteLine(failures == 0 ? "=== PASS ===" : $"=== FAIL ({failures} check(s)) ===");
             return failures == 0 ? 0 : 1;
         }
