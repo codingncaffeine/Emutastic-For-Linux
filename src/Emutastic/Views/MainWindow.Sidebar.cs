@@ -57,51 +57,16 @@ public partial class MainWindow : Window
             return true;
         }
 
-        // Pinned consoles. Called PINNED, not FAVOURITES, because the sidebar already has a
-        // "♡ Favorites" row meaning favourite GAMES — two "Favorites" would be ambiguous.
-        // A pinned console MOVES here rather than being duplicated, so no console ever
-        // appears twice (two buttons with the same CommandParameter would both highlight).
-        var favourites = App.Configuration?.GetUserPreferences().FavoriteConsoles ?? new List<string>();
-        var pinned = new HashSet<string>(favourites, StringComparer.OrdinalIgnoreCase);
-
-        bool firstGroup = true;
-        if (pinned.Count > 0)
-        {
-            // Ordered by when they were pinned, not by catalog position.
-            var pinnedEntries = ConsoleCatalog
-                .InUserOrder(ConsoleCatalog.Default.Where(e => pinned.Contains(e.Tag)).Where(Visible),
-                             favourites, e => e.Tag)
-                .ToList();
-            if (pinnedEntries.Count > 0)
-            {
-                var pinnedInner = new StackPanel();
-                foreach (var entry in pinnedEntries)
-                    pinnedInner.Children.Add(MakeConsoleButton(entry, itemTheme));
-
-                var pinnedExpander = new Expander
-                {
-                    Header = "PINNED",
-                    IsExpanded = true,
-                    Margin = new Thickness(6, 4, 0, 0),
-                    Content = pinnedInner,
-                };
-                if (groupTheme != null) pinnedExpander.Theme = groupTheme;
-                panel.Children.Add(pinnedExpander);
-                firstGroup = false;
-            }
-        }
-
         // Standalone entries (Arcade) sit above the manufacturer groups, as they always have.
-        foreach (var entry in InUserOrder(ConsoleCatalog.Ungrouped.Where(Visible).Where(e => !pinned.Contains(e.Tag)),
-                                          cfg.ConsoleOrder, e => e.Tag))
+        foreach (var entry in InUserOrder(ConsoleCatalog.Ungrouped.Where(Visible), cfg.ConsoleOrder, e => e.Tag))
             panel.Children.Add(MakeConsoleButton(entry, itemTheme));
 
+        bool firstGroup = true;
         foreach (string group in InUserOrder(ConsoleCatalog.DefaultGroupOrder, cfg.GroupOrder, g => g))
         {
             if (hiddenGroups.Contains(group)) continue;
 
-            var entries = InUserOrder(ConsoleCatalog.InGroup(group).Where(Visible).Where(e => !pinned.Contains(e.Tag)),
-                                      cfg.ConsoleOrder, e => e.Tag).ToList();
+            var entries = InUserOrder(ConsoleCatalog.InGroup(group).Where(Visible), cfg.ConsoleOrder, e => e.Tag).ToList();
             if (entries.Count == 0) continue;   // never leave a heading with nothing under it
 
             var inner = new StackPanel();

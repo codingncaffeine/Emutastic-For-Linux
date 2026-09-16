@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Emutastic.Configuration;
@@ -15,7 +14,12 @@ namespace Emutastic.Views;
 //    than fixed markup, so the list stays right as consoles come and go. Applies LIVE:
 //    each change writes LibraryConfiguration, schedules a save and rebuilds the sidebar in
 //    the main window — a layout setting that only took effect after a restart would read
-//    as broken. ──
+//    as broken.
+//
+//    ⛔ Buttons here must NOT set Width. PrefSecondaryBtn has Padding="14,8" plus a 1px
+//    border, so it needs ~30px before any content fits; a forced Width=26 collapsed the
+//    content area and every button rendered BLANK. Labels are words, not glyphs, so no
+//    font-coverage problem can blank them either. ──
 public partial class PreferencesWindow
 {
     // Populating rows assigns IsChecked, which raises IsCheckedChanged exactly as a user
@@ -30,7 +34,8 @@ public partial class PreferencesWindow
     /// <summary>The main window, whose sidebar these settings drive.</summary>
     private MainWindow? LibraryWindow
         => (this.Owner as MainWindow)
-           ?? (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.MainWindow as MainWindow;
+           ?? (Application.Current?.ApplicationLifetime
+               as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.MainWindow as MainWindow;
 
     private void WireSidebarLayout()
     {
@@ -39,7 +44,6 @@ public partial class PreferencesWindow
         {
             if (_populatingSidebarLayout) return;
             Lib.HideEmptyConsoles = hideEmpty.IsChecked == true;
-            // Rebuild the editor too: this option changes which rows are dimmed as empty.
             CommitSidebarLayout(rebuildEditor: true, status: "");
         };
 
@@ -80,15 +84,34 @@ public partial class PreferencesWindow
         _populatingSidebarLayout = true;
         try
         {
-            foreach (var entry in ConsoleCatalog.InUserOrder(ConsoleCatalog.Ungrouped, lib.ConsoleOrder, e => e.Tag))
-                host.Children.Add(ConsoleRow(entry, lib, indent: 0));
+            // Say what the controls do, in the panel — a button you have to click to find out
+            // is the same as no button at all.
+            host.Children.Add(new TextBlock
+            {
+                Text = "Untick a console to hide it. Up / Down reorder within a group; on a "
+                     + "manufacturer heading they move that whole group and its consoles together.",
+                TextWrapping = TextWrapping.Wrap,
+                FontSize = 11,
+                Margin = new Thickness(0, 0, 0, 10),
+                Foreground = TsRes("TextMutedBrush", "#6A6A6A"),
+            });
+
+            // Positions are materialised so each row knows whether it can actually move. A
+            // button that is enabled but hits an early return is worse than a disabled one:
+            // the click silently does nothing and the feature looks broken.
+            var ungrouped = ConsoleCatalog.InUserOrder(ConsoleCatalog.Ungrouped, lib.ConsoleOrder, e => e.Tag).ToList();
+            for (int u = 0; u < ungrouped.Count; u++)
+                host.Children.Add(ConsoleRow(ungrouped[u], lib, indent: 0,
+                                             first: u == 0, last: u == ungrouped.Count - 1));
 
             var groups = ConsoleCatalog.InUserOrder(ConsoleCatalog.DefaultGroupOrder, lib.GroupOrder, g => g).ToList();
             for (int i = 0; i < groups.Count; i++)
             {
                 host.Children.Add(GroupRow(groups[i], lib, first: i == 0, last: i == groups.Count - 1));
-                foreach (var entry in ConsoleCatalog.InUserOrder(ConsoleCatalog.InGroup(groups[i]), lib.ConsoleOrder, e => e.Tag))
-                    host.Children.Add(ConsoleRow(entry, lib, indent: 18));
+                var inGroup = ConsoleCatalog.InUserOrder(ConsoleCatalog.InGroup(groups[i]), lib.ConsoleOrder, e => e.Tag).ToList();
+                for (int c = 0; c < inGroup.Count; c++)
+                    host.Children.Add(ConsoleRow(inGroup[c], lib, indent: 18,
+                                                 first: c == 0, last: c == inGroup.Count - 1));
             }
         }
         finally { _populatingSidebarLayout = previous; }
@@ -97,21 +120,54 @@ public partial class PreferencesWindow
         {
             try
             {
-                // Read the BUILT result, not the inputs: rows the editor failed to add have to
-                // surface as a wrong count rather than being masked by the catalog it used.
-                // Also record whether the main window resolved — if it is null every change
-                // here would save config and update nothing, i.e. a dead setting.
+                // Read the BUILT result, not the inputs. Also record whether the main window
+                // resolved — if it is null every change here saves config and updates nothing.
                 bool resolved = LibraryWindow != null;
                 System.IO.File.AppendAllText(
                     System.IO.Path.Combine(AppPaths.GetFolder("Logs"), "sidebar-diag.log"),
                     $"=== layout editor built {DateTime.Now:HH:mm:ss.fff} === rows={host.Children.Count}"
                     + $" mainWindow={(resolved ? "resolved" : "NULL - live rebuild would silently do nothing")}\n");
+
+                // A build says nothing about whether a button is VISIBLE: the previous version
+                // compiled cleanly and rendered every button blank, because a forced Width was
+                // narrower than the theme's padding and clipped the label away. So measure the
+                // rendered bounds after a layout pass. The full-size Restore button is logged as
+                // a reference: if these numbers were being read before layout they would all be
+                // zero, and that would show here rather than passing quietly.
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    try
+                    {
+                        var sb = new System.Text.StringBuilder();
+                        int measured = 0, clipped = 0, disabled = 0;
+                        foreach (var child in host.Children.OfType<Grid>())
+                            foreach (var b in child.Children.OfType<Button>().Where(x => (x.Tag as string) == "move"))
+                            {
+                                measured++;
+                                if (b.Bounds.Width < 32) clipped++;
+                                // A move button at the end of its list must be DISABLED: enabled
+                                // but inert means the click silently does nothing.
+                                if (!b.IsEnabled) disabled++;
+                                if (measured <= 4)
+                                    sb.AppendLine($"    button '{b.Content}' w={b.Bounds.Width:F1} h={b.Bounds.Height:F1}");
+                            }
+                        double reference = this.FindControl<Button>("RestoreSidebarDefaultsBtn")?.Bounds.Width ?? -1;
+                        sb.AppendLine($"    move buttons measured={measured} clipped(<32px)={clipped} disabled={disabled}"
+                                    + $"  [reference 'Restore Default Layout' w={reference:F1}]");
+                        System.IO.File.AppendAllText(
+                            System.IO.Path.Combine(AppPaths.GetFolder("Logs"), "sidebar-diag.log"), sb.ToString());
+                    }
+                    catch { /* never throw from diagnostics */ }
+                }, Avalonia.Threading.DispatcherPriority.Loaded);
             }
             catch { /* never throw from diagnostics */ }
         }
     }
 
     // ── Rows ────────────────────────────────────────────────────────────────────────────
+    private Grid ThreeColumnRow(Thickness margin)
+        => new() { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), Margin = margin };
+
     private Control GroupRow(string group, LibraryConfiguration lib, bool first, bool last)
     {
         bool hiddenGroup = lib.HiddenGroups.Any(g => string.Equals(g, group, StringComparison.OrdinalIgnoreCase));
@@ -132,15 +188,18 @@ public partial class PreferencesWindow
             CommitSidebarLayout(rebuildEditor: false, status: "");
         };
 
-        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), Margin = new Thickness(0, 10, 0, 2) };
+        var row = ThreeColumnRow(new Thickness(0, 12, 0, 2));
         Grid.SetColumn(check, 0);
         row.Children.Add(check);
-        row.Children.Add(ArrowButton("▲", 1, !first, () => MoveGroup(group, -1)));
-        row.Children.Add(ArrowButton("▼", 2, !last, () => MoveGroup(group, +1)));
+        row.Children.Add(MoveButton("Up", 1, !first, $"Move the whole {group} group, and its consoles, up",
+                                    () => MoveGroup(group, -1)));
+        row.Children.Add(MoveButton("Down", 2, !last, $"Move the whole {group} group, and its consoles, down",
+                                    () => MoveGroup(group, +1)));
         return row;
     }
 
-    private Control ConsoleRow(ConsoleCatalogEntry entry, LibraryConfiguration lib, int indent)
+    private Control ConsoleRow(ConsoleCatalogEntry entry, LibraryConfiguration lib, int indent,
+                               bool first, bool last)
     {
         bool hidden = lib.HiddenConsoles.Any(c => string.Equals(c, entry.Tag, StringComparison.OrdinalIgnoreCase));
         bool groupHidden = entry.Group != null
@@ -167,51 +226,43 @@ public partial class PreferencesWindow
             CommitSidebarLayout(rebuildEditor: false, status: "");
         };
 
-        bool isPinned = Favourites.Any(f => string.Equals(f, entry.Tag, StringComparison.OrdinalIgnoreCase));
-
-        var row = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto"),
-            Margin = new Thickness(indent, 1, 0, 1),
-        };
+        string where = entry.Group == null ? "the top of the list" : $"the {entry.Group} group";
+        var row = ThreeColumnRow(new Thickness(indent, 1, 0, 1));
         Grid.SetColumn(check, 0);
         row.Children.Add(check);
-        row.Children.Add(ArrowButton(isPinned ? "★" : "☆", 1, true, () => TogglePinned(entry)));
-        row.Children.Add(ArrowButton("▲", 2, true, () => MoveConsole(entry, -1)));
-        row.Children.Add(ArrowButton("▼", 3, true, () => MoveConsole(entry, +1)));
+        row.Children.Add(MoveButton("Up", 1, !first, $"Move {entry.DisplayName} up within {where}",
+                                    () => MoveConsole(entry, -1)));
+        row.Children.Add(MoveButton("Down", 2, !last, $"Move {entry.DisplayName} down within {where}",
+                                    () => MoveConsole(entry, +1)));
         return row;
     }
 
-    /// <summary>The pinned-console list, stored in UserPreferences (not LibraryConfiguration)
-    /// because the field already existed there — it was simply never read by anything.</summary>
-    private static List<string> Favourites => App.Configuration!.GetUserPreferences().FavoriteConsoles;
-
-    private void TogglePinned(ConsoleCatalogEntry entry)
-    {
-        var favs = Favourites;
-        if (favs.Any(f => string.Equals(f, entry.Tag, StringComparison.OrdinalIgnoreCase)))
-            favs.RemoveAll(f => string.Equals(f, entry.Tag, StringComparison.OrdinalIgnoreCase));
-        else
-            favs.Add(entry.Tag);   // appended, so PINNED is ordered by when you pinned things
-
-        App.Configuration!.SetUserPreferences(App.Configuration!.GetUserPreferences());
-        CommitSidebarLayout(rebuildEditor: true, status: "");
-    }
-
-    private Button ArrowButton(string glyph, int column, bool enabled, Action onClick)
+    /// <summary>
+    /// A small labelled move button. ⛔ Never sets Width: PrefSecondaryBtn's 14,8 padding plus
+    /// its border needs ~30px before content fits, so a forced narrow width clips the label to
+    /// nothing and the button renders blank. Padding is overridden locally instead, which beats
+    /// the theme's setter and lets the button size to its text.
+    /// </summary>
+    private Button MoveButton(string label, int column, bool enabled, string tip, Action onClick)
     {
         var btn = new Button
         {
-            Content = glyph,
-            FontSize = 10,
-            Width = 26,
+            Content = label,
+            FontSize = 11,
+            Padding = new Thickness(10, 3),
+            // A shared minimum so "Up" and "Down" columns line up instead of sitting ragged
+            // at their natural text widths (measured 37 vs 52). Still no fixed Width.
+            MinWidth = 54,
             IsEnabled = enabled,
-            Margin = new Thickness(4, 0, 0, 0),
+            Margin = new Thickness(6, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
-            HorizontalContentAlignment = HorizontalAlignment.Center,
+            Tag = "move",   // lets the diagnostic count move buttons only — CheckBox derives
+                            // from ToggleButton derives from Button, so OfType<Button> catches
+                            // every checkbox too and over-reports.
         };
         if (this.TryFindResource("PrefSecondaryBtn", out var t) && t is Avalonia.Styling.ControlTheme ct)
             btn.Theme = ct;
+        ToolTip.SetTip(btn, tip);
         btn.Click += (_, _) => { if (!_populatingSidebarLayout) onClick(); };
         Grid.SetColumn(btn, column);
         return btn;
@@ -226,8 +277,8 @@ public partial class PreferencesWindow
     }
 
     /// <summary>
-    /// Moves a console within its own group. The full effective order is written back, so
-    /// the stored list is unambiguous however little the user had reordered before.
+    /// Moves a console within its own group. The full effective order is written back, so the
+    /// stored list is unambiguous however little the user had reordered before.
     /// </summary>
     private void MoveConsole(ConsoleCatalogEntry entry, int delta)
     {
