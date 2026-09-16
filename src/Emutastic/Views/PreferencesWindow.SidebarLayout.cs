@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Emutastic.Configuration;
@@ -100,32 +99,19 @@ public partial class PreferencesWindow
             // Positions are materialised so each row knows whether it can actually move. A
             // button that is enabled but hits an early return is worse than a disabled one:
             // the click silently does nothing and the feature looks broken.
-            _rowItems.Clear();
-
             var ungrouped = ConsoleCatalog.InUserOrder(ConsoleCatalog.Ungrouped, lib.ConsoleOrder, e => e.Tag).ToList();
             for (int u = 0; u < ungrouped.Count; u++)
-            {
-                var row = ConsoleRow(ungrouped[u], lib, indent: 0,
-                                     first: u == 0, last: u == ungrouped.Count - 1);
-                host.Children.Add(row);
-                MakeDraggable(row, ungrouped[u]);
-            }
+                host.Children.Add(ConsoleRow(ungrouped[u], lib, indent: 0,
+                                             first: u == 0, last: u == ungrouped.Count - 1));
 
             var groups = ConsoleCatalog.InUserOrder(ConsoleCatalog.DefaultGroupOrder, lib.GroupOrder, g => g).ToList();
             for (int i = 0; i < groups.Count; i++)
             {
-                var head = GroupRow(groups[i], lib, first: i == 0, last: i == groups.Count - 1);
-                host.Children.Add(head);
-                MakeDraggable(head, groups[i]);
-
+                host.Children.Add(GroupRow(groups[i], lib, first: i == 0, last: i == groups.Count - 1));
                 var inGroup = ConsoleCatalog.InUserOrder(ConsoleCatalog.InGroup(groups[i]), lib.ConsoleOrder, e => e.Tag).ToList();
                 for (int c = 0; c < inGroup.Count; c++)
-                {
-                    var row = ConsoleRow(inGroup[c], lib, indent: 18,
-                                         first: c == 0, last: c == inGroup.Count - 1);
-                    host.Children.Add(row);
-                    MakeDraggable(row, inGroup[c]);
-                }
+                    host.Children.Add(ConsoleRow(inGroup[c], lib, indent: 18,
+                                                 first: c == 0, last: c == inGroup.Count - 1));
             }
         }
         finally { _populatingSidebarLayout = previous; }
@@ -280,152 +266,6 @@ public partial class PreferencesWindow
         btn.Click += (_, _) => { if (!_populatingSidebarLayout) onClick(); };
         Grid.SetColumn(btn, column);
         return btn;
-    }
-
-    // ── Drag to reorder ─────────────────────────────────────────────────────────────────
-    // Implemented with pointer events rather than Avalonia's DragDrop: that stack goes through
-    // the platform, and this app already documents the X11 backend not implementing a drop
-    // target. Pointer capture is in-process and behaves the same everywhere.
-    //
-    // Semantics match the Up/Down buttons: a console moves WITHIN its group (a console's
-    // manufacturer comes from ConsoleCatalog, not configuration), and a heading moves the whole
-    // group. A drop onto anything else is ignored rather than guessed at.
-
-    private readonly Dictionary<Control, object> _rowItems = new();
-    private Control? _dragRow;
-    private object? _dragItem;
-    private double _dragStartY;
-    private bool _dragging;
-
-    private void MakeDraggable(Control row, object item)
-    {
-        _rowItems[row] = item;
-
-        row.PointerPressed += (_, e) =>
-        {
-            // Never start a drag from a control the row already uses — the checkbox and the
-            // move buttons must keep working as plain clicks.
-            if (IsInteractive(e.Source as Control, row)) return;
-            if (!e.GetCurrentPoint(row).Properties.IsLeftButtonPressed) return;
-
-            _dragRow = row;
-            _dragItem = item;
-            _dragStartY = e.GetPosition(SidebarLayoutHost).Y;
-            _dragging = false;
-            e.Pointer.Capture(row);
-        };
-
-        row.PointerMoved += (_, e) =>
-        {
-            if (!ReferenceEquals(_dragRow, row)) return;
-            double y = e.GetPosition(SidebarLayoutHost).Y;
-            if (!_dragging && Math.Abs(y - _dragStartY) < 4) return;   // ignore click jitter
-            _dragging = true;
-            row.Opacity = 0.55;                                         // it is being carried
-        };
-
-        row.PointerReleased += (_, e) =>
-        {
-            if (!ReferenceEquals(_dragRow, row)) return;
-            e.Pointer.Capture(null);
-            row.Opacity = 1;
-            // Read what is being dragged BEFORE EndDrag clears it — otherwise every drop
-            // silently does nothing, which is the hardest kind of bug to notice.
-            bool wasDragging = _dragging;
-            object? dropped = _dragItem;
-            double y = e.GetPosition(SidebarLayoutHost).Y;
-            EndDrag();
-            if (wasDragging && dropped != null) DropAt(dropped, y);
-        };
-
-        // A capture lost to anything else (window deactivation, a popup) must not leave the row
-        // dimmed and the editor half in a drag.
-        row.AddHandler(InputElement.PointerCaptureLostEvent, (object? _, PointerCaptureLostEventArgs _) =>
-        {
-            row.Opacity = 1;
-            EndDrag();
-        });
-    }
-
-    private void EndDrag()
-    {
-        _dragRow = null;
-        _dragItem = null;
-        _dragging = false;
-    }
-
-    /// <summary>True when the press landed on the row's checkbox or a move button.</summary>
-    private static bool IsInteractive(Control? source, Control row)
-    {
-        for (var c = source; c != null && !ReferenceEquals(c, row); c = c.Parent as Control)
-            if (c is Button or CheckBox) return true;
-        return false;
-    }
-
-    private void DropAt(object dropped, double y)
-    {
-        // Which row is under the pointer?
-        Control? target = SidebarLayoutHost.Children
-            .OfType<Control>()
-            .FirstOrDefault(c => y >= c.Bounds.Top && y <= c.Bounds.Bottom);
-        if (target == null || !_rowItems.TryGetValue(target, out object? onto)) return;
-
-        if (dropped is ConsoleCatalogEntry from && onto is ConsoleCatalogEntry to)
-        {
-            if (!string.Equals(from.Group, to.Group, StringComparison.Ordinal)) return;  // group is catalog data
-            if (string.Equals(from.Tag, to.Tag, StringComparison.Ordinal)) return;
-            ReorderConsole(from, to);
-        }
-        else if (dropped is string fromGroup && onto is string ontoGroup
-                 && !string.Equals(fromGroup, ontoGroup, StringComparison.Ordinal))
-        {
-            ReorderGroup(fromGroup, ontoGroup);
-        }
-    }
-
-    private void ReorderConsole(ConsoleCatalogEntry from, ConsoleCatalogEntry to)
-    {
-        var lib = Lib;
-        var siblings = SequenceFor(from.Group, lib).ToList();
-        int target = siblings.IndexOf(to.Tag);
-        if (!siblings.Remove(from.Tag) || target < 0) return;
-        siblings.Insert(Math.Min(target, siblings.Count), from.Tag);
-
-        var full = new List<string>();
-        full.AddRange(from.Group == null ? siblings : SequenceFor(null, lib));
-        foreach (string g in ConsoleCatalog.InUserOrder(ConsoleCatalog.DefaultGroupOrder, lib.GroupOrder, x => x))
-            full.AddRange(string.Equals(g, from.Group, StringComparison.Ordinal) ? siblings : SequenceFor(g, lib));
-
-        lib.ConsoleOrder = full;
-        LogLayoutAction($"drag {from.Tag} onto {to.Tag} in {from.Group ?? "(ungrouped)"}");
-        CommitSidebarLayout(rebuildEditor: true, status: "");
-    }
-
-    private void ReorderGroup(string from, string onto)
-    {
-        var lib = Lib;
-        var order = ConsoleCatalog.InUserOrder(ConsoleCatalog.DefaultGroupOrder, lib.GroupOrder, g => g).ToList();
-        int target = order.IndexOf(onto);
-        if (!order.Remove(from) || target < 0) return;
-        order.Insert(Math.Min(target, order.Count), from);
-
-        lib.GroupOrder = order;
-        LogLayoutAction($"drag group {from} onto {onto}");
-        CommitSidebarLayout(rebuildEditor: true, status: "");
-    }
-
-    /// <summary>Drag is the one part of this editor that cannot be verified without a human
-    /// pointer, so record what a drop actually did.</summary>
-    private static void LogLayoutAction(string what)
-    {
-        if (Environment.GetEnvironmentVariable("EMUTASTIC_SIDEBAR_DIAG") != "1") return;
-        try
-        {
-            System.IO.File.AppendAllText(
-                System.IO.Path.Combine(AppPaths.GetFolder("Logs"), "sidebar-diag.log"),
-                $"    ACTION {DateTime.Now:HH:mm:ss.fff} {what}\n");
-        }
-        catch { /* never throw from diagnostics */ }
     }
 
     // ── Mutations ───────────────────────────────────────────────────────────────────────
