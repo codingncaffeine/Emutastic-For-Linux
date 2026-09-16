@@ -44,6 +44,16 @@ OUT=packaging/out
 PUB=$OUT/publish
 rm -rf "$OUT" && mkdir -p "$PUB"
 
+# ⛔ Clean the INTERMEDIATES too, not just our own output. A publish that reuses an obj/
+# left by an earlier `dotnet build` can emit an assembly whose XAML was never compiled:
+# the build exits 0 with no warnings, all 218 assemblies are present, the app still runs
+# fine from bin/ — and the ARTIFACT aborts on launch with
+#   Avalonia.Markup.Xaml.XamlLoadException: No precompiled XAML found for Emutastic.App
+# v0.9.8 hit exactly that; smoke-test.sh caught it. Releases were safe before only because
+# they came from fresh clones. This makes the script independent of the tree it runs in.
+# Verify with: strings -a Emutastic.dll | grep -c CompiledAvaloniaXaml   (1 good, 0 stale)
+rm -rf src/Emutastic/obj src/Emutastic/bin
+
 echo "── publish v$VER (self-contained linux-x64)"
 dotnet publish src/Emutastic/Emutastic.csproj -c Release -r linux-x64 \
     --self-contained true -o "$PUB" -v q
