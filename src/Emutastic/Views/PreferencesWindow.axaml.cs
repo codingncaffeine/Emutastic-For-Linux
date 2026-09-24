@@ -284,7 +284,7 @@ public partial class PreferencesWindow : Window
                     status.Text = kind switch
                     {
                         Services.UpdateService.InstallKind.Dev => "A newer release is available. (Development build — update via git.)",
-                        _ when !canSelfUpdate => "A newer release is available — open it on GitHub to update.",
+                        _ when !canSelfUpdate => "A newer release is available. " + Services.UpdateService.ExplainNoSelfUpdate(kind),
                         _ => "A newer release is available.",
                     };
                     status.Foreground = this.TryFindResource("AccentBrush", out var a) ? a as IBrush : Brushes.OrangeRed;

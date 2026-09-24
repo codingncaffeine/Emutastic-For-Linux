@@ -20,13 +20,18 @@ namespace Emutastic.Services
     ///       install (replacing the running binary only after we're gone —
     ///       avoids ETXTBSY), and relaunches. portable.txt survives (copy
     ///       never deletes extra files).
-    ///   Deb — exe lives under /usr/: download the .deb → `pkexec dpkg -i`
-    ///       (GUI auth prompt) → relaunch script.
+    ///   Deb — exe lives under /usr/ AND dpkg registered it (the emutastic .deb):
+    ///       download the .deb → `pkexec dpkg -i` (GUI auth prompt) → relaunch script.
+    ///   PackageManaged — exe lives under /usr/ but dpkg doesn't own it (the AUR's
+    ///       emutastic-bin, a distro package): never touched here — dpkg would fail,
+    ///       or overwrite another package manager's files behind its back. The user
+    ///       updates through that package manager.
     ///   Dev — running from a build tree (bin/Release|Debug): self-update is
     ///       wrong here; the About tab says "update via git".
-    ///   ReadOnly — non-/usr unwritable dir (e.g. /opt by root): no managed
-    ///       flow; the About tab falls back to the release page.
+    ///   ReadOnly — unwritable dir outside the package-managed tree (e.g. /opt by
+    ///       root): no managed flow; the About tab falls back to the release page.
     ///
+    /// Every step is recorded in [DataRoot]/Logs/update.log (see UpdateLog).
     /// EMUTASTIC_UPDATE_API overrides the releases/latest endpoint so the
     /// whole pipeline can be integration-tested against a local mock server.
     /// </summary>
@@ -38,16 +43,27 @@ namespace Emutastic.Services
         public static string LatestApi =>
             Environment.GetEnvironmentVariable("EMUTASTIC_UPDATE_API") ?? DefaultLatestApi;
 
-        public enum InstallKind { Dev, Deb, SelfContained, ReadOnly }
+        public enum InstallKind { Dev, Deb, PackageManaged, SelfContained, ReadOnly }
 
-        public static InstallKind DetectInstallKind()
+        private const string DpkgInfoDir = "/var/lib/dpkg/info";
+
+        public static InstallKind DetectInstallKind() => DetectInstallKind(AppPaths.GetExeFolder(), DpkgInfoDir);
+
+        /// <summary>
+        /// Classifies the install in <paramref name="exeFolder"/>. /usr belongs to the system
+        /// package manager (/usr/local excepted, which is the admin's own), and only the copy
+        /// dpkg itself installed may be replaced through dpkg: on Arch the same path belongs to
+        /// pacman even when dpkg is present as a tool. <paramref name="dpkgInfoDir"/> is dpkg's
+        /// per-package file lists, a parameter so the self-test can supply its own.
+        /// </summary>
+        public static InstallKind DetectInstallKind(string exeFolder, string dpkgInfoDir)
         {
-            string dir = AppPaths.GetExeFolder();
-            string norm = dir.Replace('\\', '/');
-            if (norm.Contains("/bin/Release/") || norm.Contains("/bin/Debug/")
-                || norm.EndsWith("/bin/Release") || norm.EndsWith("/bin/Debug"))
+            string dir = exeFolder.Replace('\\', '/').TrimEnd('/');
+            if (dir.Contains("/bin/Release/") || dir.Contains("/bin/Debug/")
+                || dir.EndsWith("/bin/Release") || dir.EndsWith("/bin/Debug"))
                 return InstallKind.Dev;
-            if (norm.StartsWith("/usr/")) return InstallKind.Deb;
+            if (dir.StartsWith("/usr/") && !dir.StartsWith("/usr/local/"))
+                return DpkgOwns(dir + "/Emutastic", dpkgInfoDir) ? InstallKind.Deb : InstallKind.PackageManaged;
             try
             {
                 string probe = Path.Combine(dir, ".write-probe");
@@ -57,6 +73,35 @@ namespace Emutastic.Services
             }
             catch { return InstallKind.ReadOnly; }
         }
+
+        // The emutastic .deb registers its files in dpkg's database as emutastic.list (or
+        // emutastic:<arch>.list); a line naming our apphost proves dpkg installed this copy.
+        private static bool DpkgOwns(string file, string dpkgInfoDir)
+        {
+            try
+            {
+                if (!Directory.Exists(dpkgInfoDir)) return false;
+                foreach (var list in Directory.EnumerateFiles(dpkgInfoDir, "emutastic*.list"))
+                {
+                    string package = Path.GetFileNameWithoutExtension(list);
+                    if (package != "emutastic" && !package.StartsWith("emutastic:", StringComparison.Ordinal)) continue;
+                    foreach (var line in File.ReadLines(list))
+                        if (line == file) return true;
+                }
+            }
+            catch { /* unreadable database: not provably dpkg's */ }
+            return false;
+        }
+
+        /// <summary>What to tell a user whose copy cannot self-update.</summary>
+        public static string ExplainNoSelfUpdate(InstallKind kind) => kind switch
+        {
+            InstallKind.Dev => "Development build — update via git.",
+            InstallKind.PackageManaged => "This copy was installed by your package manager — update it there "
+                                          + "(on Arch, for example: yay -Syu emutastic-bin).",
+            InstallKind.ReadOnly => "This install location isn't writable — update from the releases page.",
+            _ => "Open the release on GitHub to update.",
+        };
 
         public sealed record ReleaseAsset(string Name, string Url, long Size, string? Digest = null);
 
@@ -73,10 +118,15 @@ namespace Emutastic.Services
             try
             {
                 var prefs = App.Configuration?.GetUserPreferences();
-                if (prefs?.CheckForUpdates == false) return null;
+                if (prefs?.CheckForUpdates == false) { UpdateLog.Write("startup check skipped: disabled in Preferences"); return null; }
 
                 var kind = DetectInstallKind();
-                if (kind is not (InstallKind.Deb or InstallKind.SelfContained)) return null;
+                UpdateLog.Write($"startup check: kind={kind} exe={AppPaths.GetExeFolder()} api={LatestApi}");
+                if (kind is not (InstallKind.Deb or InstallKind.SelfContained))
+                {
+                    UpdateLog.Write($"startup check: this install does not self-update — {ExplainNoSelfUpdate(kind)}");
+                    return null;
+                }
 
                 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
                 http.DefaultRequestHeaders.UserAgent.ParseAdd("Emutastic/updater");
@@ -87,8 +137,10 @@ namespace Emutastic.Services
                 if (!Version.TryParse(tag.TrimStart('v', 'V').Trim(), out var remote)) return null;
                 var local = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
                 if (local == null) return null;
-                if (new Version(remote.Major, remote.Minor, remote.Build)
-                        .CompareTo(new Version(local.Major, local.Minor, local.Build)) <= 0) return null;
+                bool newer = new Version(remote.Major, remote.Minor, remote.Build)
+                        .CompareTo(new Version(local.Major, local.Minor, local.Build)) > 0;
+                UpdateLog.Write($"latest {tag} vs installed {local.Major}.{local.Minor}.{local.Build}: {(newer ? "newer" : "not newer")}");
+                if (!newer) return null;
 
                 var assets = new System.Collections.Generic.List<ReleaseAsset>();
                 if (obj["assets"] is Newtonsoft.Json.Linq.JArray arr)
@@ -100,11 +152,14 @@ namespace Emutastic.Services
                             a.Value<string>("digest")));   // "sha256:…" once GitHub has computed it
 
                 var asset = PickAsset(kind, assets);
+                UpdateLog.Write(asset == null
+                    ? $"no asset for {kind} among {assets.Count} release asset(s)"
+                    : $"update offered: {asset.Name} ({asset.Size} bytes)");
                 return asset == null ? null : new AppUpdate(tag, asset, kind);
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[Update] startup check failed: {ex.Message}");
+                UpdateLog.Write($"startup check failed: {ex.Message}");
                 return null;
             }
         }
@@ -136,9 +191,15 @@ namespace Emutastic.Services
         {
             try
             {
+                if (kind is not (InstallKind.Deb or InstallKind.SelfContained))
+                {
+                    UpdateLog.Write($"apply refused: kind={kind}");
+                    return ExplainNoSelfUpdate(kind);
+                }
                 string tmp = Path.Combine(Path.GetTempPath(), $"emutastic-update-{Guid.NewGuid():N}");
                 Directory.CreateDirectory(tmp);
                 string file = Path.Combine(tmp, asset.Name);
+                UpdateLog.Write($"apply: {asset.Name} ({asset.Size} bytes) kind={kind}, downloading to {file}");
 
                 using (var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan })
                 {
@@ -171,16 +232,16 @@ namespace Emutastic.Services
                     string actual = await Sha256HexAsync(file, ct);
                     if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
                     {
-                        Trace.WriteLine($"[Update] digest mismatch: expected {expected}, got {actual}");
+                        UpdateLog.Write($"digest mismatch: expected {expected}, got {actual}");
                         return "Update integrity check failed — the download didn't match the "
                              + "expected checksum, so nothing was installed. Try again, or update "
                              + "from the releases page.";
                     }
-                    Trace.WriteLine("[Update] SHA-256 digest verified");
+                    UpdateLog.Write("SHA-256 digest verified");
                 }
                 else
                 {
-                    Trace.WriteLine("[Update] no SHA-256 digest published for this asset — skipping verification");
+                    UpdateLog.Write("no SHA-256 digest published for this asset — skipping verification");
                 }
 
                 return kind switch
@@ -190,11 +251,11 @@ namespace Emutastic.Services
                     _ => "This installation can't self-update.",
                 };
             }
-            catch (OperationCanceledException) { return "Update cancelled."; }
+            catch (OperationCanceledException) { UpdateLog.Write("cancelled"); return "Update cancelled."; }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[Update] failed: {ex}");
-                return $"Update failed: {ex.Message}";
+                UpdateLog.Write($"failed: {ex}");
+                return $"Update failed: {ex.Message} (details in {UpdateLog.PathForDisplay})";
             }
         }
 
@@ -214,11 +275,19 @@ namespace Emutastic.Services
             if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true);
             Directory.CreateDirectory(staging);
 
+            UpdateLog.Write($"extracting to {staging}");
             var tar = Process.Start(new ProcessStartInfo("tar", $"-xzf \"{tarball}\" -C \"{staging}\"")
             { UseShellExecute = false, RedirectStandardError = true })!;
+            var tarErrTask = tar.StandardError.ReadToEndAsync(ct);
             await tar.WaitForExitAsync(ct);
-            if (tar.ExitCode != 0) return "Archive extraction failed.";
-            if (!File.Exists(Path.Combine(staging, "Emutastic"))) return "Archive doesn't look like an Emutastic release.";
+            string tarErr = (await tarErrTask).Trim();
+            UpdateLog.Write($"tar exit {tar.ExitCode}{(tarErr.Length > 0 ? ": " + tarErr : "")}");
+            if (tar.ExitCode != 0) return $"Archive extraction failed (details in {UpdateLog.PathForDisplay}).";
+            if (!File.Exists(Path.Combine(staging, "Emutastic")))
+            {
+                UpdateLog.Write("staging folder has no Emutastic apphost");
+                return "Archive doesn't look like an Emutastic release.";
+            }
 
             // The staging tarball may carry no portable marker by design; the
             // install's existing portable.txt is preserved by `cp -a` (it never
@@ -236,6 +305,7 @@ namespace Emutastic.Services
                 """, ct);
             Process.Start(new ProcessStartInfo("setsid", $"bash \"{script}\"")
             { UseShellExecute = false });
+            UpdateLog.Write($"relaunch script {script} started; exiting so it can swap the files");
 
             progress.Report((100, "Restarting…"));
             await Task.Delay(400, ct);
@@ -248,11 +318,18 @@ namespace Emutastic.Services
             progress.Report((100, "Waiting for authorization…"));
             // pkexec pops the desktop's GUI auth prompt; dpkg replaces /usr/lib/emutastic
             // while we're still running (fine — our pages stay mapped until exit).
-            var psi = new ProcessStartInfo("pkexec", $"dpkg -i \"{deb}\"") { UseShellExecute = false };
+            var psi = new ProcessStartInfo("pkexec")
+            { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+            psi.ArgumentList.Add("dpkg"); psi.ArgumentList.Add("-i"); psi.ArgumentList.Add(deb);
+            UpdateLog.Write($"pkexec dpkg -i {deb}");
             var p = Process.Start(psi)!;
+            var outTask = p.StandardOutput.ReadToEndAsync(ct);
+            var errTask = p.StandardError.ReadToEndAsync(ct);
             await p.WaitForExitAsync(ct);
+            string output = ((await outTask) + "\n" + (await errTask)).Trim();
+            UpdateLog.Write($"dpkg exit {p.ExitCode}{(output.Length > 0 ? ": " + output.Replace("\n", " | ") : "")}");
             if (p.ExitCode == 126 || p.ExitCode == 127) return "Authorization was cancelled.";
-            if (p.ExitCode != 0) return $"Package install failed (dpkg exit {p.ExitCode}).";
+            if (p.ExitCode != 0) return $"Package install failed (dpkg exit {p.ExitCode}; details in {UpdateLog.PathForDisplay}).";
 
             string script = Path.Combine(Path.GetTempPath(), $"emutastic-apply-{Environment.ProcessId}.sh");
             await File.WriteAllTextAsync(script, $"""
@@ -262,6 +339,7 @@ namespace Emutastic.Services
                 exec /usr/lib/emutastic/Emutastic
                 """, ct);
             Process.Start(new ProcessStartInfo("setsid", $"bash \"{script}\"") { UseShellExecute = false });
+            UpdateLog.Write($"package installed; relaunch script {script} started, exiting");
 
             progress.Report((100, "Restarting…"));
             await Task.Delay(400, ct);

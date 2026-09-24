@@ -14,10 +14,72 @@ namespace Emutastic.Services
     /// </summary>
     internal static class UpdateSelfTest
     {
+        static int _fail;
+
+        static void Check(string what, bool ok)
+        {
+            if (!ok) _fail++;
+            Console.WriteLine($"[update-selftest] {(ok ? "ok  " : "FAIL")} {what}");
+        }
+
+        /// <summary>Install-kind classification against a throwaway dpkg database: no network,
+        /// nothing outside a temp folder is touched.</summary>
+        static void ClassificationChecks()
+        {
+            const string usr = "/usr/lib/emutastic";
+            string root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"emutastic-update-selftest-{Environment.ProcessId}");
+            try
+            {
+                string dpkg = System.IO.Path.Combine(root, "dpkg-info");
+                System.IO.Directory.CreateDirectory(dpkg);
+                Check("a build tree is Dev",
+                    UpdateService.DetectInstallKind("/home/u/src/Emutastic/bin/Release/net10.0", dpkg) == UpdateService.InstallKind.Dev);
+                Check("/usr/lib/emutastic with no dpkg record is PackageManaged (the AUR case)",
+                    UpdateService.DetectInstallKind(usr, dpkg) == UpdateService.InstallKind.PackageManaged);
+                System.IO.File.WriteAllLines(System.IO.Path.Combine(dpkg, "emutastic.list"), new[] { usr, usr + "/Emutastic" });
+                Check("/usr/lib/emutastic listed in emutastic.list is Deb",
+                    UpdateService.DetectInstallKind(usr, dpkg) == UpdateService.InstallKind.Deb);
+                Check("a trailing slash on the folder does not change the answer",
+                    UpdateService.DetectInstallKind(usr + "/", dpkg) == UpdateService.InstallKind.Deb);
+                Check("another /usr folder is not covered by that list",
+                    UpdateService.DetectInstallKind("/usr/lib/emutastic-other", dpkg) == UpdateService.InstallKind.PackageManaged);
+                System.IO.File.Delete(System.IO.Path.Combine(dpkg, "emutastic.list"));
+                System.IO.File.WriteAllLines(System.IO.Path.Combine(dpkg, "emutastic:amd64.list"), new[] { usr + "/Emutastic" });
+                Check("emutastic:amd64.list also proves dpkg ownership",
+                    UpdateService.DetectInstallKind(usr, dpkg) == UpdateService.InstallKind.Deb);
+                System.IO.File.Delete(System.IO.Path.Combine(dpkg, "emutastic:amd64.list"));
+                System.IO.File.WriteAllLines(System.IO.Path.Combine(dpkg, "emutastic-extras.list"), new[] { usr + "/Emutastic" });
+                Check("a different package's list (emutastic-extras) does not count",
+                    UpdateService.DetectInstallKind(usr, dpkg) == UpdateService.InstallKind.PackageManaged);
+                Check("a missing dpkg database means PackageManaged, never Deb",
+                    UpdateService.DetectInstallKind(usr, System.IO.Path.Combine(root, "no-such-dir")) == UpdateService.InstallKind.PackageManaged);
+                string writable = System.IO.Path.Combine(root, "portable");
+                System.IO.Directory.CreateDirectory(writable);
+                Check("a writable folder is SelfContained",
+                    UpdateService.DetectInstallKind(writable, dpkg) == UpdateService.InstallKind.SelfContained);
+                Check("/usr/local is the admin's own: it takes the write probe, not the package rule",
+                    UpdateService.DetectInstallKind("/usr/local/lib/emutastic-no-such-folder", dpkg) == UpdateService.InstallKind.ReadOnly);
+                Check("PackageManaged has package-manager wording",
+                    UpdateService.ExplainNoSelfUpdate(UpdateService.InstallKind.PackageManaged).Contains("package manager"));
+            }
+            finally
+            {
+                try { System.IO.Directory.Delete(root, recursive: true); } catch { /* best-effort cleanup */ }
+            }
+        }
+
         public static int Run()
         {
+            ClassificationChecks();
+            if (_fail > 0)
+            {
+                Console.WriteLine($"[update-selftest] {_fail} classification check(s) FAILED");
+                return 1;
+            }
+            Console.WriteLine("[update-selftest] classification checks PASS");
+
             var kind = UpdateService.DetectInstallKind();
-            Console.WriteLine($"[update-selftest] kind={kind} api={UpdateService.LatestApi}");
+            Console.WriteLine($"[update-selftest] kind={kind} api={UpdateService.LatestApi} log={UpdateLog.PathForDisplay}");
 
             try
             {
