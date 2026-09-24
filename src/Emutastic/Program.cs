@@ -34,6 +34,14 @@ sealed class Program
         {
             Environment.Exit(Emutastic.InputSelfTest.Run());
         }
+        // Dev-only: the libretro VFS the game host hands to cores, driven through its unmanaged
+        // function table exactly as a core calls it: `Emutastic --selftest-vfs [report.log]`.
+        // Exit 0 = all pass.
+        if (args.Length >= 1 && args[0] == "--selftest-vfs")
+        {
+            string? report = args.Length > 1 && !args[1].StartsWith("--", StringComparison.Ordinal) ? args[1] : null;
+            Environment.Exit(Emutastic.Emulator.VfsSelfTest.Run(report));
+        }
         // Separate game process (Branch B): runs the SDL-GL game window with NO Avalonia in this process
         // (Avalonia + SDL-GL in one process hangs after present #1). Exit code propagates to the parent
         // supervisor for crash detection. See docs/gl-present-phase1-host-process-design.md.

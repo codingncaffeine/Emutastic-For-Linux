@@ -42,6 +42,7 @@ namespace Emutastic.Emulator
         const uint ENV_SET_DISK_CONTROL_INTERFACE = 13;
         const uint ENV_GET_RUMBLE_INTERFACE = 23;
         const uint ENV_SET_DISK_CONTROL_EXT_INTERFACE = 58;
+        const uint ENV_GET_VFS_INTERFACE = 45;   // 45|EXPERIMENTAL on the wire — see LibretroVfs
         // libretro OR's these flags into command IDs; mask them off before switching.
         const uint RETRO_ENVIRONMENT_EXPERIMENTAL = 0x10000;
         const uint RETRO_ENVIRONMENT_PRIVATE = 0x20000;
@@ -2081,6 +2082,10 @@ namespace Emutastic.Emulator
                           // Cores that gate on this (LRPS2/PS2) then poll the whole pad
                           // in one call; without it their input never reaches the core.
                     return true;
+                case ENV_GET_VFS_INTERFACE:
+                    // retro_vfs_interface_info* — a core that gets a VFS routes every file
+                    // operation through it; Stella refuses to load a ROM without one.
+                    return LibretroVfs.TryProvide(data);
                 case ENV_GET_OVERSCAN:
                 default:
                     return false; // unsupported / use core defaults — cores cope (incl. SET_HW_RENDER → SW)
@@ -4155,6 +4160,8 @@ namespace Emutastic.Emulator
         {
             if (_running) System.Threading.Interlocked.Decrement(ref _activeCount);
             _running = false;
+            if (LibretroVfs.Ops > 0)
+                Trace.WriteLine($"[VFS] served {LibretroVfs.Ops} call(s), {LibretroVfs.Errors} failed");
             // RetroAchievements teardown: stop the per-frame ticks, snapshot live progress
             // for the parent's DB ingest, then destroy the native client.
             _raReady = false;
