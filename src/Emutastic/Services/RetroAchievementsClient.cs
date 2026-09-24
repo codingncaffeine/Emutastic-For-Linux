@@ -424,6 +424,28 @@ namespace Emutastic.Services
                 rc_client_reset(_client);
         }
 
+        private ClientCallbackFunc? _changeMediaCallback;   // kept alive across the async server call
+
+        /// <summary>
+        /// Tell rcheevos a different disc was inserted. It hashes the new media
+        /// and checks it belongs to the loaded game; <paramref name="done"/>
+        /// receives the rcheevos result code (RC_OK, RC_HARDCORE_DISABLED when
+        /// an unrecognised disc dropped a hardcore session to casual, or an
+        /// error) and its message. No-op when no game is loaded.
+        /// </summary>
+        public void ChangeMedia(string discPath, Action<int, string?> done)
+        {
+            if (_client == IntPtr.Zero || !IsGameLoaded) { done(RC_OK, null); return; }
+            _changeMediaCallback = (result, errorPtr, client, userdata) =>
+            {
+                string? msg = PtrToStringUTF8(errorPtr);
+                _changeMediaCallback = null;
+                done(result, msg);
+            };
+            rc_client_begin_identify_and_change_media(_client, discPath, IntPtr.Zero, UIntPtr.Zero,
+                _changeMediaCallback, IntPtr.Zero);
+        }
+
         /// <summary>
         /// Serializes rcheevos's in-memory runtime state (hit counts, measured
         /// trackers) for pairing with a libretro save state. Null on failure;

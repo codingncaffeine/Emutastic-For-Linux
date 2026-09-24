@@ -2,10 +2,20 @@
 
 ## Current pin
 
-`../rcheevos-src` = **v11.6.0**, the original RA-integration vintage. This matches the spirit of
-the Windows app (whose prebuilt `rcheevos.dll` likewise dates to its original integration).
-Working state: Neo Geo `.neo` files identify via the legacy ARCADE FILENAME hash, which is what
-RA's database has today — achievements work.
+`../rcheevos-src` = **v12.5.0** (tagged upstream 2026-09-14), vendored 2026-09-23 together with
+the Windows app's `rcheevos.dll` rebuild from the same tag and the macOS port — the coordinated
+bump described below, done once both of its conditions held: PR #517 (.neo content hashing)
+merged upstream on 2026-06-15 and shipped in v12.4.0, and the Windows app had been identifying
+Neo Geo games by that content hash since 2026-06-16. `.neo` files therefore identify by content
+hash on every platform. Verified at bump time: `checkabi` numbers match `VerifyAbi`, all 29
+P/Invoke imports export from the new `.so`, `--ra-selftest` passes, and two synthetic `.neo`
+files with different headers and the same payload hash identically to `md5(payload)`.
+
+Layout changes 11.6 → 12.5 are exactly the appended fields listed in the dress-rehearsal notes
+below plus `rc_client_user_t.avatar_last_updated` (time_t, 12.4). `src/rurl/` is gone and
+`build.sh`'s glob list no longer mentions it. The 11.6 `rc_client_begin_change_media` (path
+based) is `rc_client_begin_identify_and_change_media` in 12.x, and is what the disc-swap
+path now calls.
 
 ## ⛔ DO NOT bump this as part of routine "port today's upstream diffs"
 

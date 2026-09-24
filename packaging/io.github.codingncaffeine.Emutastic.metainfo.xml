@@ -63,6 +63,14 @@
   </supports>
 
   <releases>
+    <release version="1.8.10" date="2026-09-23">
+      <description>
+        <p>RetroAchievements: a game reset now also resets the achievement runtime, disc
+           swaps are verified against the loaded game, the runtime is updated to rcheevos
+           12.5.0, and non-hardcore play is called Casual, as RetroAchievements now names it.
+           Version numbers now match the Windows app.</p>
+      </description>
+    </release>
     <release version="0.9.7" date="2026-09-15">
       <description>
         <p>Cloud sync is ready to use: each PC backs up its saves to its own private

@@ -62,7 +62,7 @@ public partial class AddFriendDialog : Window
             _pendingPreview = result;
             this.FindControl<TextBlock>("PreviewName")!.Text = result.Username;
             this.FindControl<TextBlock>("PreviewPoints")!.Text =
-                $"{result.PointsHardcore:N0} pts · {result.PointsSoftcore:N0} softcore";
+                $"{result.PointsHardcore:N0} pts · {result.PointsSoftcore:N0} casual";
             this.FindControl<TextBlock>("PreviewMotto")!.Text = string.IsNullOrWhiteSpace(result.Motto)
                 ? "(no motto set)" : result.Motto;
             var avatar = this.FindControl<Image>("PreviewAvatar")!;

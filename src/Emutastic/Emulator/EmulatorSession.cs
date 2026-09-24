@@ -700,7 +700,9 @@ namespace Emutastic.Emulator
             while (_running)
             {
                 // Reset is honored even while paused (so the pill's Reset isn't dead when paused).
-                if (_resetRequested) { _resetRequested = false; try { _core!.Reset(); } catch (Exception ex) { Trace.WriteLine($"[Emu] reset threw: {ex}"); } }
+                // The achievement runtime resets with the game: rcheevos requires rc_client_reset on
+                // every game reset so hit counts and active leaderboards don't survive it.
+                if (_resetRequested) { _resetRequested = false; try { _core!.Reset(); RaReset(); } catch (Exception ex) { Trace.WriteLine($"[Emu] reset threw: {ex}"); } }
 
                 // Paused: stop advancing the core (frame stays frozen) but keep the thread responsive.
                 if (_paused) { RaIdle(); Thread.Sleep(16); frameTimer.Restart(); continue; }
@@ -2730,6 +2732,17 @@ namespace Emutastic.Emulator
                 }
                 uint cur = _getImageIndex?.Invoke() ?? 0;
                 uint next = (cur + 1) % count;
+                // RA hardcore: rcheevos must see every inserted disc so it can confirm the disc
+                // belongs to the loaded game (RetroArch does the same on its disc-control path).
+                // Without a resolvable disc file there is nothing to hash, so a hardcore session
+                // keeps its current disc rather than continuing on unverified media.
+                string? discPath = ResolveDiscPath(next);
+                if (discPath == null && RaHardcoreActive)
+                {
+                    ShowDiskMessage("Disc switch blocked in hardcore: the next disc can't be verified (launch from an .m3u)", 6);
+                    Trace.WriteLine($"[Emu] disc swap {cur} -> {next} refused: hardcore and no disc path");
+                    return;
+                }
                 // RetroArch's pattern: eject + set index immediately, defer re-insert ~100 frames (Beetle
                 // PSX's CD engine expects the disc to spin down between swaps; others tolerate it).
                 bool ejected = _getEjectState?.Invoke() ?? false;
@@ -2738,6 +2751,7 @@ namespace Emutastic.Emulator
                 _diskInsertPendingFrames = 100;
                 ShowDiskMessage($"Disk {next + 1} / {count}");
                 Trace.WriteLine($"[Emu] disc swap {cur} -> {next} of {count}");
+                if (discPath != null) RaChangeMedia(discPath);
             }
             catch (Exception ex) { Trace.WriteLine($"[Emu] disc swap failed: {ex.Message}"); }
         }
@@ -3741,6 +3755,65 @@ namespace Emutastic.Emulator
             if (!_raReady) return;
             try { _raClient?.Idle(); }
             catch (Exception ex) { Trace.WriteLine($"[RA] Idle error: {ex.Message}"); }
+        }
+
+        /// <summary>rc_client_reset alongside retro_reset — see the emu loop.</summary>
+        private void RaReset()
+        {
+            if (!_raReady) return;
+            try { _raClient?.Reset(); Trace.WriteLine("[RA] runtime reset with the game"); }
+            catch (Exception ex) { Trace.WriteLine($"[RA] Reset error: {ex.Message}"); }
+        }
+
+        /// <summary>
+        /// Disc swap: hand the newly inserted disc to rcheevos so it can confirm it belongs to
+        /// the loaded game. With an unrecognised disc rcheevos itself drops a hardcore session
+        /// to casual (RC_HARDCORE_DISABLED); mirror that in the launch snapshot so the gates
+        /// and the pill agree with the runtime. Dropping hardcore mid-session is permitted by
+        /// RA's rules; only the reverse needs a reset.
+        /// </summary>
+        private void RaChangeMedia(string discPath)
+        {
+            if (!_raReady || _raClient == null) return;
+            try
+            {
+                _raClient.ChangeMedia(discPath, (result, msg) =>
+                {
+                    if (result == RcheevosInterop.RC_OK) { Trace.WriteLine($"[RA] media change accepted: {discPath}"); return; }
+                    Trace.WriteLine($"[RA] media change result {result}: {msg} ({discPath})");
+                    if (result == RcheevosInterop.RC_HARDCORE_DISABLED && _raHardcoreActive)
+                    {
+                        _raHardcoreActive = false;
+                        ShowDiskMessage("Hardcore disabled: this disc isn't recognised for the loaded game", 6);
+                    }
+                });
+            }
+            catch (Exception ex) { Trace.WriteLine($"[RA] ChangeMedia error: {ex.Message}"); }
+        }
+
+        /// <summary>
+        /// Resolves the file behind disc <paramref name="index"/> of a multi-disc launch. Emutastic
+        /// loads multi-disc games through an .m3u, so the entries of that playlist (relative to its
+        /// folder) are the disc paths. Null when the launch wasn't an .m3u or the index is out of range.
+        /// </summary>
+        private string? ResolveDiscPath(uint index)
+        {
+            try
+            {
+                if (!_romPath.EndsWith(".m3u", StringComparison.OrdinalIgnoreCase) || !File.Exists(_romPath)) return null;
+                string dir = Path.GetDirectoryName(_romPath) ?? "";
+                var entries = File.ReadAllLines(_romPath)
+                    .Select(l => l.Trim())
+                    .Where(l => l.Length > 0 && !l.StartsWith('#'))
+                    .ToList();
+                if (index >= entries.Count) return null;
+                string entry = entries[(int)index];
+                int bar = entry.IndexOf('|');            // "file|label" form
+                if (bar > 0) entry = entry[..bar];
+                string p = Path.IsPathRooted(entry) ? entry : Path.Combine(dir, entry);
+                return File.Exists(p) ? p : null;
+            }
+            catch (Exception ex) { Trace.WriteLine($"[RA] disc path lookup failed: {ex.Message}"); return null; }
         }
 
         // Toast envelope: 250ms fade-in → 4s hold → 400ms fade-out (upstream's timings,

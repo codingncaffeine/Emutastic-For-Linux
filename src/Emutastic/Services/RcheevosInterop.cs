@@ -7,7 +7,7 @@ namespace Emutastic.Services
     /// P/Invoke bindings for the rcheevos native library (rc_client API).
     ///
     /// Port of upstream's RcheevosInterop, ADAPTED to the vendored rcheevos
-    /// v11.6.0 (native/rcheevos-src) — upstream's rcheevos.dll was built from a
+    /// v12.5.0 (native/rcheevos-src) — upstream's rcheevos.dll was built from a
     /// different snapshot whose structs differ:
     ///   * rc_client_achievement_t ends at `type` (no badge_url/badge_locked_url
     ///     pointers, no manual padding) — badge URLs come from
@@ -27,6 +27,7 @@ namespace Emutastic.Services
 
         // ── Error codes ──────────────────────────────────────────────────────
         public const int RC_OK = 0;
+        public const int RC_HARDCORE_DISABLED = -30;   // rc_error.h: hardcore dropped after an unrecognised disc swap
         public const int RC_ABORTED = -31;
         public const int RC_NO_RESPONSE = -32;
         public const int RC_INVALID_CREDENTIALS = -34;
@@ -45,7 +46,7 @@ namespace Emutastic.Services
         public const uint RC_CLIENT_EVENT_DISCONNECTED = 17;
         public const uint RC_CLIENT_EVENT_RECONNECTED = 18;
 
-        // rc_client.h:560 (v11.6.0)
+        // rc_client.h (v12.5.0)
         public const int RC_CLIENT_LEADERBOARD_DISPLAY_SIZE = 24;
 
         // rc_client.h:318-321 — achievement states (for get_image_url)
@@ -97,7 +98,9 @@ namespace Emutastic.Services
         public const uint RC_CONSOLE_PC_ENGINE_CD = 76;
         public const uint RC_CONSOLE_FAMICOM_DISK_SYSTEM = 81;
 
-        // ── Structs (v11.6.0 layouts — see VerifyAbi) ────────────────────────
+        // ── Structs (v12.5.0 layouts — see VerifyAbi) ────────────────────────
+        // Every field 12.x added is APPENDED (rcheevos marks them "minimum
+        // version"), so the 11.6 offsets still hold; only the sizes grew.
 
         [StructLayout(LayoutKind.Sequential)]
         public struct rc_client_event_t
@@ -108,6 +111,7 @@ namespace Emutastic.Services
             public IntPtr leaderboard_tracker;    // rc_client_leaderboard_tracker_t*
             public IntPtr leaderboard_scoreboard; // rc_client_leaderboard_scoreboard_t*
             public IntPtr server_error;           // rc_client_server_error_t*
+            public IntPtr subset;                 // rc_client_subset_t* — @48 (12.0), struct pads to 56
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -129,7 +133,9 @@ namespace Emutastic.Services
             public byte unlocked;
             public float rarity;           // @76
             public float rarity_hardcore;  // @80
-            public byte type;              // @84; struct pads to 88
+            public byte type;              // @84
+            public IntPtr badge_url;       // const char* — @88 (12.0)
+            public IntPtr badge_locked_url; // const char* — @96 (12.0); struct is 104
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -140,7 +146,9 @@ namespace Emutastic.Services
             public IntPtr token;           // const char*
             public uint score;
             public uint score_softcore;
-            public uint num_unread_messages; // struct pads to 40
+            public uint num_unread_messages;
+            public IntPtr avatar_url;        // const char* — @40 (12.0)
+            public long avatar_last_updated; // time_t — @48 (12.4); struct is 56
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -151,6 +159,7 @@ namespace Emutastic.Services
             public IntPtr title;           // const char*
             public IntPtr hash;            // const char*
             public IntPtr badge_name;      // const char*
+            public IntPtr badge_url;       // const char* — @32 (12.0); struct is 40
         }
 
         // ALL THREE leading fields are pointers (const char*), NOT inline
@@ -225,11 +234,12 @@ namespace Emutastic.Services
                 return null;
             }
 
-            return Check<rc_client_event_t>(48, ("type", 0), ("achievement", 8), ("server_error", 40))
-                ?? Check<rc_client_achievement_t>(88, ("title", 0), ("badge_name", 16), ("measured_progress", 24),
-                       ("measured_percent", 48), ("unlock_time", 64), ("state", 72), ("rarity", 76), ("type", 84))
-                ?? Check<rc_client_user_t>(40, ("token", 16), ("score", 24))
-                ?? Check<rc_client_game_t>(32, ("title", 8), ("badge_name", 24))
+            return Check<rc_client_event_t>(56, ("type", 0), ("achievement", 8), ("server_error", 40), ("subset", 48))
+                ?? Check<rc_client_achievement_t>(104, ("title", 0), ("badge_name", 16), ("measured_progress", 24),
+                       ("measured_percent", 48), ("unlock_time", 64), ("state", 72), ("rarity", 76), ("type", 84),
+                       ("badge_url", 88), ("badge_locked_url", 96))
+                ?? Check<rc_client_user_t>(56, ("token", 16), ("score", 24), ("avatar_url", 40), ("avatar_last_updated", 48))
+                ?? Check<rc_client_game_t>(40, ("title", 8), ("badge_name", 24), ("badge_url", 32))
                 ?? Check<rc_client_leaderboard_t>(32, ("tracker_value", 16), ("lower_is_better", 30))
                 ?? Check<rc_client_leaderboard_scoreboard_t>(80, ("submitted_score", 4), ("new_rank", 52))
                 ?? Check<rc_api_server_response_t>(24, ("body_length", 8), ("http_status_code", 16));
@@ -317,6 +327,17 @@ namespace Emutastic.Services
         [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
         public static extern void rc_client_unload_game(IntPtr client);
 
+        // Disc swap: hashes the newly inserted media and checks it belongs to
+        // the loaded game. In hardcore, an unrecognised disc makes rcheevos
+        // drop the session to casual (callback result RC_HARDCORE_DISABLED).
+        // 12.x name — 11.x called this rc_client_begin_change_media.
+        [DllImport(DLL, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+        public static extern IntPtr rc_client_begin_identify_and_change_media(
+            IntPtr client,
+            [MarshalAs(UnmanagedType.LPStr)] string filePath,
+            IntPtr data, UIntPtr dataSize,
+            ClientCallbackFunc callback, IntPtr callbackUserdata);
+
         [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
         public static extern int rc_client_is_game_loaded(IntPtr client);
 
@@ -332,7 +353,7 @@ namespace Emutastic.Services
         [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
         public static extern void rc_client_reset(IntPtr client);
 
-        // ── Image URL accessors (v11.6.0 replaces the struct url fields) ─────
+        // ── Image URL accessors (12.x also exposes badge_url fields; the accessors stay in use) ─────
 
         [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
         public static extern int rc_client_achievement_get_image_url(IntPtr achievement, int state, byte[] buffer, UIntPtr bufferSize);

@@ -15,6 +15,7 @@ int main(void)
     P(rc_client_event_t, type);
     P(rc_client_event_t, achievement);
     P(rc_client_event_t, server_error);
+    P(rc_client_event_t, subset);
 
     S(rc_client_achievement_t);
     P(rc_client_achievement_t, title);
@@ -25,14 +26,19 @@ int main(void)
     P(rc_client_achievement_t, state);
     P(rc_client_achievement_t, rarity);
     P(rc_client_achievement_t, type);
+    P(rc_client_achievement_t, badge_url);
+    P(rc_client_achievement_t, badge_locked_url);
 
     S(rc_client_user_t);
     P(rc_client_user_t, token);
     P(rc_client_user_t, score);
+    P(rc_client_user_t, avatar_url);
+    P(rc_client_user_t, avatar_last_updated);
 
     S(rc_client_game_t);
     P(rc_client_game_t, title);
     P(rc_client_game_t, badge_name);
+    P(rc_client_game_t, badge_url);
 
     S(rc_client_leaderboard_t);
     P(rc_client_leaderboard_t, tracker_value);
