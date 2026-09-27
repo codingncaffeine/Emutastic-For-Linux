@@ -5,8 +5,7 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
 A native **Linux** port of [Emutastic](https://github.com/codingncaffeine/Emutastic) — a multi-system
-emulator frontend inspired by [OpenEmu](https://openemu.org/), rebuilt on **.NET 10 + Avalonia** (the
-original is Windows/WPF/.NET 8). Games are organized by console in a clean library interface. Emulation
+emulator frontend built on **.NET 10 + Avalonia** (the original is Windows/WPF/.NET 8). Games are organized by console in a clean library interface. Emulation
 is handled by [libretro](https://www.libretro.com/) cores loaded at runtime — no cores are bundled.
 
 The goal is a **1:1 clone**: aesthetically and functionally identical to the Windows app, with only the
