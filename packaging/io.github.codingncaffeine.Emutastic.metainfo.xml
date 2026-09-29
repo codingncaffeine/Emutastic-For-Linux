@@ -63,6 +63,14 @@
   </supports>
 
   <releases>
+    <release version="1.9.1" date="2026-09-28">
+      <description>
+        <p>Disc games start again while signed in to RetroAchievements: identifying a PS1,
+           Saturn, Sega CD, PC Engine CD, Dreamcast, 3DO or PS2 disc no longer crashes the
+           game. Achievements are active again on cores that publish a memory map, such as
+           PS1 and N64.</p>
+      </description>
+    </release>
     <release version="1.9.0" date="2026-09-24">
       <description>
         <p>Atari 2600 games start again with current Stella cores: Emutastic now provides
