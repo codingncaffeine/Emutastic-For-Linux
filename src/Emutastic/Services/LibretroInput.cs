@@ -258,6 +258,12 @@ namespace Emutastic.Services
                         "l trigger" => JOYPAD_L2, "r trigger" => JOYPAD_R2,
                         "up" => JOYPAD_UP, "down" => JOYPAD_DOWN,
                         "left" => JOYPAD_LEFT, "right" => JOYPAD_RIGHT,
+                        // The panel's stick rows. Without them a bind on any of the
+                        // four returned uint.MaxValue and was dropped.
+                        "left analog up"    => ANALOG_LEFT_UP,
+                        "left analog down"  => ANALOG_LEFT_DOWN,
+                        "left analog left"  => ANALOG_LEFT_LEFT,
+                        "left analog right" => ANALOG_LEFT_RIGHT,
                         _ => uint.MaxValue
                     };
 
