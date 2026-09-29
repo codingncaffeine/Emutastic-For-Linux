@@ -2036,10 +2036,18 @@ namespace Emutastic.Emulator
                     {
                         IntPtr descs = Marshal.ReadIntPtr(data);
                         int num = Marshal.ReadInt32(data, IntPtr.Size);
-                        // retro_memory_descriptor: u64 flags; void* ptr; size_t offset, start,
-                        // select, disconnect, len; const char* addrspace  (64 bytes on x86-64)
+                        // retro_memory_descriptor (64-bit): u64 flags @0; void* ptr @8; size_t
+                        // offset @16, start @24, select @32, disconnect @40, len @48;
+                        // const char* addrspace @56 — 64 bytes. (len was once read from @56,
+                        // the addrspace pointer, so every region came back zero-length and
+                        // rcheevos disabled every achievement on descriptor-publishing cores.)
+                        //
+                        // Descriptors with select != 0 use bank-mirror addressing (SNES, NES,
+                        // Genesis) that OnReadMemory doesn't implement — skipped, exactly as
+                        // upstream does; those reads fall through to the linear SYSTEM_RAM path.
                         int stride = 8 + IntPtr.Size * 7;
-                        var regions = new Services.RetroAchievementsClient.MemoryRegion[Math.Max(0, num)];
+                        var list = new List<Services.RetroAchievementsClient.MemoryRegion>(Math.Max(0, num));
+                        int skippedSelect = 0;
                         for (int i = 0; i < num; i++)
                         {
                             IntPtr d = descs + i * stride;
@@ -2047,12 +2055,17 @@ namespace Emutastic.Emulator
                             IntPtr ptr   = Marshal.ReadIntPtr(d, 8);
                             ulong offset = (ulong)Marshal.ReadInt64(d, 8 + IntPtr.Size);
                             ulong start  = (ulong)Marshal.ReadInt64(d, 8 + IntPtr.Size * 2);
-                            ulong len    = (ulong)Marshal.ReadInt64(d, 8 + IntPtr.Size * 6);
-                            regions[i] = new Services.RetroAchievementsClient.MemoryRegion(flags, ptr, offset, start, len);
+                            ulong select = (ulong)Marshal.ReadInt64(d, 8 + IntPtr.Size * 3);
+                            ulong len    = (ulong)Marshal.ReadInt64(d, 8 + IntPtr.Size * 5);
+                            if (select != 0) { skippedSelect++; continue; }
+                            list.Add(new Services.RetroAchievementsClient.MemoryRegion(flags, ptr, offset, start, len));
                         }
+                        var regions = list.ToArray();
                         _raPendingMemoryRegions = regions;
                         _raClient?.SetMemoryDescriptors(regions);
-                        Trace.WriteLine($"[RA] SET_MEMORY_MAPS captured: {num} descriptor(s)");
+                        Trace.WriteLine($"[RA] SET_MEMORY_MAPS captured: {regions.Length} usable region(s), {skippedSelect} skipped (select-mirror)");
+                        foreach (var r in regions)
+                            Trace.WriteLine($"[RA]   map start=0x{r.Start:X8} len=0x{r.Len:X}");
                     }
                     catch (Exception ex) { Trace.WriteLine($"[RA] SET_MEMORY_MAPS parse failed: {ex.Message}"); }
                     return true;

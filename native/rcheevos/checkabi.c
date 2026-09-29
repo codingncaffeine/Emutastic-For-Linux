@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include "rc_client.h"
 #include "rc_api_request.h"
+#include "rc_hash.h"
 
 #define P(s, f) printf("%s.%s=%zu\n", #s, #f, offsetof(s, f))
 #define S(s)    printf("sizeof(%s)=%zu\n", #s, sizeof(s))
@@ -51,6 +52,10 @@ int main(void)
     S(rc_api_server_response_t);
     P(rc_api_server_response_t, body_length);
     P(rc_api_server_response_t, http_status_code);
+
+    S(rc_hash_cdreader_t);
+    P(rc_hash_cdreader_t, first_track_sector);
+    P(rc_hash_cdreader_t, open_track_iterator);
 
     printf("RC_CLIENT_LEADERBOARD_DISPLAY_SIZE=%d\n", RC_CLIENT_LEADERBOARD_DISPLAY_SIZE);
     return 0;

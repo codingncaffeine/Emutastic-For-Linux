@@ -87,7 +87,7 @@ sealed class Program
         // through librcheevos.so. `Emutastic --ra-selftest`. No window, no network, no login.
         if (args.Length >= 1 && args[0] == "--ra-selftest")
         {
-            Environment.Exit(Emutastic.Services.RaSelfTest.Run());
+            Environment.Exit(Emutastic.Services.RaSelfTest.Run(Array.FindAll(args[1..], a => a != "--portable")));
             return;
         }
         // Dev-only: render the in-game OSD (status line + HUD pill) to PNGs for an aesthetic check —

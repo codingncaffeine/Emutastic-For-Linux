@@ -242,7 +242,8 @@ namespace Emutastic.Services
                 ?? Check<rc_client_game_t>(40, ("title", 8), ("badge_name", 24), ("badge_url", 32))
                 ?? Check<rc_client_leaderboard_t>(32, ("tracker_value", 16), ("lower_is_better", 30))
                 ?? Check<rc_client_leaderboard_scoreboard_t>(80, ("submitted_score", 4), ("new_rank", 52))
-                ?? Check<rc_api_server_response_t>(24, ("body_length", 8), ("http_status_code", 16));
+                ?? Check<rc_api_server_response_t>(24, ("body_length", 8), ("http_status_code", 16))
+                ?? Check<RcheevosChdCdReader.RcHashCdreader>(40, ("first_track_sector", 24), ("open_track_iterator", 32));
         }
 
         // ── Callback delegates ───────────────────────────────────────────────
@@ -388,6 +389,11 @@ namespace Emutastic.Services
 
         [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
         public static extern UIntPtr rc_client_get_user_agent_clause(IntPtr client, IntPtr buffer, UIntPtr bufferSize);
+
+        // Self-test only (RaSelfTest): hashes a file through the global cdreader.
+        [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int rc_hash_generate_from_file(byte[] hash, uint consoleId,
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
 
         // ── Helpers ──────────────────────────────────────────────────────────
 

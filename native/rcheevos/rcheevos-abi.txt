@@ -32,4 +32,7 @@ rc_client_leaderboard_scoreboard_t.new_rank=52
 sizeof(rc_api_server_response_t)=24
 rc_api_server_response_t.body_length=8
 rc_api_server_response_t.http_status_code=16
+sizeof(rc_hash_cdreader_t)=40
+rc_hash_cdreader_t.first_track_sector=24
+rc_hash_cdreader_t.open_track_iterator=32
 RC_CLIENT_LEADERBOARD_DISPLAY_SIZE=24

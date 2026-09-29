@@ -33,6 +33,11 @@ namespace Emutastic.Services
 
         // ── rcheevos exports ────────────────────────────────────────────
 
+        // rc_hash.h rc_hash_cdreader_t (v12.5.0): five function pointers, 40 bytes.
+        // rc_hash_get_default_cdreader writes, and rc_hash_init_custom_cdreader
+        // memcpys, the full native size — a short mirror overflows on the way in
+        // and hands rcheevos a garbage open_track_iterator, which it calls FIRST.
+        // Checked by RcheevosInterop.VerifyAbi.
         [StructLayout(LayoutKind.Sequential)]
         public struct RcHashCdreader
         {
@@ -40,6 +45,7 @@ namespace Emutastic.Services
             public IntPtr read_sector;
             public IntPtr close_track;
             public IntPtr first_track_sector;
+            public IntPtr open_track_iterator;
         }
 
         [DllImport(Rcheevos, CallingConvention = CallingConvention.Cdecl)]
@@ -203,6 +209,9 @@ namespace Emutastic.Services
         public delegate IntPtr OpenTrackDelegate(IntPtr pathUtf8, uint track);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate IntPtr OpenTrackIteratorDelegate(IntPtr pathUtf8, uint track, IntPtr iterator);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         public delegate UIntPtr ReadSectorDelegate(IntPtr trackHandle, uint sector, IntPtr buffer, UIntPtr requestedBytes);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -219,6 +228,7 @@ namespace Emutastic.Services
         // static fields so they're never GC'd while rcheevos has the
         // function pointers.
         private static OpenTrackDelegate? _openTrackDel;
+        private static OpenTrackIteratorDelegate? _openTrackIteratorDel;
         private static ReadSectorDelegate? _readSectorDel;
         private static CloseTrackDelegate? _closeTrackDel;
         private static FirstTrackSectorDelegate? _firstTrackSectorDel;
@@ -228,6 +238,7 @@ namespace Emutastic.Services
         // Marshal.GetDelegateForFunctionPointer allocations in the
         // non-CHD dispatch path (hot path during cue+bin/.gdi/.iso hashing).
         private static OpenTrackDelegate? _defaultOpenTrackDel;
+        private static OpenTrackIteratorDelegate? _defaultOpenTrackIteratorDel;
         private static ReadSectorDelegate? _defaultReadSectorDel;
         private static CloseTrackDelegate? _defaultCloseTrackDel;
         private static FirstTrackSectorDelegate? _defaultFirstTrackSectorDel;
@@ -255,6 +266,8 @@ namespace Emutastic.Services
                         // 3000-5000 throwaway allocations per ISO hash.
                         if (_defaultCdreader.open_track != IntPtr.Zero)
                             _defaultOpenTrackDel = Marshal.GetDelegateForFunctionPointer<OpenTrackDelegate>(_defaultCdreader.open_track);
+                        if (_defaultCdreader.open_track_iterator != IntPtr.Zero)
+                            _defaultOpenTrackIteratorDel = Marshal.GetDelegateForFunctionPointer<OpenTrackIteratorDelegate>(_defaultCdreader.open_track_iterator);
                         if (_defaultCdreader.read_sector != IntPtr.Zero)
                             _defaultReadSectorDel = Marshal.GetDelegateForFunctionPointer<ReadSectorDelegate>(_defaultCdreader.read_sector);
                         if (_defaultCdreader.close_track != IntPtr.Zero)
@@ -273,6 +286,7 @@ namespace Emutastic.Services
                 if (_openTrackDel == null)
                 {
                     _openTrackDel          = OpenTrackDispatch;
+                    _openTrackIteratorDel  = OpenTrackIteratorDispatch;
                     _readSectorDel         = ReadSectorDispatch;
                     _closeTrackDel         = CloseTrackDispatch;
                     _firstTrackSectorDel   = FirstTrackSectorDispatch;
@@ -284,6 +298,7 @@ namespace Emutastic.Services
                     read_sector         = Marshal.GetFunctionPointerForDelegate(_readSectorDel!),
                     close_track         = Marshal.GetFunctionPointerForDelegate(_closeTrackDel!),
                     first_track_sector  = Marshal.GetFunctionPointerForDelegate(_firstTrackSectorDel!),
+                    open_track_iterator = Marshal.GetFunctionPointerForDelegate(_openTrackIteratorDel!),
                 };
             }
         }
@@ -302,6 +317,12 @@ namespace Emutastic.Services
             catch (Exception ex) { LogException(nameof(OpenTrackDispatch), ex); return IntPtr.Zero; }
         }
 
+        private static IntPtr OpenTrackIteratorDispatch(IntPtr pathUtf8, uint track, IntPtr iterator)
+        {
+            try { return OpenTrackCore(pathUtf8, track, iterator); }
+            catch (Exception ex) { LogException(nameof(OpenTrackIteratorDispatch), ex); return IntPtr.Zero; }
+        }
+
 
         private static IntPtr OpenTrackCore(IntPtr pathUtf8, uint track, IntPtr iterator)
         {
@@ -315,7 +336,9 @@ namespace Emutastic.Services
                 // Delegate to default cdreader's open_track_iterator (preferred)
                 // or open_track (legacy fallback).
                 IntPtr defaultHandle = IntPtr.Zero;
-                if (_defaultOpenTrackDel != null)
+                if (_defaultOpenTrackIteratorDel != null && iterator != IntPtr.Zero)
+                    defaultHandle = _defaultOpenTrackIteratorDel(pathUtf8, track, iterator);
+                else if (_defaultOpenTrackDel != null)
                     defaultHandle = _defaultOpenTrackDel(pathUtf8, track);
 
                 if (defaultHandle == IntPtr.Zero) return IntPtr.Zero;

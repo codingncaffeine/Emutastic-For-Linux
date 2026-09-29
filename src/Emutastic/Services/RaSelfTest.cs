@@ -13,7 +13,7 @@ namespace Emutastic.Services
     /// </summary>
     internal static class RaSelfTest
     {
-        public static int Run()
+        public static int Run(string[] discs)
         {
             Console.WriteLine($"[ra-selftest] UA: {EmutasticUserAgent.Build("test core", "v1.0")}");
 
@@ -47,6 +47,33 @@ namespace Emutastic.Services
                     return 3;
                 }
                 Console.WriteLine($"[ra-selftest] rc_client create/configure/destroy OK (hardcore={hc}, gameLoaded={loaded})");
+
+                // 3. Optional disc hashing through the app's cdreader:
+                //    `--ra-selftest <consoleId>:<path> ...` (12 = PS1). Every disc
+                //    identification goes through these callbacks, so a layout slip
+                //    in RcHashCdreader crashes here the way it crashes a launch.
+                if (discs.Length > 0)
+                {
+                    RcheevosChdCdReader.InstallInto(IntPtr.Zero);
+                    foreach (string spec in discs)
+                    {
+                        int colon = spec.IndexOf(':');
+                        if (colon <= 0 || !uint.TryParse(spec.AsSpan(0, colon), out uint consoleId))
+                        {
+                            Console.WriteLine($"[ra-selftest] FAIL: bad disc spec '{spec}' (want <consoleId>:<path>)");
+                            return 6;
+                        }
+                        string path = spec[(colon + 1)..];
+                        var hash = new byte[33];
+                        if (rc_hash_generate_from_file(hash, consoleId, path) == 0)
+                        {
+                            Console.WriteLine($"[ra-selftest] FAIL: no hash for {path}");
+                            return 7;
+                        }
+                        string hex = System.Text.Encoding.ASCII.GetString(hash, 0, 32);
+                        Console.WriteLine($"[ra-selftest] hash {hex} console={consoleId} {System.IO.Path.GetFileName(path)}");
+                    }
+                }
                 Console.WriteLine("[ra-selftest] PASS");
                 return 0;
             }
