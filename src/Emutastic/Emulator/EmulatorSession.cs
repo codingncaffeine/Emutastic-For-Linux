@@ -373,28 +373,24 @@ namespace Emutastic.Emulator
             return _gl != null && _gl.TryGetWindowRect(out x, out y, out w, out h);
         }
 
-        // SDL3 scancode → libretro player-1 joypad id (defaults; mirrors EmulatorWindow.KeyMap). Per-console
-        // configured keybindings are honored on the gamepad path already; wiring the GL keyboard to the
-        // Controls panel is a follow-up — these defaults keep a ROM playable from the keyboard meanwhile.
-        private static readonly Dictionary<int, int> _glKeyMap = new()
-        {
-            { 82, 4 }, { 81, 5 }, { 80, 6 }, { 79, 7 },   // Up / Down / Left / Right
-            { 29, 0 }, { 27, 8 }, { 4, 1 }, { 22, 9 },     // Z=B, X=A, A=Y, S=X
-            { 40, 3 }, { 229, 2 }, { 20, 10 }, { 26, 11 }, // Enter=START, RShift=SELECT, Q=L, W=R
-        };
         const int SC_ESCAPE = 41, SC_F11 = 68, SC_P = 19, SC_F5 = 62, SC_F7 = 64, SC_F9 = 66;
         const int SC_F12 = 69, SC_PRINTSCREEN = 70;
 
-        // Emu-thread handler for the GL window's keyboard. Game buttons feed SdlInput's player-1 fallback;
-        // a few non-game scancodes drive the session (quit / fullscreen / pause).
-        private void OnGlKey(int scancode, bool down)
+        // Emu-thread handler for the GL window's keyboard: (SDL scancode, SDL keycode or -1, down).
+        // Game keys feed SdlInput's player-1 keyboard pad — the built-in keys with the Controls
+        // panel's binds over them (KeyboardBindings), matched by keycode, so a key bound by name is
+        // the key with that label on the player's layout; a window that reports only physical keys
+        // (keycode -1) is matched by US-layout scancode. A few non-game scancodes drive the session
+        // (quit / fullscreen / pause).
+        private void OnGlKey(int scancode, int keycode, bool down)
         {
             // Frontend keyboard-chord held-state — tracked before the game-button dispatch so a
             // chord half that doubles as a game key (e.g. Enter=Start) still registers.
             UpdateChordKey(_diskSwapChord,  scancode, down);
             UpdateChordKey(_saveStateChord, scancode, down);
             UpdateChordKey(_loadStateChord, scancode, down);
-            if (_glKeyMap.TryGetValue(scancode, out int id)) { _input.SetKeyboardButton(id, down); return; }
+            int code = keycode >= 0 ? keycode : KeyboardBindings.RawScancode | scancode;
+            if (_input.Keyboard.Set(code, down)) return;
             if (!down) return;
             switch (scancode)
             {

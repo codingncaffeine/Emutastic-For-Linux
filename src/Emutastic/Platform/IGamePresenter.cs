@@ -35,7 +35,7 @@ namespace Emutastic.Platform
         bool MouseInside { get; }
 
         // ── events ─────────────────────────────────────────────────────────────────────────────
-        event Action<int, bool>? KeyEvent;        // (SDL scancode, isDown)
+        event Action<int, int, bool>? KeyEvent;   // (SDL scancode, SDL keycode or -1 when the window has none, isDown)
         event Action? MouseMoved;
         event Action? MouseLeft;
         event Action<int, bool>? PointerButton;   // (0=left/1=right/2=mid, isDown)

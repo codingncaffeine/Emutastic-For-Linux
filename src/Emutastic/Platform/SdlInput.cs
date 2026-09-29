@@ -85,17 +85,24 @@ namespace Emutastic.Platform
         }
         private readonly Port[] _ports = { new(), new(), new(), new() };
 
-        // keyboard fallback state for player 1 (libretro joypad id -> pressed)
-        private readonly bool[] _kbd = new bool[JOYPAD_COUNT];
+        /// <summary>Player 1's keyboard: the built-in keys with the Controls panel's binds over
+        /// them (KeyboardBindings), fed by whichever window has the keyboard. Starts on the
+        /// built-in keys; LoadConfiguration installs the console's binds.</summary>
+        public KeyboardPad Keyboard { get; } = BuiltInKeyboard();
         private bool _initialized;
+
+        private static KeyboardPad BuiltInKeyboard()
+        {
+            var pad = new KeyboardPad();
+            pad.SetMap(KeyboardBindings.ToSdlMap(KeyboardBindings.Resolve("", Array.Empty<(string, Avalonia.Input.Key)>())));
+            return pad;
+        }
 
         // ── Per-console configured mappings (from the Preferences → Controls panel). ──
         // _ctrlMap[port][libretroId] = raw control id to read (0..20 SDL button, 100/101 trigger,
         // 110..117 stick dir), or -1 if unmapped. A null port entry ⇒ fall back to the default
-        // _retroToSdl mapping. _kbdRetro maps an Avalonia Key name (Key.ToString()) → libretro id
-        // for player 1; consulted by EmulatorWindow before its built-in KeyMap.
+        // _retroToSdl mapping.
         private readonly int[]?[] _ctrlMap = new int[4][];
-        private readonly Dictionary<string, int> _kbdRetro = new(StringComparer.OrdinalIgnoreCase);
 
         // EMUTASTIC_INPUT_DIAG=1: NDS-touch input tracing (R2 wire edges + right-stick reach).
         private static readonly bool _inputDiag =
@@ -155,7 +162,8 @@ namespace Emutastic.Platform
         {
             Array.Clear(_ctrlMap, 0, _ctrlMap.Length);
             Array.Clear(_analogMap, 0, _analogMap.Length);
-            _kbdRetro.Clear();
+            Keyboard.SetMap(KeyboardBindings.ToSdlMap(
+                KeyboardBindings.Resolve(console ?? "", Array.Empty<(string, Avalonia.Input.Key)>())));
             foreach (var p in _ports) p.BoundId = null;
             if (lookup == null || string.IsNullOrEmpty(console)) { ResolvePorts(); return; }
 
@@ -209,23 +217,16 @@ namespace Emutastic.Platform
                     _ctrlMap[port] = map;
                 }
 
+                // Player 1's keys, as the Controls panel shows them: the binds over the
+                // built-in keys. Before, only the in-process window read the binds; the game
+                // host's window kept a fixed key table and never saw them.
                 if (port == 0)
-                    foreach (var m in config.KeyboardMappings)
-                    {
-                        uint libretroId = LibretroInput.GetButtonId(m.ButtonName, console);
-                        if (libretroId < JOYPAD_COUNT && !string.IsNullOrEmpty(m.InputIdentifier))
-                            _kbdRetro[m.InputIdentifier] = (int)libretroId;
-                    }
+                    Keyboard.SetMap(KeyboardBindings.ToSdlMap(KeyboardBindings.Resolve(
+                        console, KeyboardBindings.SavedBinds(config.KeyboardMappings))));
             }
 
             ResolvePorts();
         }
-
-        /// <summary>Configured player-1 libretro id for an Avalonia Key name, or -1 if not bound.</summary>
-        public int KeyboardRetroId(string keyName) => _kbdRetro.TryGetValue(keyName, out var id) ? id : -1;
-
-        /// <summary>True if the Controls panel has a saved player-1 keyboard mapping (else use defaults).</summary>
-        public bool HasKeyboardConfig => _kbdRetro.Count > 0;
 
         /// <summary>Number of attached controllers (gamepad-mapped or raw).</summary>
         public int GamepadCount => _set.Devices.Count;
@@ -333,12 +334,6 @@ namespace Emutastic.Platform
             if (++_refreshCounter >= 60) { _refreshCounter = 0; RefreshDevices(); } // re-scan ~1×/sec for hotplug
         }
 
-        /// <summary>Set keyboard fallback state for player 1 (libretro joypad id).</summary>
-        public void SetKeyboardButton(int retroId, bool pressed)
-        {
-            if (retroId >= 0 && retroId < JOYPAD_COUNT) _kbd[retroId] = pressed;
-        }
-
         // Raw physical-button read on a pad, bypassing the per-console libretro mapping. Used for frontend
         // chords (Disk Swap = L3 + Start) that must register even on consoles that don't map L3/Start.
         public const int SdlButtonStart = SdlDeviceSet.BTN_START;
@@ -406,7 +401,7 @@ namespace Emutastic.Platform
             }
 
             // keyboard fallback only for player 1
-            if (port == 0 && _kbd[(int)id]) pressed = true;
+            if (port == 0 && Keyboard.Buttons[(int)id]) pressed = true;
 
             // Button-mapping diagnostic (EMUTASTIC_INPUT_DIAG=1): log every RetroPad-id press edge
             // with the physical raw id it read, so a mapping bug (two ids reading the same control)
@@ -444,7 +439,14 @@ namespace Emutastic.Platform
         private short ReadAnalog(uint port, uint index, uint id)
         {
             var d = port < 4 ? _ports[port].Device : null;
-            if (d == null) return 0;
+            // No pad on player 1: the sticks are the keys bound to them (as the Windows build).
+            if (d == null)
+                return port != 0 ? (short)0 : (index, id) switch
+                {
+                    (0, 0) => Keyboard.LeftX,  (0, 1) => Keyboard.LeftY,
+                    (1, 0) => Keyboard.RightX, (1, 1) => Keyboard.RightY,
+                    _      => (short)0,
+                };
             if (index == 2)
                 return id switch
                 {

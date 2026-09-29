@@ -75,7 +75,7 @@ namespace Emutastic.Platform
         public double LastSwapMs { get; private set; }
         public bool IsFocused => true;          // own top-level; KWin gives it the present path regardless
         public bool SelfPaced => true;          // FIFO swap in the shim is the clock — no stopwatch fallback
-        public event Action<int, bool>? KeyEvent;   // (SDL scancode, isDown) — matches GlPresenter/OnGlKey
+        public event Action<int, int, bool>? KeyEvent;   // (SDL scancode, -1: no keycode here, isDown) — matches GlPresenter/OnGlKey
         public event Action? MouseMoved;
         public event Action? MouseLeft;
         public event Action<int, bool>? PointerButton;   // (button 0=left/1=right/2=mid, isDown) — for the HUD
@@ -84,19 +84,30 @@ namespace Emutastic.Platform
         public int MouseY { get; private set; }
         public bool MouseInside { get; private set; }
 
-        // evdev keycode (linux/input-event-codes.h) → SDL scancode, for the keys EmulatorSession._glKeyMap +
-        // the control keys use. Lets us reuse OnGlKey (which is keyed on SDL scancodes) unchanged.
-        private static readonly Dictionary<int, int> _evdevToScancode = new()
+        // evdev keycode (linux/input-event-codes.h) → SDL scancode (USB HID usage), for every key a
+        // player can bind in Preferences plus the hotkeys, so OnGlKey (keyed on SDL codes) serves this
+        // window unchanged. Before, only the dozen keys of the old fixed key table got through.
+        internal static readonly Dictionary<int, int> EvdevToScancode = new()
         {
-            {103,82},{108,81},{105,80},{106,79},   // Up/Down/Left/Right
-            {44,29},{45,27},{30,4},{31,22},          // Z/X/A/S
-            {28,40},{54,229},{16,20},{17,26},        // Enter/RShift/Q/W
-            {1,41},{87,68},{25,19},                  // Esc/F11/P
+            // Letters: evdev follows the QWERTY rows, SDL goes A..Z = 4..29.
+            {30,4},{48,5},{46,6},{32,7},{18,8},{33,9},{34,10},{35,11},{23,12},{36,13},{37,14},{38,15},{50,16},
+            {49,17},{24,18},{25,19},{16,20},{19,21},{31,22},{20,23},{22,24},{47,25},{17,26},{45,27},{21,28},{44,29},
+            // 1..9, 0 = evdev 2..11 → SDL 30..39.
+            {2,30},{3,31},{4,32},{5,33},{6,34},{7,35},{8,36},{9,37},{10,38},{11,39},
+            {28,40},{1,41},{14,42},{15,43},{57,44},                  // Enter Esc Backspace Tab Space
+            {12,45},{13,46},{26,47},{27,48},{43,49},{39,51},{40,52}, // - = [ ] \ ; '
+            {41,53},{51,54},{52,55},{53,56},{58,57},                 // ` , . / CapsLock
             // Function row + PrintScreen — hotkeys (F5 quick-save, F7 quick-load, F9 record,
-            // F12/PrintScreen screenshot, any configured F-key). evdev F1-F10 = 59-68, F12 = 88,
-            // SYSRQ(PrtSc) = 99 → SDL 58-67 / 69 / 70.
+            // F12/PrintScreen screenshot, any configured F-key). evdev F1-F10 = 59-68, F11 = 87,
+            // F12 = 88, SYSRQ(PrtSc) = 99 → SDL 58-69 / 70.
             {59,58},{60,59},{61,60},{62,61},{63,62},{64,63},{65,64},{66,65},{67,66},{68,67},
-            {88,69},{99,70},
+            {87,68},{88,69},{99,70},
+            {70,71},{119,72},{110,73},{102,74},{104,75},{111,76},{107,77},{109,78}, // ScrollLock Pause Ins Home PgUp Del End PgDn
+            {106,79},{105,80},{108,81},{103,82},                                     // Right Left Down Up
+            {69,83},{98,84},{55,85},{74,86},{78,87},{96,88},                         // NumLock KP / * - + Enter
+            {79,89},{80,90},{81,91},{75,92},{76,93},{77,94},{71,95},{72,96},{73,97},{82,98},{83,99}, // KP 1-9 0 .
+            {86,100},                                                                // the ISO key beside Left Shift
+            {29,224},{42,225},{56,226},{125,227},{97,228},{54,229},{100,230},{126,231}, // LCtrl LShift LAlt LMeta RCtrl RShift RAlt RMeta
         };
 
         public static WlToplevelPresenter? TryCreate(int w, int h, out string? error)
@@ -134,7 +145,7 @@ namespace Emutastic.Platform
                 switch (type)
                 {
                     case WLP_EV_KEY:
-                        if (_evdevToScancode.TryGetValue(a, out int sc)) KeyEvent?.Invoke(sc, b != 0);
+                        if (EvdevToScancode.TryGetValue(a, out int sc)) KeyEvent?.Invoke(sc, -1, b != 0);
                         break;
                     case WLP_EV_MOUSE_MOVE:  MouseX = a; MouseY = b; MouseInside = true; MouseMoved?.Invoke(); break;
                     case WLP_EV_MOUSE_BTN:   PointerButton?.Invoke(a, b != 0); break;

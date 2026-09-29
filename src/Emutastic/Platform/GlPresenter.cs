@@ -72,8 +72,9 @@ namespace Emutastic.Platform
         public bool CloseRequested { get; private set; }
 
         /// <summary>Raised from <see cref="Present"/> (emu thread) for each non-repeat key transition:
-        /// (SDL scancode, isDown). The session maps scancodes → libretro ids / shortcuts.</summary>
-        public event Action<int, bool>? KeyEvent;
+        /// (SDL scancode, SDL keycode on the current layout, isDown). The session maps them to
+        /// libretro ids / shortcuts.</summary>
+        public event Action<int, int, bool>? KeyEvent;
 
         /// <summary>Wall-clock ms the last <see cref="Present"/> spent BLOCKED in the vsync swap. The emu
         /// loop watches this: if it stays near zero the swap isn't actually pacing us (vsync off / sw
@@ -287,7 +288,13 @@ namespace Emutastic.Platform
                         // windowID(u32)@16, which(u32)@20, scancode(u32)@24, key(u32)@28, mod(u16)@32,
                         // raw(u16)@34, down(bool)@36, repeat(bool)@37.
                         if (_evBuf[37] == 0)   // ignore auto-repeat; we only want real transitions
-                            KeyEvent?.Invoke((int)BitConverter.ToUInt32(_evBuf, 24), type == SDL_EVENT_KEY_DOWN);
+                        {
+                            int sc = (int)BitConverter.ToUInt32(_evBuf, 24);
+                            // The event's own key@28 carries Shift (Shift+A is 'A'), so ask for the
+                            // unshifted key instead: a bind must fire with a modifier held.
+                            int kc = (int)SDL_GetKeyFromScancode(sc, 0, false);
+                            KeyEvent?.Invoke(sc, kc, type == SDL_EVENT_KEY_DOWN);
+                        }
                         break;
                     case SDL_EVENT_MOUSE_MOTION:
                         // SDL_MouseMotionEvent: x float@28, y float@32 (window coords).

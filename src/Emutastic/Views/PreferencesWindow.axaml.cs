@@ -2783,6 +2783,8 @@ public partial class PreferencesWindow : Window
         _ctrl.ButtonChanged += OnControllerButtonChanged;     // fires on the UI timer thread
         _ctrl.ConnectionChanged += _ => PopulateInputDevices();
         this.AddHandler(KeyDownEvent, OnControlsKeyDown, RoutingStrategies.Tunnel);
+        this.AddHandler(KeyUpEvent, (_, e) => _keysDown.Remove(e.Key), RoutingStrategies.Tunnel);
+        Deactivated += (_, _) => _keysDown.Clear();   // a key let go elsewhere sends no KeyUp here
 
         PopulateSystemComboBox(sysCombo);
         sysCombo.SelectionChanged += (_, _) => { if (sysCombo.SelectedItem is ComboBoxItem { Tag: string tag }) { StopWaiting(); LoadConsole(tag); } };
@@ -3001,7 +3003,28 @@ public partial class PreferencesWindow : Window
         {
             row.Box.Background = Brush("BgQuaternaryBrush"); row.BoxLabel.Text = m.DisplayText; row.BoxLabel.Foreground = Brush("TextPrimaryBrush");
         }
+        else if (_isKeyboardMode && BuiltInKeyFor(row.ButtonName) is Key builtIn)
+        {
+            row.Box.Background = Brush("BgQuaternaryBrush"); row.BoxLabel.Text = KeyToDisplayString(builtIn); row.BoxLabel.Foreground = Brush("TextPrimaryBrush");
+        }
         else { row.Box.Background = Brush("BgTertiaryBrush"); row.BoxLabel.Text = "—"; row.BoxLabel.Foreground = Brush("TextMutedBrush"); }
+    }
+
+    // The built-in key that plays buttonName while no bind is saved for it, given the binds on
+    // screen — or null when it has none, or a bind took that key for another button. Resolved
+    // exactly as the game resolves it (KeyboardBindings), so a row never lists a key the game
+    // ignores, nor hides one it uses.
+    private Key? BuiltInKeyFor(string buttonName)
+    {
+        uint target = Services.LibretroInput.GetButtonId(buttonName, _currentConsole);
+        if (!Services.KeyboardBindings.IsTarget(target)) return null;
+        var binds = _ctrlMappings.Values
+            .Where(m => m.InputType == Services.InputType.Keyboard && m.Key != Key.None
+                        && string.IsNullOrEmpty(m.ChordIdentifier))
+            .Select(m => (m.ButtonName, m.Key));
+        foreach (var (key, t) in Services.KeyboardBindings.Resolve(_currentConsole, binds))
+            if (t == target) return key;
+        return null;
     }
 
     private void StartWaiting(int rowIndex)
@@ -3056,14 +3079,23 @@ public partial class PreferencesWindow : Window
         };
         int cur = _waitingRowIndex;
         _waitingRowIndex = -1;
-        RefreshRow(cur);
+        // A key bound here can be another row's built-in key, which that row must stop showing —
+        // so on the keyboard every row is redrawn, not just this one.
+        if (_isKeyboardMode) RefreshAllRows(); else RefreshRow(cur);
         if (cur + 1 < _ctrlRows.Count) StartWaiting(cur + 1);   // auto-advance
         else if (_ctrl != null) _ctrl.RawMode = false;
     }
 
+    // Keys currently down. Avalonia reports auto-repeat as more KeyDowns with nothing to tell them
+    // apart, so a key already down is a repeat: the row it bound has advanced, and the repeat must
+    // not bind the next row too.
+    private readonly HashSet<Key> _keysDown = new();
+
     private void OnControlsKeyDown(object? sender, KeyEventArgs e)
     {
+        bool repeat = !_keysDown.Add(e.Key);
         if (!_isKeyboardMode || _waitingRowIndex < 0) return;
+        if (repeat) { e.Handled = true; return; }
         if (e.Key == Key.Escape) { StopWaiting(); e.Handled = true; return; }
         string btnName = _ctrlRows[_waitingRowIndex].ButtonName;
         string display = KeyToDisplayString(e.Key);
@@ -3180,18 +3212,18 @@ public partial class PreferencesWindow : Window
     private void ResetControlsDefaults()
     {
         _ctrlMappings.Clear();
-        var defaults = _isKeyboardMode
-            ? Configuration.ConfigurationExtensions.GetDefaultKeyboardMappings(_currentConsole)
-            : Configuration.ConfigurationExtensions.GetDefaultControllerMappings(_currentConsole);
-        foreach (var d in defaults)
-            _ctrlMappings[d.ButtonName] = new Services.InputMapping
-            {
-                ConsoleName = _currentConsole, ButtonName = d.ButtonName,
-                InputType = _isKeyboardMode ? Services.InputType.Keyboard : Services.InputType.Controller,
-                Key = _isKeyboardMode && Enum.TryParse<Key>(d.InputIdentifier, out var k) ? k : Key.None,
-                ControllerButtonId = !_isKeyboardMode && uint.TryParse(d.InputIdentifier, out var bid) ? bid : 0,
-                DisplayText = d.DisplayName,
-            };
+        // The keyboard's defaults are the game's built-in keys, which every row with no bind
+        // already shows (BuiltInKeyFor) — clearing the binds is the reset, and Save then stores none.
+        if (!_isKeyboardMode)
+            foreach (var d in Configuration.ConfigurationExtensions.GetDefaultControllerMappings(_currentConsole))
+                _ctrlMappings[d.ButtonName] = new Services.InputMapping
+                {
+                    ConsoleName = _currentConsole, ButtonName = d.ButtonName,
+                    InputType = Services.InputType.Controller,
+                    Key = Key.None,
+                    ControllerButtonId = uint.TryParse(d.InputIdentifier, out var bid) ? bid : 0,
+                    DisplayText = d.DisplayName,
+                };
         StopWaiting();
         RefreshAllRows();
     }

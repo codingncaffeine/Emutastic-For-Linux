@@ -33,19 +33,6 @@ namespace Emutastic.Views
         private DispatcherTimer? _statusTimer;
         private int _zeroFpsSeconds;
 
-        // Avalonia Key -> libretro joypad id (player 1 keyboard fallback)
-        private static readonly Dictionary<Key, int> KeyMap = new()
-        {
-            { Key.Up, 4 }, { Key.Down, 5 }, { Key.Left, 6 }, { Key.Right, 7 },
-            { Key.Z, 0 },  // B
-            { Key.X, 8 },  // A
-            { Key.A, 1 },  // Y
-            { Key.S, 9 },  // X
-            { Key.Enter, 3 },      // START
-            { Key.RightShift, 2 }, // SELECT
-            { Key.Q, 10 }, // L
-            { Key.W, 11 }, // R
-        };
 
         // Parameterless ctor for the XAML designer/loader only.
         public EmulatorWindow() : this(CreateDesignSession()) { }
@@ -265,26 +252,19 @@ namespace Emutastic.Views
         {
             base.OnKeyDown(e);
             if (e.Key == Key.F11) { ToggleOverlayFullscreen(); e.Handled = true; return; }  // overlay fullscreen (scanout)
-            if (ResolveRetroKey(e.Key, out int id)) { _session.Input.SetKeyboardButton(id, true); e.Handled = true; }
+            if (FeedKeyboard(e.Key, true)) e.Handled = true;
         }
 
         protected override void OnKeyUp(KeyEventArgs e)
         {
             base.OnKeyUp(e);
-            if (ResolveRetroKey(e.Key, out int id)) { _session.Input.SetKeyboardButton(id, false); e.Handled = true; }
+            if (FeedKeyboard(e.Key, false)) e.Handled = true;
         }
 
-        // Prefer the player-1 keyboard bindings saved in the Controls panel; fall back to the
-        // built-in defaults when this console has no configured keyboard mapping.
-        private bool ResolveRetroKey(Key key, out int id)
-        {
-            if (_session.Input.HasKeyboardConfig)
-            {
-                id = _session.Input.KeyboardRetroId(key.ToString());
-                return id >= 0;
-            }
-            return KeyMap.TryGetValue(key, out id);
-        }
+        // Player 1's keys, the same pad the game host's window feeds: the built-in keys with the
+        // Controls panel's binds over them (KeyboardBindings), looked up by the key's SDL keycode.
+        private bool FeedKeyboard(Key key, bool down) =>
+            Services.KeyboardBindings.SdlCodes(key, out _, out int keycode) && _session.Input.Keyboard.Set(keycode, down);
 
         // ── In-game overlay (pause HUD + pause-effect animation) ──
         private PauseEffects.PauseEffectRunner? _pauseRunner;
