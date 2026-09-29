@@ -63,6 +63,13 @@
   </supports>
 
   <releases>
+    <release version="1.9.2" date="2026-09-29">
+      <description>
+        <p>Keys bound in Preferences now work in games. Every keyboard row shows the key the
+           game uses, stick rows can be bound to keys, and keys follow the letters printed on
+           them on any layout. The Game Boy Color has its own controller picture.</p>
+      </description>
+    </release>
     <release version="1.9.1" date="2026-09-28">
       <description>
         <p>Disc games start again while signed in to RetroAchievements: identifying a PS1,
