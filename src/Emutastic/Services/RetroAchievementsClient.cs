@@ -424,7 +424,9 @@ namespace Emutastic.Services
                 rc_client_reset(_client);
         }
 
-        private ClientCallbackFunc? _changeMediaCallback;   // kept alive across the async server call
+        // Media-change callbacks, each kept alive until rcheevos answers it. A list, not a field:
+        // a second swap can start before the first answer arrives.
+        private readonly List<ClientCallbackFunc> _mediaCallbacks = new();
 
         /// <summary>
         /// Tell rcheevos a different disc was inserted. It hashes the new media
@@ -436,14 +438,16 @@ namespace Emutastic.Services
         public void ChangeMedia(string discPath, Action<int, string?> done)
         {
             if (_client == IntPtr.Zero || !IsGameLoaded) { done(RC_OK, null); return; }
-            _changeMediaCallback = (result, errorPtr, client, userdata) =>
+            ClientCallbackFunc? callback = null;
+            callback = (result, errorPtr, client, userdata) =>
             {
                 string? msg = PtrToStringUTF8(errorPtr);
-                _changeMediaCallback = null;
+                lock (_mediaCallbacks) _mediaCallbacks.Remove(callback!);
                 done(result, msg);
             };
+            lock (_mediaCallbacks) _mediaCallbacks.Add(callback);
             rc_client_begin_identify_and_change_media(_client, discPath, IntPtr.Zero, UIntPtr.Zero,
-                _changeMediaCallback, IntPtr.Zero);
+                callback, IntPtr.Zero);
         }
 
         /// <summary>

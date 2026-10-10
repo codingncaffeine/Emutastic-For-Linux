@@ -566,6 +566,11 @@ namespace Emutastic.Emulator
                 _core.SetCallbacks(_envCb, _videoCb, _audioCb, _audioBatchCb, _inputPollCb, _inputStateCb);
                 _core.Init();
 
+                // RetroAchievements: decide hardcore for this launch BEFORE the core reads its
+                // options — a core whose own cheat engine is a core option reads it during
+                // retro_load_game, and a hardcore session serves it the locked value.
+                DecideHardcoreForLaunch();
+
                 // ROM-hack soft patch (IPS/BPS/UPS): LoadGame applies it to the in-memory buffer;
                 // the base ROM file on disk is never modified.
                 if (!_core.LoadGame(_romPath, PatchPath))
@@ -2163,6 +2168,26 @@ namespace Emutastic.Emulator
                 string? key = Marshal.PtrToStringAnsi(v.key);
                 if (key == null || !_coreOptions.TryGetValue(key, out var val)) return false;
 
+                // RA hardcore-compliance: a core's own cheat engine switched on through a core
+                // option is still a cheat (Section B), and the libretro cheat API our cheat gate
+                // covers never sees it. Serve the locked value for the whole session; Preferences
+                // keeps the user's choice.
+                if (_raHardcoreIntent && Services.HardcoreLaunchPolicy.IsCheatCoreOption(key))
+                {
+                    string locked = Services.HardcoreLaunchPolicy.LockedValue(
+                        _coreOptionSchema.FirstOrDefault(o => o.Key == key)?.ValidValues);
+                    if (!string.Equals(locked, val, StringComparison.Ordinal))
+                    {
+                        Trace.WriteLine($"[Emu] core option {key} = '{val}' locked to '{locked}' (hardcore)");
+                        val = locked;
+                        if (!_hardcoreOptionLockNotified)
+                        {
+                            _hardcoreOptionLockNotified = true;
+                            ShowDiskMessage("Cheat options are disabled in hardcore mode", 5);
+                        }
+                    }
+                }
+
                 if (!_coreOptionPtrs.TryGetValue(key, out var ptr) || Marshal.PtrToStringAnsi(ptr) != val)
                 {
                     // Fresh ptr; never free the old one here (the core may still reference it) — all are
@@ -3733,7 +3758,14 @@ namespace Emutastic.Emulator
         //    GlOsd (Skia). The host never writes config/DB — results ride GameHostResult. ──
         private Services.RetroAchievementsClient? _raClient;
         private volatile bool _raReady;            // game identified → DoFrame is live
-        private bool _raHardcoreActive;            // snapshot at launch (upstream semantics)
+        private volatile bool _raHardcoreActive;   // snapshot at launch (upstream semantics); rcheevos
+                                                   // can clear it from its callback thread (RaChangeMedia)
+        // The launch's hardcore decision (HardcoreLaunchPolicy), taken in DecideHardcoreForLaunch
+        // BEFORE the core loads so the core-option lock in HandleGetVariable and the achievement
+        // runtime agree. Fixed for the session.
+        private bool _raHardcoreIntent;
+        private Services.HardcoreDemotion _raHardcoreDemotion = Services.HardcoreDemotion.None;
+        private bool _hardcoreOptionLockNotified;
         private Services.RetroAchievementsClient.MemoryRegion[]? _raPendingMemoryRegions;
 
         /// <summary>True while a hardcore RA session is active — gates cheats + state loads.</summary>
@@ -3810,25 +3842,7 @@ namespace Emutastic.Emulator
         /// loads multi-disc games through an .m3u, so the entries of that playlist (relative to its
         /// folder) are the disc paths. Null when the launch wasn't an .m3u or the index is out of range.
         /// </summary>
-        private string? ResolveDiscPath(uint index)
-        {
-            try
-            {
-                if (!_romPath.EndsWith(".m3u", StringComparison.OrdinalIgnoreCase) || !File.Exists(_romPath)) return null;
-                string dir = Path.GetDirectoryName(_romPath) ?? "";
-                var entries = File.ReadAllLines(_romPath)
-                    .Select(l => l.Trim())
-                    .Where(l => l.Length > 0 && !l.StartsWith('#'))
-                    .ToList();
-                if (index >= entries.Count) return null;
-                string entry = entries[(int)index];
-                int bar = entry.IndexOf('|');            // "file|label" form
-                if (bar > 0) entry = entry[..bar];
-                string p = Path.IsPathRooted(entry) ? entry : Path.Combine(dir, entry);
-                return File.Exists(p) ? p : null;
-            }
-            catch (Exception ex) { Trace.WriteLine($"[RA] disc path lookup failed: {ex.Message}"); return null; }
-        }
+        private string? ResolveDiscPath(uint index) => Services.DiscPlaylist.ResolveDiscPath(_romPath, index);
 
         // Toast envelope: 250ms fade-in → 4s hold → 400ms fade-out (upstream's timings,
         // default style duration). Returns null once expired (and clears the state).
@@ -3980,6 +3994,33 @@ namespace Emutastic.Emulator
 
         /// <summary>Login + identify (RaInit worker thread). Port of upstream's
         /// InitRetroAchievements; config writes become RaNewTokenResult for the parent.</summary>
+        /// <summary>
+        /// The hardcore decision for this launch, taken on the emu thread before the core loads
+        /// (see <see cref="Services.HardcoreLaunchPolicy"/>). Not signed in or a console RA has no
+        /// ID for means no achievement session at all, so no hardcore either.
+        /// </summary>
+        private void DecideHardcoreForLaunch()
+        {
+            _raHardcoreIntent = false;
+            _raHardcoreDemotion = Services.HardcoreDemotion.None;
+            try
+            {
+                var raConfig = App.Configuration?.GetRetroAchievementsConfiguration();
+                if (raConfig == null || !raConfig.IsConfigured) return;
+                string consoleName = HandlerConsoleName;
+                if (Services.RetroAchievementsClient.GetConsoleId(consoleName) == 0) return;
+                bool patched = _game != null && Services.HdPackService.ActiveModHasRomPatch(_game);
+                var (hardcore, reason) = Services.HardcoreLaunchPolicy.Evaluate(raConfig.HardcoreMode, consoleName, patched);
+                _raHardcoreIntent = hardcore;
+                _raHardcoreDemotion = reason;
+                Trace.WriteLine($"[RA] Launch decision: {(hardcore ? "hardcore" : "casual")}{(reason != Services.HardcoreDemotion.None ? $" ({reason})" : "")}");
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[RA] Launch decision failed: {ex.Message}");
+            }
+        }
+
         private void InitRetroAchievements()
         {
             try
@@ -4000,30 +4041,22 @@ namespace Emutastic.Emulator
                     return;
                 }
 
-                // RA hardcore-compliance carve-out for PSP: PPSSPP reads cheats from
-                // cheats/<DiscID>.ini directly, bypassing the retro_cheat_set gate we
-                // control — so hardcore can't be honestly enforced there. Drop to
-                // softcore for the session and say so (upstream's posture).
-                bool effectiveHardcore = raConfig.HardcoreMode;
-                if (effectiveHardcore && string.Equals(consoleName, "PSP", StringComparison.Ordinal))
+                // The hardcore decision for this launch was taken in DecideHardcoreForLaunch
+                // (HardcoreLaunchPolicy) before the core loaded, so the core-option lock saw it.
+                // Two carve-outs demote a hardcore request to casual for the session — achievements
+                // still track, just not on the hardcore leaderboard:
+                //   PSP — the PPSSPP core reads cheats/<DiscID>.ini itself, bypassing the libretro
+                //         retro_cheat_set API our cheat gate intercepts, and libretro has no
+                //         environment callback to tell a core about hardcore.
+                //   HD mod with a ROM patch (<patch> in hires.txt) — Mesen patches the ROM
+                //         internally at load, so rcheevos hashed the clean file while modified
+                //         code runs; switching the mod to None restores hardcore on the next launch.
+                bool effectiveHardcore = _raHardcoreIntent;
+                string? demotion = Services.HardcoreLaunchPolicy.DemotionMessage(_raHardcoreDemotion);
+                if (demotion != null)
                 {
-                    effectiveHardcore = false;
-                    Trace.WriteLine("[RA] Hardcore refused for PSP — PPSSPP cheat path not gateable; softcore this session.");
-                    ShowDiskMessage("Hardcore Mode is disabled for PSP titles — achievements still track", 6);
-                }
-
-                // RA hardcore-compliance carve-out for HD mods that embed ROM
-                // patches (<patch> in hires.txt): Mesen patches the ROM
-                // internally at load, so rcheevos hashed the clean file while
-                // the running game is modified code — crediting hardcore
-                // unlocks against the base game's set wouldn't be compliant.
-                // Softcore still tracks; switching the mod to None restores
-                // hardcore on the next launch.
-                if (effectiveHardcore && _game != null && Services.HdPackService.ActiveModHasRomPatch(_game))
-                {
-                    effectiveHardcore = false;
-                    Trace.WriteLine("[RA] Hardcore refused — active HD mod patches the ROM (pack <patch> tag); softcore for this session.");
-                    ShowDiskMessage("Hardcore disabled — the active HD mod patches the ROM; achievements still track", 6);
+                    Trace.WriteLine($"[RA] Hardcore refused for this session ({_raHardcoreDemotion}); casual.");
+                    ShowDiskMessage(demotion, 6);
                 }
 
                 // Stamp the core into the rcheevos UA BEFORE login/identify HTTP fires.

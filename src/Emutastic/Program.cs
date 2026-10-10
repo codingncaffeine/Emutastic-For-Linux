@@ -42,6 +42,14 @@ sealed class Program
             string? report = args.Length > 1 && !args[1].StartsWith("--", StringComparison.Ordinal) ? args[1] : null;
             Environment.Exit(Emutastic.Emulator.VfsSelfTest.Run(report));
         }
+        // The RetroAchievements hardcore rules that live in pure code — the launch decision, the
+        // locked cheat core options, the disc file a swap hands rcheevos:
+        // `Emutastic --selftest-hardcore [report.log]`. No window, no PortableData. Exit 0 = all pass.
+        if (args.Length >= 1 && args[0] == "--selftest-hardcore")
+        {
+            string? report = args.Length > 1 && !args[1].StartsWith("--", StringComparison.Ordinal) ? args[1] : null;
+            Environment.Exit(Emutastic.HardcoreSelfTest.Run(report));
+        }
         // Player 1's keyboard, from the Preferences rows to what a core reads (no window, never
         // touches the user's config): `Emutastic --selftest-keyboard [report.log]`. Exit 0 = all pass.
         if (args.Length >= 1 && args[0] == "--selftest-keyboard")
