@@ -63,6 +63,13 @@
   </supports>
 
   <releases>
+    <release version="1.9.3" date="2026-10-10">
+      <description>
+        <p>RetroAchievements hardcore: core options that switch on a core's own cheat engine
+           (Dolphin, PPSSPP, MAME, FBNeo) are locked for a hardcore session, decided before the
+           core loads. A last-minute audit before the hardcore-compliance review caught it.</p>
+      </description>
+    </release>
     <release version="1.9.2" date="2026-09-29">
       <description>
         <p>Keys bound in Preferences now work in games. Every keyboard row shows the key the
