@@ -119,6 +119,30 @@ namespace Emutastic.Services
                         _ => uint.MaxValue
                     };
 
+                // ── Microsoft Xbox (Midway Verdant) ─────────────────────────
+                // The core reads the RetroPad as: B/A/Y/X (bottom, right, left, top) = A/B/X/Y,
+                // L/R = White/Black, L2/R2 = the triggers, Select = Back.
+                case "Xbox":
+                    return n switch
+                    {
+                        "a" => JOYPAD_B, "b" => JOYPAD_A, "x" => JOYPAD_Y, "y" => JOYPAD_X,
+                        "white" => JOYPAD_L, "black" => JOYPAD_R,
+                        "lt" => JOYPAD_L2, "rt" => JOYPAD_R2,
+                        "l3" => JOYPAD_L3, "r3" => JOYPAD_R3,
+                        "back" => JOYPAD_SELECT, "start" => JOYPAD_START,
+                        "up" => JOYPAD_UP, "down" => JOYPAD_DOWN,
+                        "left" => JOYPAD_LEFT, "right" => JOYPAD_RIGHT,
+                        "left analog up"    => ANALOG_LEFT_UP,
+                        "left analog down"  => ANALOG_LEFT_DOWN,
+                        "left analog left"  => ANALOG_LEFT_LEFT,
+                        "left analog right" => ANALOG_LEFT_RIGHT,
+                        "right analog up"    => ANALOG_RIGHT_UP,
+                        "right analog down"  => ANALOG_RIGHT_DOWN,
+                        "right analog left"  => ANALOG_RIGHT_LEFT,
+                        "right analog right" => ANALOG_RIGHT_RIGHT,
+                        _ => uint.MaxValue
+                    };
+
                 // ── NEC PC-Engine ────────────────────────────────────────────
                 case "TG16":
                 case "TGCD":

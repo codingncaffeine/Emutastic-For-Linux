@@ -1545,6 +1545,7 @@ public partial class PreferencesWindow : Window
         ("Nintendo", new[] { "Famicom Disk System", "GameCube", "Game Boy Advance" }),
         ("Sega",     new[] { "Sega CD", "Saturn" }),
         ("Sony",     new[] { "PlayStation", "PlayStation 2" }),
+        ("Microsoft", new[] { "Xbox" }),
         ("NEC",      new[] { "TurboGrafx-CD" }),
         ("Arcade",   new[] { "Neo Geo" }),   // NeoCD entries exist for launch pre-flight only (upstream hides them here)
         ("Other",    new[] { "3DO", "Philips CD-i" }),
@@ -2175,6 +2176,7 @@ public partial class PreferencesWindow : Window
         ("Nintendo", new[] { "NES", "FDS", "SNES", "N64", "GameCube", "GB", "GBC", "GBA", "NDS", "3DS", "VirtualBoy" }),
         ("Sega",     new[] { "Genesis", "SegaCD", "Sega32X", "Saturn", "SMS", "GameGear", "SG1000", "Dreamcast" }),
         ("Sony",     new[] { "PS1", "PS2", "PSP" }),
+        ("Microsoft", new[] { "Xbox" }),
         ("NEC",      new[] { "TG16", "TGCD" }),
         ("Atari",    new[] { "Atari2600", "Atari7800", "Jaguar" }),
         ("Arcade",   new[] { "Arcade", "NeoGeo", "NeoCD" }),
@@ -2311,6 +2313,7 @@ public partial class PreferencesWindow : Window
         ("Saturn", "Sega Saturn",       "ss",  null),
         ("PS1",    "PlayStation",        "psx", null),
         ("PS2",    "PlayStation 2",      "ps2", null),
+        ("Xbox",   "Xbox",               "xbox", null),
         ("TGCD",   "TurboGrafx-CD",     "pce", null),
         ("3DO",    "3DO",                "3do", null),
         ("CDi",    "Philips CD-i",       "cdi", null),

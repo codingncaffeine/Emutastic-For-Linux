@@ -446,6 +446,38 @@ namespace Emutastic.Configuration
                     new("Right Analog Right", "RightAnalogRight", 420, 120, ButtonType.AnalogDirection, 30, 30, GRAnalog),
                 }
             },
+            ["Xbox"] = new ControllerDefinition
+            {
+                Name = "Xbox",
+                ControllerImage = "/Assets/images/Xbox/xbox_controller.png",
+                Buttons = new List<ButtonDefinition>
+                {
+                    new("Up",                 "Up",               140,  70, ButtonType.DPad,          70, 70, GDPad),
+                    new("Down",               "Down",             140, 150, ButtonType.DPad,          70, 70, GDPad),
+                    new("Left",               "Left",             100, 110, ButtonType.DPad,          70, 70, GDPad),
+                    new("Right",              "Right",            180, 110, ButtonType.DPad,          70, 70, GDPad),
+                    new("A",                  "A",                380, 170, ButtonType.Button,        35, 35, GFace),
+                    new("B",                  "B",                420, 130, ButtonType.Button,        35, 35, GFace),
+                    new("X",                  "X",                340, 130, ButtonType.Button,        35, 35, GFace),
+                    new("Y",                  "Y",                380,  90, ButtonType.Button,        35, 35, GFace),
+                    new("White",              "White",            440, 170, ButtonType.Button,        30, 30, GFace),
+                    new("Black",              "Black",            440, 200, ButtonType.Button,        30, 30, GFace),
+                    new("LT",                 "LT",                60,  40, ButtonType.Button,        70, 25, GTrigger),
+                    new("RT",                 "RT",               430,  40, ButtonType.Button,        70, 25, GTrigger),
+                    new("Back",               "Back",             230, 190, ButtonType.Button,        45, 20, GSystem),
+                    new("Start",              "Start",            285, 190, ButtonType.Button,        45, 20, GSystem),
+                    new("L3",                 "L3",               140,  30, ButtonType.Button,        30, 30, GSystem),
+                    new("R3",                 "R3",               400,  30, ButtonType.Button,        30, 30, GSystem),
+                    new("Left Analog Up",     "LeftAnalogUp",     140,  50, ButtonType.AnalogDirection, 30, 30, GLAnalog),
+                    new("Left Analog Down",   "LeftAnalogDown",   140,  90, ButtonType.AnalogDirection, 30, 30, GLAnalog),
+                    new("Left Analog Left",   "LeftAnalogLeft",   120,  70, ButtonType.AnalogDirection, 30, 30, GLAnalog),
+                    new("Left Analog Right",  "LeftAnalogRight",  160,  70, ButtonType.AnalogDirection, 30, 30, GLAnalog),
+                    new("Right Analog Up",    "RightAnalogUp",    400, 100, ButtonType.AnalogDirection, 30, 30, GRAnalog),
+                    new("Right Analog Down",  "RightAnalogDown",  400, 140, ButtonType.AnalogDirection, 30, 30, GRAnalog),
+                    new("Right Analog Left",  "RightAnalogLeft",  380, 120, ButtonType.AnalogDirection, 30, 30, GRAnalog),
+                    new("Right Analog Right", "RightAnalogRight", 420, 120, ButtonType.AnalogDirection, 30, 30, GRAnalog),
+                }
+            },
             ["PSP"] = new ControllerDefinition
             {
                 Name = "PlayStation Portable",

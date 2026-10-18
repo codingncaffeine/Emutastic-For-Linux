@@ -33,3 +33,6 @@ FINDINGS-SO-FAR.md
 
 # Internal working docs — local only, never published
 /notes/
+
+# Cores bundled into the app by the packaging step (Midway Verdant), never committed
+/BundledCores/

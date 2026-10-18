@@ -65,6 +65,7 @@ namespace Emutastic.Services
             { "PS1",         new[] { "mednafen_psx_hw_libretro.so",
                                      "mednafen_psx_libretro.so"        }},
             { "PS2",         new[] { "pcsx2_libretro.so"               }},
+            { "Xbox",        new[] { "midway_verdant_libretro.so"      }},
             { "PSP",         new[] { "ppsspp_libretro.so"             }},
             { "TG16",        new[] { "mednafen_pce_libretro.so",
                                      "mednafen_pce_fast_libretro.so"        }},
@@ -131,6 +132,9 @@ namespace Emutastic.Services
                                   "scph1001.bin", "scph7001.bin"                         }},
             { "3DO",      new[] { "panafz10.bin", "panafz1j.bin", "goldstar.bin"          }},
             { "TGCD",     new[] { "syscard3.pce", "syscard2.pce", "syscard1.pce"          }},
+            // Xbox (Midway Verdant): the MCPX boot ROM gates the launch; the core finds the flash image and the
+            // hard-disk image in the same folder by size and names what is missing in its own message.
+            { "Xbox",     new[] { "midway-verdant/mcpx_1.0.bin", "midway-verdant/mcpx_1.1.bin" }},
         };
 
         // Consoles that require ALL listed files (not just any one).
@@ -282,6 +286,20 @@ namespace Emutastic.Services
             _configService = configService;
         }
 
+        /// <summary>
+        /// Cores that ship inside the app (Midway Verdant, Emutastic's own Xbox core): looked up in
+        /// [app]/BundledCores/ after the user's Cores folder, so a core the user drops in wins.
+        /// </summary>
+        public static string BundledCoresFolder => Path.Combine(AppContext.BaseDirectory, "BundledCores");
+
+        private string? Resolve(string dll)
+        {
+            string path = Path.Combine(_coresFolder, dll);
+            if (File.Exists(path)) return path;
+            string bundled = Path.Combine(BundledCoresFolder, dll);
+            return File.Exists(bundled) ? bundled : null;
+        }
+
         public string? GetCorePath(string console)
         {
             if (!ConsoleCoreMap.TryGetValue(console, out string[]? candidates))
@@ -305,8 +323,7 @@ namespace Emutastic.Services
             // Fall back to default priority order
             foreach (string dll in candidates)
             {
-                string path = Path.Combine(_coresFolder, dll);
-                if (File.Exists(path))
+                if (Resolve(dll) is string path)
                     return path;
             }
 
@@ -392,8 +409,7 @@ namespace Emutastic.Services
 
             foreach (string dll in candidates)
             {
-                string path = Path.Combine(_coresFolder, dll);
-                if (!File.Exists(path))
+                if (Resolve(dll) == null)
                     missing.Add(dll);
             }
             return missing;

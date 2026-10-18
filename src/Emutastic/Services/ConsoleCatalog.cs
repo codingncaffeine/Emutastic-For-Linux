@@ -33,13 +33,13 @@ namespace Emutastic.Services
         /// <summary>Manufacturer headings, in the order the sidebar shows them.</summary>
         public static readonly IReadOnlyList<string> DefaultGroupOrder = new[]
         {
-            "ATARI", "NINTENDO", "SEGA", "SONY", "NEC", "SNK", "OTHER",
+            "ATARI", "NINTENDO", "SEGA", "SONY", "MICROSOFT", "NEC", "SNK", "OTHER",
         };
 
         /// <summary>
         /// Every console the sidebar lists, in shipping order. PS3 is absent on purpose:
-        /// it is a Windows-only platform (RPCS3), so this port has 35 entries to
-        /// upstream's 36.
+        /// it is a Windows-only platform (RPCS3), so this port has 36 entries to
+        /// upstream's 37.
         /// </summary>
         public static readonly IReadOnlyList<ConsoleCatalogEntry> Default = new ConsoleCatalogEntry[]
         {
@@ -74,6 +74,8 @@ namespace Emutastic.Services
             new("PS1",          "PlayStation",         "SONY"),
             new("PS2",          "PlayStation 2",       "SONY"),
             new("PSP",          "PSP",                 "SONY"),
+
+            new("Xbox",         "Xbox",                "MICROSOFT"),
 
             new("TG16",         "TurboGrafx-16",       "NEC"),
             new("TGCD",         "TurboGrafx-CD",       "NEC"),

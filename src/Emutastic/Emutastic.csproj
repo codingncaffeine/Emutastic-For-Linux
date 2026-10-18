@@ -33,6 +33,9 @@
     <None Include="Assets\buttons\powerbutton.png" Link="powerbutton.png" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Assets\buttons\powerbutton2.png" Link="powerbutton2.png" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Assets\Sounds\Notification1.mp3" Link="Assets/Sounds/Notification1.mp3" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Cores that ship with the app (Midway Verdant, the Xbox core): the packaging step puts the built core in
+         the repo's gitignored BundledCores/ folder; CoreManager looks there after the user's Cores folder. -->
+    <None Include="..\..\BundledCores\*" Link="BundledCores\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- Build the native Wayland presenter shim (libwlpresent.so) from native/wlpresent/ and drop it beside

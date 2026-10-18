@@ -19,6 +19,7 @@ namespace Emutastic.Services.ConsoleHandlers
             "GameCube"       => new GameCubeHandler(),
             "PS1"            => new Ps1Handler(game),
             "PS2"            => new Ps2Handler(),
+            "Xbox"           => new XboxHandler(),
             "TG16" or "TGCD" => new Tg16Handler(console),
             "Dreamcast"      => new DreamcastHandler(),
             "Vectrex"        => new VectrexHandler(),

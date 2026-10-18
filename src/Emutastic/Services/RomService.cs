@@ -13,7 +13,7 @@ namespace Emutastic.Services
         public static readonly Dictionary<string, string[]> AmbiguousExtensions = new(StringComparer.OrdinalIgnoreCase)
         {
             { ".chd", new[] { "PS2", "SegaCD", "Saturn", "PS1", "TGCD", "NeoCD", "3DO", "Dreamcast", "CDi" } },
-            { ".iso", new[] { "PS2", "PSP", "GameCube", "NeoCD", "3DO" } },
+            { ".iso", new[] { "PS2", "PSP", "GameCube", "NeoCD", "3DO", "Xbox" } },
             { ".cue", new[] { "SegaCD", "Saturn", "PS1", "TGCD", "NeoCD", "3DO", "CDi" } },
             // .m3u playlists are how the libretro disc-control interface sees a
             // multi-disc set as N images. GameCube included so auto-bundled
@@ -95,6 +95,7 @@ namespace Emutastic.Services
             { "SG1000",       "Sega"       }, { "Dreamcast", "Sega"       },
             { "PS1",          "Sony"       },
             { "PS2",          "Sony"       },
+            { "Xbox",         "Microsoft"  },
             { "PSP",          "Sony"       },
             { "TG16",         "NEC"        }, { "TGCD",      "NEC"        },
             { "NGP",          "SNK"        },
@@ -131,6 +132,7 @@ namespace Emutastic.Services
             { "GameGear",    ("#2E0A1A", "#E91E63") },
             { "PS1",         ("#0A0A2E", "#2196F3") },
             { "PS2",         ("#0A0A1A", "#3D5AFE") },
+            { "Xbox",        ("#0A140A", "#4CAF50") },
             { "PSP",         ("#0A1A2E", "#00BCD4") },
             { "Atari2600",   ("#2E1A0A", "#FF5722") },
             { "TG16",        ("#1A2E2E", "#009688") },
@@ -280,6 +282,7 @@ namespace Emutastic.Services
             ("sony playstation 2", "PS2"),
             ("playstation 2", "PS2"),
             ("ps2",           "PS2"),
+            ("xbox",          "Xbox"),
             ("playstation",   "PS1"),
             ("psx",           "PS1"),
             ("ps1",           "PS1"),
@@ -309,6 +312,30 @@ namespace Emutastic.Services
         /// Tries to identify the console from folder names in the given path.
         /// Returns empty string if no match is found.
         /// </summary>
+        /// <summary>
+        /// True when the file is an original Xbox game disc image: the XDVDFS volume descriptor
+        /// ("MICROSOFT*XBOX*MEDIA") at byte 0x10000 of an XISO, or at 0x18310000 of a full (Redump) dump
+        /// whose game partition starts at 0x18300000.
+        /// </summary>
+        public static bool IsXboxDisc(string path)
+        {
+            ReadOnlySpan<byte> magic = "MICROSOFT*XBOX*MEDIA"u8;
+            try
+            {
+                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                Span<byte> buf = stackalloc byte[20];
+                foreach (long at in new long[] { 0x10000, 0x18310000 })
+                {
+                    if (fs.Length < at + buf.Length) continue;
+                    fs.Seek(at, SeekOrigin.Begin);
+                    if (fs.Read(buf) == buf.Length && buf.SequenceEqual(magic)) return true;
+                }
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            return false;
+        }
+
         public static string DetectConsoleFromFolderName(string filePath)
         {
             // Walk each directory component and check against keywords.
@@ -418,6 +445,7 @@ namespace Emutastic.Services
             { "Dreamcast",    1.04 },
             { "PS1",          1.00 },
             { "PS2",          0.71 },   // DVD-case art; tune against ScreenScraper box-2D if needed
+            { "Xbox",         0.71 },   // DVD-case art
             { "PSP",          0.98 },
             { "TG16",         0.98 },
             { "TGCD",         1.00 },
@@ -541,6 +569,8 @@ namespace Emutastic.Services
         public static string CleanTitle(string fileName)
         {
             string name = Path.GetFileNameWithoutExtension(fileName);
+            // "Game.xiso.iso": the XISO tag is part of the extension, not the title.
+            if (name.EndsWith(".xiso", StringComparison.OrdinalIgnoreCase)) name = name[..^5];
 
             // Remove common ROM tags like (USA), [!], (Rev 1) etc.
             name = System.Text.RegularExpressions.Regex.Replace(name, @"\(.*?\)", "");

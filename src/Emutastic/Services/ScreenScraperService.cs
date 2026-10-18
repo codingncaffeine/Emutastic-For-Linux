@@ -119,6 +119,7 @@ namespace Emutastic.Services
             { "Dreamcast",    23 },
             { "PS1",          57 },
             { "PS2",          58 },
+            { "Xbox",         32 },
             { "PSP",          61 },
             { "TG16",         31 },
             { "TGCD",         114},

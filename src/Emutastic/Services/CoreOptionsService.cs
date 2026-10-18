@@ -101,6 +101,7 @@ namespace Emutastic.Services
             ["opera_libretro"]            = "3DO",
             ["parallel_n64_libretro"]     = "N64",
             ["pcsx2_libretro"]            = "PS2",
+            ["midway_verdant_libretro"]   = "Xbox",
             ["picodrive_libretro"]        = "Sega32X",
             ["ppsspp_libretro"]           = "PSP",
             ["prosystem_libretro"]        = "Atari7800",

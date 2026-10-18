@@ -36,6 +36,10 @@ namespace Emutastic.Services
             new("PS2","PlayStation 2","pcsx2/bios/ps2-0230j-20080220.bin","Japan v2.30",4194304,"80ac46fa7e77b8ab4366e86948e54f83"),
             new("PS2","PlayStation 2","pcsx2/bios/ps2-0220a-20060905.bin","USA v2.20",4194304,"40c11c063b3b9409aa5e4058e984e30c"),
             new("PS2","PlayStation 2","pcsx2/bios/ps2-0170a-20030325.bin","USA v1.70",4194304,"8aa12ce243210128c5074552d3b86251"),
+            // Xbox (Midway Verdant) — the files live in the midway-verdant/ subfolder: the MCPX boot ROM, a
+            // flash image (any retail or modified 256 KiB / 1 MiB dump) and a raw 8 GB hard-disk image.
+            new("Xbox","Xbox","midway-verdant/mcpx_1.0.bin","MCPX boot ROM v1.0",512,"d49c52a4102f6df7bcf8d0617ac475ed"),
+            new("Xbox","Xbox","midway-verdant/Complex_4627v1.03.bin","Flash image (Complex 4627 v1.03)",1048576,"21445c6f28fca7285b0f167ea770d1e5"),
             // Sega CD
             new("SegaCD","Sega CD","bios_CD_U.bin","USA",131072,"2efd74e3232ff260e371b99f84024f7f"),
             new("SegaCD","Sega CD","bios_CD_J.bin","Japan",131072,"278a9397d192149e84e820ac621a8edd"),

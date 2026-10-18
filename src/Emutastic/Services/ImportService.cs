@@ -468,6 +468,9 @@ namespace Emutastic.Services
             string ext = Path.GetExtension(file);
             if (ext.Equals(".zip", StringComparison.OrdinalIgnoreCase) || ext.Equals(".7z", StringComparison.OrdinalIgnoreCase))
                 return false;
+            // An Xbox disc image names itself in its volume descriptor: as unambiguous as an extension.
+            if (ext.Equals(".iso", StringComparison.OrdinalIgnoreCase) && RomService.IsXboxDisc(file))
+                return !string.Equals(hint, "Xbox", StringComparison.OrdinalIgnoreCase);
             string detected = RomService.DetectConsole(file);   // "Unknown" for ambiguous/unmapped extensions
             return detected != "Unknown" && !string.Equals(detected, hint, StringComparison.OrdinalIgnoreCase);
         }
@@ -704,6 +707,14 @@ namespace Emutastic.Services
             var candidates = RomService.GetAmbiguousCandidates(ext);
             if (candidates != null)
             {
+                // 0. An Xbox game disc names itself: its XDVDFS volume descriptor
+                //    ("MICROSOFT*XBOX*MEDIA") sits at sector 32 of the game partition.
+                if (ext.Equals(".iso", StringComparison.OrdinalIgnoreCase) && RomService.IsXboxDisc(romPath))
+                {
+                    await ImportRomFileAsync(romPath, "Xbox", fileName);
+                    return;
+                }
+
                 // 1. Try to identify via Redump/No-Intro DAT hash lookup.
                 string? autoConsole = null;
                 string? autoTitle   = null;

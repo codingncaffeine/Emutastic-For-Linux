@@ -157,6 +157,33 @@ namespace Emutastic
                 }
             Check(dead.Count == 0, "every other row of every console reaches a button or stick direction"
                 + (dead.Count > 0 ? $" — these reach nothing: {string.Join(", ", dead)}" : ""));
+
+            // The Xbox pad (Midway Verdant): every control reaches exactly the RetroPad id the core reads it from.
+            // The core's side of the same table is pinned by Midway Verdant's RetroPad test.
+            var xboxTable = new (string Name, uint Id)[]
+            {
+                ("A", LibretroInput.JOYPAD_B), ("B", LibretroInput.JOYPAD_A), ("X", LibretroInput.JOYPAD_Y), ("Y", LibretroInput.JOYPAD_X),
+                ("White", LibretroInput.JOYPAD_L), ("Black", LibretroInput.JOYPAD_R),
+                ("LT", LibretroInput.JOYPAD_L2), ("RT", LibretroInput.JOYPAD_R2),
+                ("Back", LibretroInput.JOYPAD_SELECT), ("Start", LibretroInput.JOYPAD_START),
+                ("L3", LibretroInput.JOYPAD_L3), ("R3", LibretroInput.JOYPAD_R3),
+                ("Up", LibretroInput.JOYPAD_UP), ("Down", LibretroInput.JOYPAD_DOWN),
+                ("Left", LibretroInput.JOYPAD_LEFT), ("Right", LibretroInput.JOYPAD_RIGHT),
+                ("Left Analog Up", LibretroInput.ANALOG_LEFT_UP), ("Left Analog Down", LibretroInput.ANALOG_LEFT_DOWN),
+                ("Left Analog Left", LibretroInput.ANALOG_LEFT_LEFT), ("Left Analog Right", LibretroInput.ANALOG_LEFT_RIGHT),
+                ("Right Analog Up", LibretroInput.ANALOG_RIGHT_UP), ("Right Analog Down", LibretroInput.ANALOG_RIGHT_DOWN),
+                ("Right Analog Left", LibretroInput.ANALOG_RIGHT_LEFT), ("Right Analog Right", LibretroInput.ANALOG_RIGHT_RIGHT),
+            };
+            var xboxRows = ControllerDefinitions.AllControllers["Xbox"].Buttons.Select(b => b.Name).ToList();
+            var xboxWrong = xboxTable.Where(x => LibretroInput.GetButtonId(x.Name, "Xbox") != x.Id)
+                .Select(x => $"{x.Name}→{LibretroInput.GetButtonId(x.Name, "Xbox")} (want {x.Id})").ToList();
+            var xboxUnlisted = xboxRows.Except(xboxTable.Select(x => x.Name)).ToList();
+            var xboxMissing = xboxTable.Select(x => x.Name).Except(xboxRows).ToList();
+            Check(xboxWrong.Count == 0 && xboxUnlisted.Count == 0 && xboxMissing.Count == 0 && xboxRows.Count == 24,
+                "Xbox: all 24 pad controls reach the RetroPad ids the core reads"
+                + (xboxWrong.Count > 0 ? $" — wrong: {string.Join(", ", xboxWrong)}" : "")
+                + (xboxUnlisted.Count > 0 ? $" — rows not in the table: {string.Join(", ", xboxUnlisted)}" : "")
+                + (xboxMissing.Count > 0 ? $" — controls with no row: {string.Join(", ", xboxMissing)}" : ""));
         }
 
         // ── 2. SDL codes ──────────────────────────────────────────────────────────────

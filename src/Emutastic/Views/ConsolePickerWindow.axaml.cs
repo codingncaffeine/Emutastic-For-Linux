@@ -15,7 +15,7 @@ public partial class ConsolePickerWindow : Window
     {
         { "SegaCD", "Sega CD" }, { "Saturn", "Sega Saturn" },
         { "PS1", "PlayStation" }, { "PSP", "PlayStation Portable" }, { "TGCD", "TurboGrafx-CD" },
-        { "3DO", "3DO" },
+        { "3DO", "3DO" }, { "Xbox", "Microsoft Xbox" },
     };
 
     // Consoles hidden from the UI (handlers/cores remain in the backend, but these are
