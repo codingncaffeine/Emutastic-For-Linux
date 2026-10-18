@@ -820,10 +820,10 @@ namespace Emutastic.Services
             }
 
             // ── Copy to library folder if configured ──
-            // Portable mode forces a copy into [DataRoot]/Roms/{Console}/ regardless of the
-            // user's CopyToLibrary setting — the whole point of portable is that the USB
-            // is self-contained, and a ROM living outside PortableData/ defeats that.
-            // Logged as a warning when it overrides a user's explicit setting.
+            // The user's CopyToLibrary setting decides whether a game is copied, in portable mode too (the
+            // default keeps games where they are: copying a multi-gigabyte disc image the user said to leave
+            // in place is never wanted). Portable mode decides only WHERE a copy goes: [DataRoot]/Roms/{Console}/,
+            // so a portable install that copies stays self-contained.
             //
             // Source-path-is-ephemeral force-copy: when the user drags a file/folder
             // from inside a still-archived .rar / .7z / .zip viewer (WinRAR, 7-Zip,
@@ -839,8 +839,9 @@ namespace Emutastic.Services
             // CopyToLibrary/portable settings.
             bool sourceIsEphemeral = IsUnderSystemTemp(romPath);
             var libConfig = _configService?.GetLibraryConfiguration();
-            bool portableForceCopy = AppPaths.IsPortable;
-            bool effectiveCopy = portableForceCopy
+            bool wantsCopy = libConfig is { CopyToLibrary: true };
+            bool portableCopy = AppPaths.IsPortable && wantsCopy;
+            bool effectiveCopy = portableCopy
                               || sourceIsEphemeral
                               || (libConfig is { CopyToLibrary: true } && !string.IsNullOrEmpty(libConfig.LibraryPath));
 
@@ -849,9 +850,9 @@ namespace Emutastic.Services
                 try
                 {
                     string destDir;
-                    if (portableForceCopy)
+                    if (portableCopy)
                     {
-                        // Portable wins: route every import into [DataRoot]/Roms/{Console}/.
+                        // Portable: copies stay inside [DataRoot]/Roms/{Console}/.
                         destDir = AppPaths.GetFolder("Roms", console);
                     }
                     else if (libConfig is { CopyToLibrary: true } && !string.IsNullOrEmpty(libConfig.LibraryPath))
@@ -898,11 +899,9 @@ namespace Emutastic.Services
                 }
                 catch (Exception ex)
                 {
-                    // In portable mode, falling through to import the source absolute path
-                    // would silently break the portable contract — the DB row would point at
-                    // a non-portable location that can't follow the USB stick. Skip with a
-                    // visible warning instead so the user knows to retry or check permissions.
-                    if (portableForceCopy)
+                    // A portable copy that failed: falling through to the source's absolute path would leave a DB
+                    // row the portable install cannot follow. Skip with a visible warning so the user can retry.
+                    if (portableCopy)
                     {
                         ImportLog($"[{fileName}] PORTABLE COPY FAILED — {ex.Message} — skipping");
                         StatusChanged?.Invoke($"Skipped {fileName} — portable copy failed: {ex.Message}");

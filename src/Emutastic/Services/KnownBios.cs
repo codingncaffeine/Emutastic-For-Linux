@@ -40,6 +40,10 @@ namespace Emutastic.Services
             // flash image (any retail or modified 256 KiB / 1 MiB dump) and a raw 8 GB hard-disk image.
             new("Xbox","Xbox","midway-verdant/mcpx_1.0.bin","MCPX boot ROM v1.0",512,"d49c52a4102f6df7bcf8d0617ac475ed"),
             new("Xbox","Xbox","midway-verdant/Complex_4627v1.03.bin","Flash image (Complex 4627 v1.03)",1048576,"21445c6f28fca7285b0f167ea770d1e5"),
+            // Presence only, by name. The core creates a blank drive here on first launch when none exists (Drives 2
+            // and 3 in its options are xbox_hdd_2.raw and xbox_hdd_3.raw); an 8 GB+ raw image under another name also works.
+            // No size either: hashing 8 GB files would make the folder sweep crawl.
+            new("Xbox","Xbox","midway-verdant/xbox_hdd.raw","Hard-disk image (created automatically on first launch)",0,null),
             // Sega CD
             new("SegaCD","Sega CD","bios_CD_U.bin","USA",131072,"2efd74e3232ff260e371b99f84024f7f"),
             new("SegaCD","Sega CD","bios_CD_J.bin","Japan",131072,"278a9397d192149e84e820ac621a8edd"),
