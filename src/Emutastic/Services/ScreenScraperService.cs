@@ -272,7 +272,11 @@ namespace Emutastic.Services
         /// </summary>
         private static IEnumerable<string> BuildRomNomCandidates(string console, string romPath)
         {
-            yield return Path.GetFileName(romPath);
+            string name = Path.GetFileName(romPath);
+            yield return name;
+            // Xbox discs rebuilt with extract-xiso carry ".xiso.iso"; ScreenScraper knows the dump's own ".iso" name.
+            if (console == "Xbox" && name.EndsWith(".xiso.iso", StringComparison.OrdinalIgnoreCase))
+                yield return name[..^".xiso.iso".Length] + ".iso";
         }
 
         private static readonly Dictionary<string, string> NumeralArabicToRoman = new()
