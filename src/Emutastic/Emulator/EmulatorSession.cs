@@ -3591,21 +3591,28 @@ namespace Emutastic.Emulator
             byte* src = (byte*)data;
             fixed (byte* dst0 = bgra)
             {
-                for (int y = 0; y < h; y++)
+                if (_pixelFormat == 1) // XRGB8888: little-endian bytes already B,G,R,X
+                {
+                    // Whole pixels, SIMD-wide, the alpha byte set. A large frame (an internal-resolution core at
+                    // 6x hands over 44 MB) goes in row bands on the thread pool: byte by byte it took ~16 ms of
+                    // retro_run and held the Xbox core at 40 fps.
+                    if (h >= 1024)
+                    {
+                        IntPtr s = (IntPtr)src, d = (IntPtr)dst0;
+                        const int bands = 8;
+                        int step = (h + bands - 1) / bands;
+                        System.Threading.Tasks.Parallel.For(0, bands, i =>
+                            CopyXrgbRows((byte*)s, pitchB, (byte*)d, w, i * step, Math.Min(h, (i + 1) * step)));
+                    }
+                    else
+                    {
+                        CopyXrgbRows(src, pitchB, dst0, w, 0, h);
+                    }
+                }
+                else for (int y = 0; y < h; y++)
                 {
                     byte* dst = dst0 + y * w * 4;
-                    if (_pixelFormat == 1) // XRGB8888: little-endian bytes already B,G,R,X
-                    {
-                        byte* row = src + y * pitchB;
-                        for (int x = 0; x < w; x++)
-                        {
-                            dst[x * 4 + 0] = row[x * 4 + 0];
-                            dst[x * 4 + 1] = row[x * 4 + 1];
-                            dst[x * 4 + 2] = row[x * 4 + 2];
-                            dst[x * 4 + 3] = 255;
-                        }
-                    }
-                    else // 16-bit formats
+                    // 16-bit formats
                     {
                         ushort* row = (ushort*)(src + y * pitchB);
                         for (int x = 0; x < w; x++)
@@ -3652,6 +3659,23 @@ namespace Emutastic.Emulator
             // Recording tap (SW): bgra is the finished packed top-down frame (post-rotation,
             // so the video matches what's on screen). Drops itself on mid-record dim changes.
             _recording?.QueueVideoFrame(bgra, w * h * 4);
+        }
+
+        // XRGB8888 rows [y0, y1) into packed BGRA with the alpha byte set, a SIMD vector of pixels at a time.
+        private static unsafe void CopyXrgbRows(byte* src, int pitchB, byte* dst, int w, int y0, int y1)
+        {
+            var alpha = new System.Numerics.Vector<uint>(0xFF000000u);
+            int lanes = System.Numerics.Vector<uint>.Count;
+            for (int y = y0; y < y1; y++)
+            {
+                uint* s = (uint*)(src + (long)y * pitchB);
+                uint* d = (uint*)(dst + (long)y * w * 4);
+                int x = 0;
+                for (; x + lanes <= w; x += lanes)
+                    System.Runtime.CompilerServices.Unsafe.WriteUnaligned(d + x,
+                        System.Runtime.CompilerServices.Unsafe.ReadUnaligned<System.Numerics.Vector<uint>>(s + x) | alpha);
+                for (; x < w; x++) d[x] = s[x] | 0xFF000000u;
+            }
         }
 
         // 180° rotation of a packed BGRA buffer IN PLACE: reverse the pixel array (swap 4-byte
