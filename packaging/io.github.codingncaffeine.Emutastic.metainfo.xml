@@ -65,7 +65,7 @@
   <releases>
     <release version="1.9.4" date="2026-10-27">
       <description>
-        <p>The original Xbox: a new Microsoft group run by Midway Verdant, Emutastic's own clean-room Xbox core
+        <p>The original Xbox, run by Midway Verdant, Emutastic's own clean-room Xbox core
            (bundled, and downloadable from Preferences → Cores). Frames are handed over on the GPU, the internal
            resolution goes up to 6x, and every core option is in Preferences → Core Options from the first run.</p>
       </description>
