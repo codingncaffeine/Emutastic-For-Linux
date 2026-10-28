@@ -14,6 +14,8 @@ namespace Emutastic.Services
         public string DisplayName { get; init; } = "";
         public string[] Systems   { get; init; } = [];
         public bool Recommended   { get; init; } = true;
+        // Where the zip comes from when it is not the libretro buildbot's (a core published by its own project). HTTPS only.
+        public string? ZipUrl     { get; init; }
     }
 
     public enum CoreStatus { NotInstalled, Installed, UpdateAvailable }
@@ -72,13 +74,18 @@ namespace Emutastic.Services
             new() { FileName = "fbneo_libretro.so",            DisplayName = "FBNeo (Final Burn Neo)", Systems = ["Arcade"],                            Recommended = true  },
             new() { FileName = "mame2003_plus_libretro.so",    DisplayName = "MAME 2003-Plus",         Systems = ["Arcade"],                            Recommended = true  },
             new() { FileName = "geolith_libretro.so",         DisplayName = "Geolith (Neo Geo / CD)", Systems = ["NeoGeo", "NeoCD"],                   Recommended = true  },
+
+            // Microsoft: Midway Verdant, Emutastic's own Xbox core. Not on the buildbot: its releases on GitHub (the newest
+            // published one). A copy also ships in BundledCores; a downloaded one in the Cores folder wins over it.
+            new() { FileName = "midway_verdant_libretro.so",   DisplayName = "Midway Verdant",        Systems = ["Xbox"],                              Recommended = true,
+                    ZipUrl = "https://github.com/codingncaffeine/Midway-Verdant/releases/latest/download/midway_verdant_libretro-linux-x86_64.zip" },
         };
 
         // ── Infrastructure ────────────────────────────────────────────────────
         private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromMinutes(10) };
         private const string BuildbotBase = "https://buildbot.libretro.com/nightly/linux/x86_64/latest/";
 
-        private string ZipUrl(string fileName) => BuildbotBase + fileName + ".zip";
+        private string ZipUrl(CoreEntry entry) => entry.ZipUrl ?? BuildbotBase + entry.FileName + ".zip";
 
         // ── Status check ──────────────────────────────────────────────────────
 
@@ -103,7 +110,7 @@ namespace Emutastic.Services
 
             try
             {
-                using var req = new HttpRequestMessage(HttpMethod.Head, ZipUrl(entry.FileName));
+                using var req = new HttpRequestMessage(HttpMethod.Head, ZipUrl(entry));
                 using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
                 if (resp.Content.Headers.LastModified is DateTimeOffset remote)
                 {
@@ -191,7 +198,7 @@ namespace Emutastic.Services
             Directory.CreateDirectory(coresFolder);
 
             string localPath = Path.Combine(coresFolder, entry.FileName);
-            string url       = ZipUrl(entry.FileName);
+            string url       = ZipUrl(entry);
             // Cores are native code we load in-process — only ever fetch them over
             // TLS from the official libretro buildbot. Fail closed if the base URL is
             // ever misconfigured to plain http.
