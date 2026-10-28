@@ -12,7 +12,8 @@ namespace Emutastic.Services
         string Description,
         long ExpectedSize,
         string? Md5,
-        string[]? AltMd5s = null); // other known-good dumps — drag-drop recognition only
+        string[]? AltMd5s = null,  // other known-good dumps — drag-drop recognition only
+        bool CreatedByCore = false); // the core makes it on the first launch (the Xbox hard disk): not missing before that
 
     /// <summary>
     /// Static BIOS manifest (verbatim from upstream PreferencesWindow.xaml.cs). Platform-neutral
@@ -43,7 +44,7 @@ namespace Emutastic.Services
             // Presence only, by name. The core creates a blank drive here on first launch when none exists (Drives 2
             // and 3 in its options are xbox_hdd_2.raw and xbox_hdd_3.raw); an 8 GB+ raw image under another name also works.
             // No size either: hashing 8 GB files would make the folder sweep crawl.
-            new("Xbox","Xbox","midway-verdant/xbox_hdd.raw","Hard-disk image (created automatically on first launch)",0,null),
+            new("Xbox","Xbox","midway-verdant/xbox_hdd.raw","Hard-disk image",0,null,CreatedByCore: true),
             // Sega CD
             new("SegaCD","Sega CD","bios_CD_U.bin","USA",131072,"2efd74e3232ff260e371b99f84024f7f"),
             new("SegaCD","Sega CD","bios_CD_J.bin","Japan",131072,"278a9397d192149e84e820ac621a8edd"),

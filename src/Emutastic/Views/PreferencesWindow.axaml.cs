@@ -1862,7 +1862,9 @@ public partial class PreferencesWindow : Window
         {
             var active = displays.Where(byDisplay.ContainsKey).ToList();
             if (active.Count == 0) continue;
-            int catFound = active.Sum(d => byDisplay[d].Count(FoundFor));
+            // A file the core makes on the first launch (the Xbox hard disk) does not count against the system.
+            bool Satisfied(Services.BiosEntry e) => e.CreatedByCore || FoundFor(e);
+            int catFound = active.Sum(d => byDisplay[d].Count(Satisfied));
             int catTotal = active.Sum(d => byDisplay[d].Count);
 
             var body = new StackPanel { Margin = new Thickness(0, 2, 0, 0) };
@@ -1879,7 +1881,7 @@ public partial class PreferencesWindow : Window
             foreach (var display in active)
             {
                 var entries = byDisplay[display];
-                int dFound = entries.Count(FoundFor);
+                int dFound = entries.Count(Satisfied);
 
                 var dBody = new StackPanel();
                 var dNest = MakeAccordionNest(dBody);
@@ -1963,8 +1965,9 @@ public partial class PreferencesWindow : Window
 
         // 5 columns (upstream layout): status icon · filename · description · size · MD5 (click to reveal).
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("24,Auto,*,Auto,Auto"), Margin = new Thickness(0) };
-        var icon = new TextBlock { Text = verified ? "✓" : "⚠", FontSize = 14, FontWeight = FontWeight.Bold, VerticalAlignment = VerticalAlignment.Center,
-            Foreground = new SolidColorBrush(Color.Parse(verified ? "#30D158" : "#E03535")) };
+        bool madeLater = !exists && entry.CreatedByCore;   // the core creates it on the first launch: neither found nor missing
+        var icon = new TextBlock { Text = verified ? "✓" : madeLater ? "○" : "⚠", FontSize = 14, FontWeight = FontWeight.Bold, VerticalAlignment = VerticalAlignment.Center,
+            Foreground = new SolidColorBrush(Color.Parse(verified ? "#30D158" : madeLater ? "#8E8E93" : "#E03535")) };
         Grid.SetColumn(icon, 0);
 
         // Sub-path entries show their System-folder relative path (e.g. GC/USA/IPL.bin)
@@ -1975,7 +1978,8 @@ public partial class PreferencesWindow : Window
         Grid.SetColumn(filename, 1);
 
         string descText = entry.Description;
-        if (!exists) descText += (descText.Length > 0 ? " — " : "") + "Missing";
+        if (madeLater) descText += (descText.Length > 0 ? " — " : "") + "made on the first launch";
+        else if (!exists) descText += (descText.Length > 0 ? " — " : "") + "Missing";
         else if (entry.Md5 != null && !verified) descText += (descText.Length > 0 ? " — " : "") + "Hash mismatch";
         else if (!inSys) descText += (descText.Length > 0 ? " — " : "") + "found in game folder";
         var desc = new TextBlock { Text = descText, FontSize = 12, FontFamily = Font("PrimaryFont"), Foreground = Brush("TextSecondaryBrush"),
