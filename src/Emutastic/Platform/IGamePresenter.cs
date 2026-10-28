@@ -42,6 +42,11 @@ namespace Emutastic.Platform
 
         // ── frame + events ─────────────────────────────────────────────────────────────────────
         bool Present(byte[] bgra, int frameW, int frameH);
+        // A Vulkan core's newest frame drawn from GPU memory (Platform/WlVulkan): 1 presented, 0 none yet, -1 this
+        // presenter cannot import it (the session reads frames back to the CPU instead). Only the own toplevel can.
+        int PresentVk(IntPtr vk) => -1;
+        // The GL objects imported from a Vulkan core's frames, before the presenter's GL context goes.
+        void ReleaseVk(IntPtr vk) { }
         void PumpEvents();
         void GetSize(out int w, out int h);
 

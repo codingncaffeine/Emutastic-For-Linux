@@ -137,6 +137,19 @@ namespace Emutastic.Emulator
         private byte[]? _hwBufA, _hwBufB;            // true double-buffer for HW readback (never write the front)
         private double _hwReadbackMs;                // smoothed glReadPixels readback cost (diagnostic)
 
+        // ── Vulkan hardware render (RETRO_HW_CONTEXT_VULKAN; Platform/WlVulkan). The core makes its device through its
+        //    negotiation interface on our instance and hands each frame over as a VkImage; the own-toplevel window draws
+        //    it from GPU memory, the other presenters (and the recorder) get it read back to the CPU. ──
+        const uint ENV_GET_HW_RENDER_INTERFACE = 41;                              // |EXPERIMENTAL on the wire (masked)
+        const uint ENV_SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE = 43;          // |EXPERIMENTAL
+        const uint ENV_GET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_SUPPORT = 73;  // |EXPERIMENTAL
+        private bool _hwVulkan;                      // SET_HW_RENDER asked for Vulkan and we took it
+        private IntPtr _vkNegotiation;               // the core's retro_hw_render_context_negotiation_interface_vulkan
+        private IntPtr _vk;                          // the WlVulkan context (InitHwRenderContext)
+        private volatile bool _vkGpuPresent = true;  // the window draws handed-over frames from GPU memory; false: CPU frames
+        private IntPtr _vkReadBuf; private int _vkReadBytes;   // native buffer the CPU frames are read back into
+        private bool _vkInReadback;                  // Video_cb re-entered with a read-back frame: the software path takes it
+
         private Thread? _thread;
         private volatile bool _running;
         private volatile bool _paused;
@@ -1079,7 +1092,21 @@ namespace Emutastic.Emulator
             // Tear down the HW-render context on THIS (emu) thread, where it's current. We deliberately do
             // NOT call the core's context_destroy (mupen/PPSSPP run async cleanup that crashes if we do —
             // per the per-core quirks); just drop our EGL context + FBO.
+            TeardownHwVulkan();
             if (_hwRenderActive) { try { Platform.HwGlContext.Destroy(); } catch { } _hwRenderActive = false; }
+        }
+
+        // A Vulkan core's device outlives its renderer: the game is unloaded here first (its report still logs), then
+        // the core's context_destroy, then our device and instance. Emu thread at the end of its loop, or Dispose.
+        private void TeardownHwVulkan()
+        {
+            if (!_hwVulkan) return;
+            _hwVulkan = false;
+            try { _core?.UnloadGame(); } catch { }
+            try { _hwContextDestroy?.Invoke(); } catch (Exception ex) { Trace.WriteLine($"[Emu] context_destroy threw: {ex.Message}"); }
+            try { Platform.WlVulkan.Destroy(_vk); } catch { }
+            _vk = IntPtr.Zero;
+            if (_vkReadBuf != IntPtr.Zero) { Marshal.FreeHGlobal(_vkReadBuf); _vkReadBuf = IntPtr.Zero; _vkReadBytes = 0; }
         }
 
         // Present thread: owns the GL window + context + event pump. Shows the latest produced frame at
@@ -1831,23 +1858,44 @@ namespace Emutastic.Emulator
 
                 // Present the latest frame every iteration; the shim's FIFO swap is the pace (re-presenting a
                 // duplicate on a slow frame is correct on Wayland). Copy under the lock — the emu ping-pongs.
-                byte[]? buf = null; int pw = 0, ph = 0;
-                lock (_frameLock)
+                // A Vulkan core's frames are drawn from GPU memory (WlVulkan): no copy, no upload. A GL that cannot import
+                // them (another GPU, no extension) turns that off for good; the emu thread reads frames back from then on.
+                bool drawnFromGpu = false;
+                if (_hwVulkan && _vkGpuPresent && _vk != IntPtr.Zero)
                 {
-                    if (_frame != null)
+                    int rc = _wlTop.PresentVk(_vk);
+                    if (rc < 0)
                     {
-                        pw = _frameW; ph = _frameH; int need = pw * ph * 4;
-                        if (_presentBuf == null || _presentBuf.Length != need) _presentBuf = new byte[need];
-                        System.Buffer.BlockCopy(_frame, 0, _presentBuf, 0, need);
-                        buf = _presentBuf;
-                        // Display cadence: this present shows a NEW game frame only when the seq
-                        // advanced since the last one we presented (the loop re-presents the latest
-                        // frame every vsync for the OSD, so most iterations are duplicates).
-                        if (_frameSeq != _lastPresentedSeq) { _lastPresentedSeq = _frameSeq; _displayFrameSample++; }
+                        _vkGpuPresent = false;
+                        Trace.WriteLine("[Emu] Vulkan frames: this GL cannot import them  14 read back to the CPU from now on");
+                    }
+                    else if (rc == 0) { Thread.Sleep(1); continue; }   // no frame yet
+                    else
+                    {
+                        lock (_frameLock) { if (_frameSeq != _lastPresentedSeq) { _lastPresentedSeq = _frameSeq; _displayFrameSample++; } }
+                        drawnFromGpu = true;
                     }
                 }
-                if (buf == null) { Thread.Sleep(1); continue; }   // no frame yet — input already pumped above
-                _wlTop.Present(buf, pw, ph);
+                if (!drawnFromGpu)
+                {
+                    byte[]? buf = null; int pw = 0, ph = 0;
+                    lock (_frameLock)
+                    {
+                        if (_frame != null)
+                        {
+                            pw = _frameW; ph = _frameH; int need = pw * ph * 4;
+                            if (_presentBuf == null || _presentBuf.Length != need) _presentBuf = new byte[need];
+                            System.Buffer.BlockCopy(_frame, 0, _presentBuf, 0, need);
+                            buf = _presentBuf;
+                            // Display cadence: this present shows a NEW game frame only when the seq
+                            // advanced since the last one we presented (the loop re-presents the latest
+                            // frame every vsync for the OSD, so most iterations are duplicates).
+                            if (_frameSeq != _lastPresentedSeq) { _lastPresentedSeq = _frameSeq; _displayFrameSample++; }
+                        }
+                    }
+                    if (buf == null) { Thread.Sleep(1); continue; }   // no frame yet — input already pumped above
+                    _wlTop.Present(buf, pw, ph);
+                }
 
                 // Screenshot collect: F12 armed the shim inside this Present's event pump, so the
                 // capture (displayed-res, pre-OSD) is ready right after the present that drew it.
@@ -1896,6 +1944,7 @@ namespace Emutastic.Emulator
             var w = _wlTop; _wlTop = null;
             if (w != null)
             {
+                if (_vk != IntPtr.Zero) { try { w.ReleaseVk(_vk); } catch { } }   // the imported Vulkan frames, while GL lives
                 w.KeyEvent -= OnGlKey; w.MouseMoved -= OnGlMouseMoved; w.MouseLeft -= OnGlMouseLeft;
                 try { w.Dispose(); } catch { }
             }
@@ -2024,6 +2073,19 @@ namespace Emutastic.Emulator
                     return true;
                 case ENV_SET_HW_RENDER:
                     return HandleSetHwRender(data);
+                case ENV_SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE:
+                    // The core's device creation (Vulkan): kept for InitHwRenderContext, which runs it on our instance.
+                    if (data == IntPtr.Zero || Marshal.ReadInt32(data, 0) != 0) return false;   // interface_type 0 = Vulkan
+                    _vkNegotiation = data;
+                    return true;
+                case ENV_GET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_SUPPORT:
+                    // { interface_type, interface_version }: Vulkan negotiation v2 (create_device2 through our wrapper).
+                    if (data != IntPtr.Zero) Marshal.WriteInt32(data, 4, Marshal.ReadInt32(data, 0) == 0 ? 2 : 0);
+                    return true;
+                case ENV_GET_HW_RENDER_INTERFACE:
+                    if (!_hwVulkan || _vk == IntPtr.Zero || data == IntPtr.Zero) return false;
+                    Marshal.WriteIntPtr(data, Platform.WlVulkan.Interface(_vk));
+                    return true;
                 case ENV_GET_VARIABLE:
                     return HandleGetVariable(data);
                 case 36: // RETRO_ENVIRONMENT_SET_MEMORY_MAPS (const retro_memory_map*)
@@ -2236,6 +2298,18 @@ namespace Emutastic.Emulator
         {
             if (data == IntPtr.Zero) return false;
             int ctxType = Marshal.ReadInt32(data, 0);
+            if (ctxType == 6 && _handler.AcceptsVulkanHwRender && Environment.GetEnvironmentVariable("EMUTASTIC_VULKAN_CORES") != "0")
+            {
+                // Vulkan (RETRO_HW_CONTEXT_VULKAN): the device is made in InitHwRenderContext through the core's
+                // negotiation interface, which it sets right after this call.
+                IntPtr vkReset = Marshal.ReadIntPtr(data, 8), vkDestroy = Marshal.ReadIntPtr(data, 48);
+                _hwContextReset   = vkReset   != IntPtr.Zero ? Marshal.GetDelegateForFunctionPointer<HwContextResetFn>(vkReset)   : null;
+                _hwContextDestroy = vkDestroy != IntPtr.Zero ? Marshal.GetDelegateForFunctionPointer<HwContextResetFn>(vkDestroy) : null;
+                _hwCtxType = ctxType;
+                _hwVulkan = true;
+                Trace.WriteLine("[Emu] SET_HW_RENDER Vulkan accepted: frames handed over as images");
+                return true;
+            }
             if (ctxType != 1 && ctxType != 2 && ctxType != 3 && ctxType != 4)
             {
                 Trace.WriteLine($"[Emu] SET_HW_RENDER context_type={ctxType} not supported yet (GL only in phase 1) — declining");
@@ -2265,6 +2339,21 @@ namespace Emutastic.Emulator
         // retro_load_game (av_info now valid → we size the FBO to the core's max geometry).
         private void InitHwRenderContext()
         {
+            if (_hwVulkan)
+            {
+                _vk = Platform.WlVulkan.Create(_vkNegotiation);
+                if (_vk == IntPtr.Zero)
+                {
+                    Trace.WriteLine("[Emu] Vulkan HW render: no device  14 the core will not draw");
+                    _hwVulkan = false;
+                    return;
+                }
+                // Only the own toplevel's GL context imports GPU frames; the other presenters get them read back.
+                _vkGpuPresent = _toplevelMode && _present == "gl" && _presentThreadMode;
+                Trace.WriteLine($"[Emu] Vulkan HW render ready ({(_vkGpuPresent ? "frames shown from GPU memory" : "frames read back to the CPU")}); calling context_reset");
+                try { _hwContextReset?.Invoke(); } catch (Exception ex) { Trace.WriteLine($"[Emu] context_reset threw: {ex}"); }
+                return;
+            }
             if (!_hwRenderActive) return;
             var geo = _core!.AvInfo.geometry;
             int maxW = (int)Math.Max(geo.max_width, geo.base_width);
@@ -3537,6 +3626,42 @@ namespace Emutastic.Emulator
 
         private unsafe void Video_cb(IntPtr data, uint width, uint height, UIntPtr pitch)
         {
+            // Vulkan core: the frame is an image on the GPU (data == RETRO_HW_FRAME_BUFFER_VALID). The own toplevel draws it
+            // from GPU memory; the other presenters and the recorder take it read back, through the software path below.
+            if (_hwVulkan && !_vkInReadback)
+            {
+                if (data != RETRO_HW_FRAME_BUFFER_VALID || width == 0 || height == 0 || _vk == IntPtr.Zero)
+                {
+                    System.Threading.Interlocked.Increment(ref _frameCountSample);
+                    System.Threading.Interlocked.Increment(ref _vidDupes);
+                    return;
+                }
+                System.Threading.Interlocked.Increment(ref _vidValid);
+                int vw = (int)width, vh = (int)height;
+                if (_vkGpuPresent && Platform.WlVulkan.Frame(_vk, vw, vh))
+                {
+                    lock (_frameLock) { _frameW = vw; _frameH = vh; _frameSeq++; }
+                    FrameReady?.Invoke();
+                }
+                if (!_vkGpuPresent || _recording != null)
+                {
+                    int bytes = vw * vh * 4;
+                    if (_vkReadBytes < bytes)
+                    {
+                        if (_vkReadBuf != IntPtr.Zero) Marshal.FreeHGlobal(_vkReadBuf);
+                        _vkReadBuf = Marshal.AllocHGlobal(bytes);
+                        _vkReadBytes = bytes;
+                    }
+                    if (Platform.WlVulkan.ReadBack(_vk, _vkReadBuf, _vkReadBytes, vw, vh))
+                    {
+                        _vkInReadback = true;   // XRGB8888 rows: the software path converts, publishes and records it
+                        try { Video_cb(_vkReadBuf, width, height, (UIntPtr)(uint)(vw * 4)); } finally { _vkInReadback = false; }
+                        return;
+                    }
+                }
+                System.Threading.Interlocked.Increment(ref _frameCountSample);
+                return;
+            }
             // HW-rendered core: the frame lives in our GL FBO (data == RETRO_HW_FRAME_BUFFER_VALID). Read it
             // back to BGRA; data==0 means "duplicate, nothing new". Runs inside retro_run on the emu thread,
             // where the HW context is current. The SW pixel-copy path below is never used by HW cores.
@@ -4270,6 +4395,7 @@ namespace Emutastic.Emulator
             try { _overlay?.Dispose(); } catch { }   // present thread joined → safe to tear down Vulkan + X Display
             _overlay = null;
             _vulkanOk = false;
+            TeardownHwVulkan();   // the run modes that did not already (before the core goes)
             _audio?.Dispose();
             _input.Dispose();
             _core?.Dispose();

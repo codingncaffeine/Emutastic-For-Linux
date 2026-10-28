@@ -20,10 +20,12 @@ gcc -shared -fPIC -O2 \
     wl_shader.c \
     wl_present.c \
     wl_hwgl.c \
+    wl_hwvk.c \
     xdg-shell-protocol.c \
     xdg-decoration-unstable-v1-protocol.c \
     cursor-shape-v1-protocol.c \
     tablet-unstable-v2-protocol.c \
+    -Ithird_party/vulkan-headers/include -Ithird_party/libretro \
     -o libwlpresent.so \
     $(pkg-config --cflags --libs wayland-client wayland-egl egl gl x11 libpng) -lm
 

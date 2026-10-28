@@ -3,8 +3,9 @@ using System.Collections.Generic;
 namespace Emutastic.Services.ConsoleHandlers
 {
     /// <summary>
-    /// Handler for the original Xbox (Midway Verdant, midway_verdant_libretro). The core renders on its own
-    /// Vulkan device and hands over a software XRGB8888 frame, so no HW-render context is involved. Four pad
+    /// Handler for the original Xbox (Midway Verdant, midway_verdant_libretro). The core renders with Vulkan on a
+    /// device made through its negotiation interface on our instance, and hands each frame over as a Vulkan image
+    /// (drawn from GPU memory; read back to the CPU where a presenter cannot import it). Four pad
     /// ports, each a RetroPad with both sticks; the picture is 4:3 (the console's 640x480 scanout, times the
     /// internal resolution).
     /// </summary>
@@ -15,6 +16,8 @@ namespace Emutastic.Services.ConsoleHandlers
         public override string ConsoleName => "Xbox";
 
         public override bool UsesAnalogStick => true;
+        // Midway Verdant renders with Vulkan; at a high internal resolution its frames are tens of MB, shown from GPU memory.
+        public override bool AcceptsVulkanHwRender => true;
 
         public override void ConfigureControllerPorts(LibretroCore core)
         {

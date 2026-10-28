@@ -42,6 +42,8 @@ namespace Emutastic.Platform
 
         [DllImport(LIB)] static extern IntPtr wlp_create(int w, int h, [MarshalAs(UnmanagedType.LPUTF8Str)] string title);
         [DllImport(LIB)] static extern int wlp_present(IntPtr h, IntPtr bgra, int frameW, int frameH);
+        [DllImport(LIB)] static extern int wlp_present_vk(IntPtr h, IntPtr vk);
+        [DllImport(LIB)] static extern void wlp_release_vk(IntPtr vk);
         [DllImport(LIB)] static extern int wlp_poll(IntPtr h);
         [DllImport(LIB)] static extern int wlp_poll_event(IntPtr h, out int type, out int a, out int b);
         [DllImport(LIB)] static extern void wlp_set_overlay(IntPtr h, IntPtr rgba, int w, int hh);
@@ -134,6 +136,21 @@ namespace Emutastic.Platform
             LastSwapMs = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
             return rc == 0;
         }
+
+        /// <summary>The newest frame a Vulkan core handed over, drawn from GPU memory (WlVulkan): 1 presented, 0 no frame
+        /// yet, -1 this GL cannot import it (present CPU frames instead). Present thread.</summary>
+        public int PresentVk(IntPtr vk)
+        {
+            if (_h == IntPtr.Zero) return -1;
+            PumpEvents();
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            int rc = wlp_present_vk(_h, vk);
+            LastSwapMs = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            return rc;
+        }
+
+        /// <summary>The GL objects imported from a Vulkan core's frames, before this window's GL context goes. Present thread.</summary>
+        public void ReleaseVk(IntPtr vk) { if (vk != IntPtr.Zero) wlp_release_vk(vk); }
 
         /// <summary>Drain Wayland events (keyboard/mouse/close) without presenting. Emu/present thread.</summary>
         public void PumpEvents()

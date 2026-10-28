@@ -14,6 +14,27 @@ void* wlp_create(int w, int h, const char* title);
 // Returns 0 on success, <0 on error/closed.
 int wlp_present(void* h, const void* bgra, int frameW, int frameH);
 
+// The same present drawn from an existing GL texture (no upload): a GPU frame imported from a Vulkan core
+// (wl_hwvk.c). Present-thread only. wlp_shader_smooth: whether the "Smooth" preset (linear filtering) is on.
+int wlp_present_tex(void* h, unsigned tex, int frameW, int frameH);
+int wlp_shader_smooth(void* h);
+
+// ── Vulkan hardware render for libretro cores (RETRO_HW_CONTEXT_VULKAN) — see wl_hwvk.c ──
+// Emu thread: wlvk_create runs the core's context negotiation (NULL: none) on our instance and returns the
+// context (NULL on failure); wlvk_interface is the retro_hw_render_interface_vulkan for GET_HW_RENDER_INTERFACE;
+// wlvk_frame takes the image the core handed over this frame (1 = a frame for the window); wlvk_readback copies
+// it to the CPU as XRGB8888 (*w x *hh in, max_bytes) for the recorder or a window GL cannot share with;
+// wlvk_destroy after the core's context_destroy.
+void* wlvk_create(const void* negotiation);
+const void* wlvk_interface(void* vk);
+int wlvk_frame(void* vk, int w, int hh);
+int wlvk_readback(void* vk, void* xrgb, int max_bytes, int* w, int* hh);
+void wlvk_destroy(void* vk);
+// Present thread: the newest handed-over frame drawn from GPU memory (1), none yet (0), or -1 when this GL cannot
+// import it (the caller presents wlvk_readback frames instead). wlp_release_vk before the GL context goes.
+int wlp_present_vk(void* wlp, void* vk);
+void wlp_release_vk(void* vk);
+
 // Pump pending Wayland events (configure/ping/close/resize). Returns 1 if close requested, else 0.
 int wlp_poll(void* h);
 

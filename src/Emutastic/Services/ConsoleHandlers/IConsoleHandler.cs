@@ -94,6 +94,13 @@ namespace Emutastic.Services.ConsoleHandlers
         bool ForceCompatibilityGlProfile { get; }
 
         /// <summary>
+        /// Accept a core's request for a Vulkan context (SET_HW_RENDER type 6): its frames reach the window from GPU
+        /// memory (Platform/WlVulkan). Off by default: cores that try Vulkan first and fall back to GL when declined
+        /// (Dolphin, Flycast, mupen64plus-next, PPSSPP, the PS1 HW renderers) keep the GL engine they run on.
+        /// </summary>
+        bool AcceptsVulkanHwRender { get; }
+
+        /// <summary>
         /// Pace the decoupled emu loop by AUDIO BACKPRESSURE (block until the audio queue drains to
         /// the target cushion) instead of by Thread.Sleep to a computed per-frame budget. RetroArch's
         /// model (runloop_iterate audio_sync path): the device drains at realtime, so blocking on it

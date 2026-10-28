@@ -511,8 +511,6 @@ int wlp_set_glslp(void *h, const char *presetPath) {
 int wlp_present(void *h, const void *bgra, int fw, int fh) {
     wlp *s = h;
     if (!s || s->closed || fw <= 0 || fh <= 0) return -1;
-    wl_display_dispatch_pending(s->dpy);
-
     glBindTexture(GL_TEXTURE_2D, s->tex);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     if (fw != s->texw || fh != s->texh) {
@@ -520,6 +518,23 @@ int wlp_present(void *h, const void *bgra, int fw, int fh) {
         s->texw = fw; s->texh = fh;
     } else {
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, fw, fh, GL_BGRA, GL_UNSIGNED_BYTE, bgra);
+    }
+    return wlp_present_tex(h, s->tex, fw, fh);
+}
+
+int wlp_shader_smooth(void *h) { wlp *s = h; return s && s->shader_preset == 6; }
+
+// The game drawn from `tex` (fw x fh): the uploaded CPU frame, or a GPU frame a Vulkan core handed over (wl_hwvk.c).
+int wlp_present_tex(void *h, unsigned tex, int fw, int fh) {
+    wlp *s = h;
+    if (!s || s->closed || fw <= 0 || fh <= 0) return -1;
+    wl_display_dispatch_pending(s->dpy);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    if (tex != s->tex) {
+        // An imported texture takes the built-in preset's filtering too (the cog's "Smooth" = linear).
+        GLint f = (s->shader_preset == 6) ? GL_LINEAR : GL_NEAREST;
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, f);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, f);
     }
 
     glViewport(0, 0, s->w, s->h);
@@ -557,7 +572,7 @@ int wlp_present(void *h, const void *bgra, int fw, int fh) {
     // plain/built-in path (and drop the chain so we don't retry every frame).
     int chainDrew = 0;
     if (s->glslp) {
-        chainDrew = sc_draw(s->glslp, s->tex, fw, fh, qx, qy, qw, qh);
+        chainDrew = sc_draw(s->glslp, tex, fw, fh, qx, qy, qw, qh);
         if (!chainDrew) { sc_free(s->glslp); s->glslp = NULL; }
         glViewport(qx, qy, qw, qh);   // restore for the deco layers below
     }
