@@ -75,6 +75,13 @@ sealed class Program
         // Dev-only: cloud-sync credential storage against this session's desktop keyring —
         // `Emutastic --selftest-secrets --portable` (run the apphost so PortableData lands beside
         // it). Throwaway items only, removed afterwards. Exit 0 = pass, 1 = fail, 2 = incomplete.
+        // The bundled Midway Verdant core's options into CoreOptions/ with no game run: `Emutastic --selftest-bundled-options
+        // --portable` from a fresh copy of the build. Exit 0 = pass, 1 = fail, 2 = incomplete.
+        if (args.Length >= 1 && args[0] == "--selftest-bundled-options")
+        {
+            Environment.Exit(Emutastic.Services.BundledOptionsSelfTest.Run());
+            return;
+        }
         if (args.Length >= 1 && args[0] == "--selftest-secrets")
         {
             Environment.Exit(Emutastic.Platform.SecretStoreSelfTest.Run());

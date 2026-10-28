@@ -215,6 +215,11 @@ public partial class App : Application
             // same files). Background thread: this can run real ffmpeg encodes.
             if (files.Length < 2)
                 System.Threading.Tasks.Task.Run(Services.RecordingService.RecoverInterrupted);
+
+            // The bundled cores' options (Midway Verdant) into Preferences → Core Options before any game has run.
+            // Library launches only; on the thread pool.
+            if (files.Length < 2)
+                _ = Services.BundledCoreOptionsProbe.EnsureAsync();
         }
 
         base.OnFrameworkInitializationCompleted();

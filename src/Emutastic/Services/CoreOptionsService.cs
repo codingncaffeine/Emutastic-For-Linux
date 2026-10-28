@@ -58,11 +58,17 @@ namespace Emutastic.Services
                 "bluemsx" => "blueMSX", "vecx" => "Vecx", "opera" => "Opera (3DO)", "same_cdi" => "SAME CDi",
                 "fbneo" => "FBNeo (Final Burn Neo)", "geolith" => "Geolith (Neo Geo)",
                 "mame2003_plus" => "MAME 2003-Plus", "mednafen_psx_hw" => "Mednafen PSX HW (Beetle)",
+                "midway_verdant" => "Midway Verdant",
                 _ => name.Length == 0 ? name : char.ToUpper(name[0]) + name[1..].Replace("_", " "),
             };
         }
 
         // ── Schema ────────────────────────────────────────────────────────────────
+
+        public string SchemaPath(string coreName) => Path.Combine(_dir, $"{coreName}.schema.json");
+
+        /// <summary>The console a core serves, for a schema saved without a game (the bundled cores' probe).</summary>
+        public static string ConsoleFor(string coreName) => _coreToConsole.TryGetValue(coreName, out var c) ? c : "";
 
         public void SaveSchema(string coreName, CoreOptionsSchema schema)
         {

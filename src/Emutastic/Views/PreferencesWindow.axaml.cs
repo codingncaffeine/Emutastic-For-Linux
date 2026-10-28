@@ -958,6 +958,15 @@ public partial class PreferencesWindow : Window
         _selectedCoreOptionsName = "";
         _pendingCoreOptionValues = new();
 
+        // The bundled cores' options are read in the background at start-up: if that is still running, the list is
+        // built again when it is done (on the UI thread, and only while this panel is still the one shown).
+        var probe = Services.BundledCoreOptionsProbe.EnsureAsync();
+        if (!probe.IsCompleted)
+            _ = probe.ContinueWith(_ => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                if (this.FindControl<Grid>("PanelCoreOptions") is { IsVisible: true }) BuildCoreOptionsTab();
+            }));
+
         var cores = _coreOptions.GetCoresWithSchema();
         if (cores.Count == 0)
         {
