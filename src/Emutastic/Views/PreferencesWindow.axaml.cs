@@ -2056,7 +2056,11 @@ public partial class PreferencesWindow : Window
             return (imported, skipped);
         });
 
-        if (result.imported > 0) BuildBiosPanel(); // rescan + repaint
+        if (result.imported > 0)
+        {
+            BuildBiosPanel();                        // rescan + repaint
+            LibraryWindow?.EnsureBuiltInEntries();   // e.g. the C64's BASIC entry once its ROMs are in
+        }
         string summary = result.imported > 0
             ? $"Imported {result.imported} file{(result.imported == 1 ? "" : "s")}" + (result.skipped > 0 ? $" ({result.skipped} skipped)" : "")
             : "No BIOS files recognized";

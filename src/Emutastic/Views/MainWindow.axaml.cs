@@ -1092,6 +1092,7 @@ public partial class MainWindow : Window
         Task.Run(() =>
         {
             var swReload = Services.StartupTrace.Start();
+            Services.C64BasicEntry.Ensure(_db!);   // the C64's BASIC entry, once its ROMs are in
             _vm.Reload();
             Services.StartupTrace.Stop("MainWindow.LibraryReload", swReload);
             Dispatcher.UIThread.Post(() =>
@@ -1649,6 +1650,17 @@ public partial class MainWindow : Window
     }
 
     // ── Collections sidebar ──────────────────────────────────────────────────
+    /// <summary>After system files arrive: adds the built-in entries they make possible (Commodore 64 BASIC)
+    /// and shows them.</summary>
+    public async void EnsureBuiltInEntries()
+    {
+        if (_db == null || _vm == null) return;
+        if (!await Task.Run(() => Services.C64BasicEntry.Ensure(_db))) return;
+        await Task.Run(() => _vm.Reload());
+        await _vm.FilterGamesAsync();
+        BuildConsoleSidebar();
+    }
+
     public void RefreshCollectionsSidebar()
     {
         var panel = this.FindControl<StackPanel>("UserCollectionsPanel");

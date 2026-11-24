@@ -525,6 +525,16 @@ namespace Emutastic.Services
 
             System.Diagnostics.Trace.WriteLine($"LoadGame: ROM exists, size={new FileInfo(romPath).Length} bytes");
 
+            // A built-in entry that starts the machine with nothing in it (the Commodore 64's BASIC prompt): its
+            // library file is a marker, and the core is started with no content, as libretro's "no game" start.
+            if (IsNoContentMarker(romPath))
+            {
+                bool started = _retro_load_game?.Invoke(IntPtr.Zero) ?? false;
+                System.Diagnostics.Trace.WriteLine($"LoadGame: no content (built-in entry) — retro_load_game returned {started}");
+                if (started) ReadAvInfo();
+                return started;
+            }
+
             bool needFullPath = SystemInfo.need_fullpath;
 
             // ROM-hack soft-patching is a memory-buffer operation. Cores that load
@@ -616,56 +626,7 @@ namespace Emutastic.Services
 
                 System.Diagnostics.Trace.WriteLine($"LoadGame: retro_load_game returned {result}");
 
-                if (result)
-                {
-                    int avInfoSize = Marshal.SizeOf<retro_system_av_info>();
-                    IntPtr avInfoPtr = Marshal.AllocHGlobal(avInfoSize);
-
-                    try
-                    {
-                        // Zero it first
-                        for (int i = 0; i < avInfoSize; i++)
-                            Marshal.WriteByte(avInfoPtr, i, 0);
-
-                        _retro_get_system_av_info?.Invoke(avInfoPtr);
-                        _avInfo = Marshal.PtrToStructure<retro_system_av_info>(avInfoPtr);
-
-                        System.Diagnostics.Debug.WriteLine(
-                            $"Game loaded. Resolution: {_avInfo.geometry.base_width}x{_avInfo.geometry.base_height}" +
-                            $", AR: {_avInfo.geometry.aspect_ratio}, FPS: {_avInfo.timing.fps}");
-
-                        // Sanitise geometry
-                        if (_avInfo.geometry.base_width == 0 || _avInfo.geometry.base_height == 0 ||
-                            _avInfo.geometry.base_width > 4096 || _avInfo.geometry.base_height > 4096)
-                        {
-                            System.Diagnostics.Debug.WriteLine("Invalid resolution — using 640x480 fallback");
-                            _avInfo.geometry.base_width = 640;
-                            _avInfo.geometry.base_height = 480;
-                            _avInfo.geometry.max_width = 640;
-                            _avInfo.geometry.max_height = 480;
-                        }
-
-                        // Sanitise FPS
-                        if (double.IsNaN(_avInfo.timing.fps) || double.IsInfinity(_avInfo.timing.fps) ||
-                            _avInfo.timing.fps <= 0 || _avInfo.timing.fps > 1000)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"Invalid FPS {_avInfo.timing.fps} — using 60");
-                            _avInfo.timing.fps = 60.0;
-                        }
-
-                        // Sanitise sample rate
-                        if (_avInfo.timing.sample_rate <= 0 || _avInfo.timing.sample_rate > 192000)
-                            _avInfo.timing.sample_rate = 44100;
-
-                        System.Diagnostics.Debug.WriteLine(
-                            $"Final AV: {_avInfo.geometry.base_width}x{_avInfo.geometry.base_height}" +
-                            $" @ {_avInfo.timing.fps:F3} fps, {_avInfo.timing.sample_rate} Hz");
-                    }
-                    finally
-                    {
-                        Marshal.FreeHGlobal(avInfoPtr);
-                    }
-                }
+                if (result) ReadAvInfo();
                 return result;
             }
             catch (Exception ex)
@@ -674,6 +635,62 @@ namespace Emutastic.Services
                 return false;
             }
         }
+
+        /// <summary>Reads the loaded game's video/audio timing from the core and makes it sane it.</summary>
+        private void ReadAvInfo()
+        {
+            int avInfoSize = Marshal.SizeOf<retro_system_av_info>();
+            IntPtr avInfoPtr = Marshal.AllocHGlobal(avInfoSize);
+
+            try
+            {
+                // Zero it first
+                for (int i = 0; i < avInfoSize; i++)
+                    Marshal.WriteByte(avInfoPtr, i, 0);
+
+                _retro_get_system_av_info?.Invoke(avInfoPtr);
+                _avInfo = Marshal.PtrToStructure<retro_system_av_info>(avInfoPtr);
+
+                System.Diagnostics.Debug.WriteLine(
+                    $"Game loaded. Resolution: {_avInfo.geometry.base_width}x{_avInfo.geometry.base_height}" +
+                    $", AR: {_avInfo.geometry.aspect_ratio}, FPS: {_avInfo.timing.fps}");
+
+                // Sanitize geometry
+                if (_avInfo.geometry.base_width == 0 || _avInfo.geometry.base_height == 0 ||
+                    _avInfo.geometry.base_width > 4096 || _avInfo.geometry.base_height > 4096)
+                {
+                    System.Diagnostics.Debug.WriteLine("Invalid resolution — using 640x480 fallback");
+                    _avInfo.geometry.base_width = 640;
+                    _avInfo.geometry.base_height = 480;
+                    _avInfo.geometry.max_width = 640;
+                    _avInfo.geometry.max_height = 480;
+                }
+
+                // Sanitize FPS
+                if (double.IsNaN(_avInfo.timing.fps) || double.IsInfinity(_avInfo.timing.fps) ||
+                    _avInfo.timing.fps <= 0 || _avInfo.timing.fps > 1000)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Invalid FPS {_avInfo.timing.fps} — using 60");
+                    _avInfo.timing.fps = 60.0;
+                }
+
+                // Sanitize sample rate
+                if (_avInfo.timing.sample_rate <= 0 || _avInfo.timing.sample_rate > 192000)
+                    _avInfo.timing.sample_rate = 44100;
+
+                System.Diagnostics.Debug.WriteLine(
+                    $"Final AV: {_avInfo.geometry.base_width}x{_avInfo.geometry.base_height}" +
+                    $" @ {_avInfo.timing.fps:F3} fps, {_avInfo.timing.sample_rate} Hz");
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(avInfoPtr);
+            }
+        }
+
+        /// <summary>A library file that stands for "start the core with no content" (a built-in entry).</summary>
+        public static bool IsNoContentMarker(string path) =>
+            path.EndsWith(".nocontent", StringComparison.OrdinalIgnoreCase);
 
         public void SetControllerPortDevice(uint port, uint device)
         {
