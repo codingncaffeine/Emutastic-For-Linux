@@ -894,7 +894,7 @@ namespace Emutastic.Services
                 || p.EndsWith(".srm", StringComparison.OrdinalIgnoreCase)) return false;
             string rest = p["BatterySaves/".Length..];
             int slash = rest.IndexOf('/');
-            return slash > 0 && IsExcludedSavePath(rest[(slash + 1)..]);
+            return slash > 0 && IsExcludedSavePath(rest[..slash], rest[(slash + 1)..]);
         }
 
         // BIOS files, by the names System Files knows them under. They belong in the System folder,
@@ -903,10 +903,25 @@ namespace Emutastic.Services
         private static readonly HashSet<string> BiosFileNames =
             KnownBios.All.Select(b => Path.GetFileName(b.Filename)).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        private static bool IsExcludedSavePath(string rel)
+        // Commodore 64 hard drives are whole disks (a CMD HD image is up to 4 GB; the folder drive
+        // is a folder the user fills with any files): too big for a backup of saves. The folder
+        // drive is "<game> Drive/" in the console folder; CMD HD images are .dhd, and the extra
+        // SCSI units beside one are .s<id><lun>.
+        private static bool IsC64HardDrive(string console, string[] segs)
+        {
+            if (!console.Equals("C64", StringComparison.OrdinalIgnoreCase)) return false;
+            if (segs.Length > 1 && segs[0].EndsWith(" Drive", StringComparison.OrdinalIgnoreCase)) return true;
+            string ext = Path.GetExtension(segs[^1]);
+            return ext.Equals(".dhd", StringComparison.OrdinalIgnoreCase)
+                || (ext.Length == 4 && (ext[1] == 's' || ext[1] == 'S')
+                    && ext[2] >= '0' && ext[2] <= '7' && ext[3] >= '0' && ext[3] <= '7');
+        }
+
+        private static bool IsExcludedSavePath(string console, string rel)
         {
             if (rel.EndsWith(".srm", StringComparison.OrdinalIgnoreCase)) return true;
             string[] segs = rel.Split('/', '\\');
+            if (IsC64HardDrive(console, segs)) return true;
             if (BiosFileNames.Contains(segs[^1])) return true;
             bool underTitle = false;
             for (int i = 0; i < segs.Length; i++)
@@ -963,7 +978,7 @@ namespace Emutastic.Services
                                  baseDir, "*", SearchOption.AllDirectories))
                     {
                         string rel = Path.GetRelativePath(consoleDir, full);
-                        if (IsExcludedSavePath(rel)) continue;
+                        if (IsExcludedSavePath(console, rel)) continue;
 
                         var fi = new FileInfo(full);
                         string repoPath = $"BatterySaves/{console}/{rel.Replace('\\', '/')}";
@@ -992,7 +1007,7 @@ namespace Emutastic.Services
             if (slash <= 0) return false;
             string console = rest[..slash];
             string rel = rest[(slash + 1)..];
-            if (rel.Length == 0 || IsUnsupportedConsole(console) || IsExcludedSavePath(rel)) return false;
+            if (rel.Length == 0 || IsUnsupportedConsole(console) || IsExcludedSavePath(console, rel)) return false;
 
             localPath = Path.Combine(
                 AppPaths.GetFolder("Saves", console),
