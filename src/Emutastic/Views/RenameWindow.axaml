@@ -8,7 +8,7 @@
         Background="{DynamicResource BgPrimaryBrush}"
         Title="Rename Game">
     <StackPanel Margin="20" Spacing="14">
-        <TextBlock Text="Rename game" FontFamily="{DynamicResource PrimaryFont}" FontSize="15" FontWeight="Bold"
+        <TextBlock Name="HeadingText" Text="Rename game" FontFamily="{DynamicResource PrimaryFont}" FontSize="15" FontWeight="Bold"
                    Foreground="{DynamicResource TextPrimaryBrush}"/>
         <TextBox Name="TitleBox"/>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">

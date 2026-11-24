@@ -1816,12 +1816,42 @@ public partial class MainWindow : Window
         _importer.ImportFilesAsync(candidates, console);
     }
 
+    /// <summary>Asks for a name, writes an empty C64 floppy (formatted D64) or tape (TAP) and adds it to the
+    /// library: started, a floppy is at READY and a tape is ready to record.</summary>
+    private async Task AddBlankC64MediaAsync(bool tape)
+    {
+        string? name = await new RenameWindow(tape ? "My Tape" : "My Disk",
+            tape ? "Name the new tape" : "Name the new floppy disk", "Create").ShowDialog<string?>(this);
+        if (string.IsNullOrWhiteSpace(name)) return;
+        string path = await Task.Run(() => tape ? Services.C64BlankMedia.CreateTape(name) : Services.C64BlankMedia.CreateDisk(name));
+        Action? onDrained = null;
+        onDrained = () =>
+        {
+            _importer!.ImportQueueDrained -= onDrained;
+            Dispatcher.UIThread.Post(async () =>
+            {
+                await Task.Run(() => _vm!.Reload());
+                await _vm!.FilterGamesAsync();
+                _vm.SetStatus($"Added the blank {(tape ? "tape" : "floppy")} \"{name.Trim()}\" to the library.", autoClear: true);
+            });
+        };
+        _importer!.ImportQueueDrained += onDrained;
+        _importer.ImportFilesAsync(new[] { path }, "C64");
+    }
+
     private ContextMenu BuildGameContextMenu(Game game)
     {
         var menu = new ContextMenu();
         var items = menu.Items;
 
         items.Add(MenuAction("▶  Play Game", () => LaunchGame(game)));
+
+        // Commodore 64: new, empty media to save programs to (each becomes a library entry of its own).
+        if (string.Equals(game.Console, "C64", StringComparison.OrdinalIgnoreCase))
+        {
+            items.Add(MenuAction("💾  New Blank Floppy Disk…", () => RunGuarded(() => AddBlankC64MediaAsync(tape: false))));
+            items.Add(MenuAction("📼  New Blank Tape…", () => RunGuarded(() => AddBlankC64MediaAsync(tape: true))));
+        }
 
         // ── Play Save State submenu (first 10, newest first — matches upstream) ──
         var saveStateItem = new MenuItem { Header = "⏱  Play Save State" };

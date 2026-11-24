@@ -8,9 +8,13 @@ public partial class RenameWindow : Window
 {
     public RenameWindow() : this("") { }
 
-    public RenameWindow(string currentTitle)
+    /// <param name="heading">Replaces the window's "Rename game" title and heading.</param>
+    /// <param name="okLabel">Replaces the "Rename" button's text.</param>
+    public RenameWindow(string currentTitle, string? heading = null, string? okLabel = null)
     {
         InitializeComponent();
+        if (heading != null) { Title = heading; this.FindControl<TextBlock>("HeadingText")!.Text = heading; }
+        if (okLabel != null) this.FindControl<Button>("OkButton")!.Content = okLabel;
         var box = this.FindControl<TextBox>("TitleBox")!;
         box.Text = currentTitle;
         box.SelectAll();
