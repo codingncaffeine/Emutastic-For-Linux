@@ -391,6 +391,7 @@ namespace Emutastic.Emulator
         // A computer's keyboard (IConsoleHandler.ReadsKeyboard): which RETROK keys are down, written by the
         // window's key events, read by the core through RETRO_DEVICE_KEYBOARD.
         private readonly bool[] _retroKeys = new bool[Services.SdlRetroKeys.Count];
+        private int _kbdDiag, _kbdReadDiag, _padDiag;   // the first few key events, key reads and pad values, logged
         const int SC_F12 = 69, SC_PRINTSCREEN = 70;
 
         // Emu-thread handler for the GL window's keyboard: (SDL scancode, SDL keycode or -1, down).
@@ -411,6 +412,7 @@ namespace Emutastic.Emulator
                 // A computer: the key goes to the machine; only keys it lacks stay frontend keys.
                 uint rk = Services.SdlRetroKeys.ToRetro(scancode);
                 if (rk != 0 && rk < _retroKeys.Length) _retroKeys[rk] = down;
+                if (_kbdDiag < 40) { _kbdDiag++; Trace.WriteLine($"[Keyboard] scancode {scancode} -> key {rk} {(down ? "down" : "up")}"); }
                 if (!down) return;
                 switch (scancode)
                 {
@@ -2709,7 +2711,7 @@ namespace Emutastic.Emulator
             if (device == 3)
             {
                 bool k = port == 0 && _handler.ReadsKeyboard && id < _retroKeys.Length && _retroKeys[id];
-                if (k && _testType != null) Trace.WriteLine($"[TestType] core read key {id} down");
+                if (k && _kbdReadDiag < 20) { _kbdReadDiag++; Trace.WriteLine($"[Keyboard] the core read key {id}: down"); }
                 return k ? 1 : 0;
             }
 
@@ -2717,7 +2719,7 @@ namespace Emutastic.Emulator
                 && id == LibretroInput.JOYPAD_L && _fdsSideChangeFrames > 0)
                 return 1;
             int v = _input.GetInputState(port, device, index, id);
-            if (v != 0 && _testType != null && _testDiag++ < 20) Trace.WriteLine($"[TestType] pad port {port} device {device} index {index} id {id} = {v}");
+            if (v != 0 && _handler.ReadsKeyboard && _padDiag < 20) { _padDiag++; Trace.WriteLine($"[Pad] port {port} device {device} index {index} id {id} = {v}"); }
             // Turbo gate (upstream's TurboGate): a held turbo button reports pressed only during the
             // duty window of each period, auto-releasing for the rest (~10Hz at 60fps). Snapshot the
             // set reference once — toggles swap in a fresh set, so this read is tear-free.
@@ -3936,7 +3938,6 @@ namespace Emutastic.Emulator
         // letters, digits, space, and \n for RETURN; " is typed as SHIFT+2 (the C64's place for it).
         private readonly string? _testType = Environment.GetEnvironmentVariable("EMUTASTIC_TEST_TYPE");
         private int _testPolls;
-        private int _testDiag;
         private void TestTypeStep()
         {
             int colon = _testType!.IndexOf(':');

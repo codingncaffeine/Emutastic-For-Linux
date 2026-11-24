@@ -120,6 +120,10 @@ namespace Emutastic.Platform
             /// and tablets report), and reading it as one holds a stick pushed into a corner for good.
             /// </summary>
             public bool[] AxisRestsAtEnd { get; internal set; } = new bool[4];
+            // The same, seen in use (SDL has no initial state for some devices): the first value read, and
+            // whether the axis has moved from it since.
+            internal readonly short[] AxisFirst = new short[4];
+            internal readonly bool[] AxisSeen = new bool[4], AxisMoved = new bool[4];
             public override string ToString() => Id;
         }
 
@@ -272,7 +276,18 @@ namespace Emutastic.Platform
             switch (axis)
             {
                 case AXIS_LEFTX: case AXIS_LEFTY: case AXIS_RIGHTX: case AXIS_RIGHTY:
-                    return axis < d.NumAxes && !d.AxisRestsAtEnd[axis] ? SDL_GetJoystickAxis(d.Joystick, axis) : (short)0;
+                {
+                    if (axis >= d.NumAxes || d.AxisRestsAtEnd[axis]) return 0;
+                    short v = SDL_GetJoystickAxis(d.Joystick, axis);
+                    if (!d.AxisSeen[axis]) { d.AxisSeen[axis] = true; d.AxisFirst[axis] = v; }
+                    else if (!d.AxisMoved[axis] && v != d.AxisFirst[axis])
+                    {
+                        d.AxisMoved[axis] = true;
+                        Services.ControllerDiagLog.Write($"[devices] \"{d.Name}\" axis {axis} moved from {d.AxisFirst[axis]}: read as a stick from now on");
+                    }
+                    // An axis that sits at an end of its range and has never moved is not a stick.
+                    return !d.AxisMoved[axis] && Math.Abs((int)d.AxisFirst[axis]) > 30000 ? (short)0 : v;
+                }
                 case AXIS_LTRIG: return RawBtn(d, RawSpareL2) ? (short)32767 : (short)0;
                 case AXIS_RTRIG: return RawBtn(d, RawSpareR2) ? (short)32767 : (short)0;
                 default: return 0;
