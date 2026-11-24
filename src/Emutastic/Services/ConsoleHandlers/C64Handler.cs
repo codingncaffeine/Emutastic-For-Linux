@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace Emutastic.Services.ConsoleHandlers
 {
     /// <summary>
@@ -15,6 +17,12 @@ namespace Emutastic.Services.ConsoleHandlers
         public override bool UsesAnalogStick => true;
 
         public override bool ReadsKeyboard => true;
+
+        /// <summary>In the game overlay's options (the cog): fast loading, switched while playing.</summary>
+        public override List<(string key, string label)> GetVisualOptions() => new()
+        {
+            ("kernal64_fast_loading", "Fast Loading"),
+        };
 
         public override void ConfigureControllerPorts(LibretroCore core)
         {
