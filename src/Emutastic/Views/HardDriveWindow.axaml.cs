@@ -42,11 +42,8 @@ public partial class HardDriveWindow : Window
         void ShowNote()
         {
             long bytes = C64HardDrive.Sizes[Math.Max(0, sizeBox.SelectedIndex)].Bytes;
-            long usable = Math.Min(bytes, 1L << 30);
-            int parts = (int)Math.Ceiling((usable - 528 * 512.0) / (16_711_680.0));
-            note.Text = bytes > (1L << 30)
-                ? $"{parts} partitions. The drive's DOS reaches the first 1 GB of a disk; the rest stays unused."
-                : $"{parts} partition{(parts == 1 ? "" : "s")}.";
+            int parts = (int)Math.Ceiling((bytes - 528 * 512.0) / 16_711_680.0);
+            note.Text = $"{parts} partition{(parts == 1 ? "" : "s")}.";
         }
         sizeBox.SelectionChanged += (_, _) => ShowNote();
         ShowNote();

@@ -18,13 +18,13 @@ namespace Emutastic.Services
     public static class C64HardDrive
     {
         public const long MinBytes = 20L << 20;
-        public const long MaxBytes = 2L << 30;
+        public const long MaxBytes = 1L << 30;   // the drive's DOS reaches 1 GB of a disk
 
         /// <summary>The sizes offered: label and bytes.</summary>
         public static readonly (string Label, long Bytes)[] Sizes =
         {
             ("20 MB", 20L << 20), ("40 MB", 40L << 20), ("100 MB", 100L << 20), ("200 MB", 200L << 20),
-            ("500 MB", 500L << 20), ("1 GB", 1L << 30), ("2 GB", 2L << 30),
+            ("500 MB", 500L << 20), ("1 GB", 1L << 30),
         };
 
         public static string PathFor(Game game)
