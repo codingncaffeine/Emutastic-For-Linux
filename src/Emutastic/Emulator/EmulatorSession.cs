@@ -3934,8 +3934,8 @@ namespace Emutastic.Emulator
         private int _testShotPolls;
 
         // Test hook (a computer's keyboard): EMUTASTIC_TEST_TYPE="FRAME:TEXT" types TEXT from the core's FRAME-th
-        // input poll on, each key 3 polls down and 3 up, through OnGlKey (the window's own key path). TEXT: US
-        // letters, digits, space, and \n for RETURN; " is typed as SHIFT+2 (the C64's place for it).
+        // input poll on, each key 3 polls down and 3 up, through OnGlKey (the window's own key path). TEXT: letters,
+        // digits, space, \n for RETURN, and * + = " $ typed as on a US keyboard (SHIFT where it needs one).
         private readonly string? _testType = Environment.GetEnvironmentVariable("EMUTASTIC_TEST_TYPE");
         private int _testPolls;
         private void TestTypeStep()
@@ -3950,13 +3950,13 @@ namespace Emutastic.Emulator
             {
                 >= 'A' and <= 'Z' => 4 + (ch - 'A'),
                 >= '1' and <= '9' => 30 + (ch - '1'),
-                '0' => 39, ' ' => 44, '\n' => 40, '"' => 31, '*' => 48, '+' => 45, '=' => 49, '$' => 33,
+                '0' => 39, ' ' => 44, '\n' => 40, '"' => 52, '*' => 37, '+' => 46, '=' => 46, '$' => 33,
                 _ => 0,
             };
             if (sc == 0) return;
             bool down = t % 6 == 0;
             Trace.WriteLine($"[TestType] poll {_testPolls - 1}: scancode {sc} {(down ? "down" : "up")}");
-            if (ch is '"' or '$') OnGlKey(225, -1, down);   // SHIFT with it
+            if (ch is '"' or '$' or '*' or '+') OnGlKey(225, -1, down);   // SHIFT with it
             OnGlKey(sc, -1, down);
         }
 
