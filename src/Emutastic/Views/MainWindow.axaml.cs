@@ -1843,6 +1843,35 @@ public partial class MainWindow : Window
         _importer.ImportFilesAsync(new[] { path }, "C64");
     }
 
+    /// <summary>Opens one of the Commodore 64 BASIC entry's manuals, downloading it first (progress in the status
+    /// bar; the download runs off the UI thread).</summary>
+    internal async Task OpenOrDownloadBasicManualAsync(Services.C64BasicManuals.Manual m)
+    {
+        string path = Services.C64BasicManuals.PathFor(m);
+        if (!Services.C64BasicManuals.Has(m))
+        {
+            int shown = -1;
+            _vm!.SetStatus($"Downloading the Commodore 64 {m.Title}…");
+            try
+            {
+                await Task.Run(() => Services.C64BasicManuals.DownloadAsync(m, p =>
+                {
+                    int pct = (int)p;
+                    if (pct == shown) return;
+                    shown = pct;
+                    Dispatcher.UIThread.Post(() => _vm.SetStatus($"Downloading the Commodore 64 {m.Title}… {pct}%"));
+                }));
+            }
+            catch (Exception ex)
+            {
+                _vm.SetStatus($"Couldn't download the {m.Title}: {ex.Message}", autoClear: true);
+                return;
+            }
+            _vm.SetStatus($"Downloaded the Commodore 64 {m.Title}.", autoClear: true);
+        }
+        Services.ShellOpen.Open(path);
+    }
+
     /// <summary>Imports one file for CONSOLE and shows it once the import queue drains (status: MESSAGE).</summary>
     private void ImportIntoLibrary(string path, string console, string? message)
     {
@@ -1928,8 +1957,17 @@ public partial class MainWindow : Window
 
         // Deferred to their splinters (disabled stubs).
         items.Add(MenuAction("📝  Notes", () => NotesWindow.ShowFor(game, this)));
-        items.Add(MenuAction(ManualLauncher.HasUsableManual(game) ? "📖  View Manual" : "⬇  Download Manual",
-            () => RunGuarded(() => ManualLauncher.OpenOrDownloadAsync(game, _artworkFetch!))));
+        // Commodore 64 BASIC: Commodore's own two manuals, each on its own, in place of the manual search.
+        if (Services.C64BasicManuals.IsBasicEntry(game))
+            foreach (var m in Services.C64BasicManuals.All)
+            {
+                var manual = m;
+                items.Add(MenuAction(Services.C64BasicManuals.Has(manual) ? $"📖  View {manual.Title}" : $"⬇  Download {manual.Title}",
+                    () => RunGuarded(() => OpenOrDownloadBasicManualAsync(manual))));
+            }
+        else
+            items.Add(MenuAction(ManualLauncher.HasUsableManual(game) ? "📖  View Manual" : "⬇  Download Manual",
+                () => RunGuarded(() => ManualLauncher.OpenOrDownloadAsync(game, _artworkFetch!))));
         // Cheats — only when the console's core supports them (upstream gate). Modal so two
         // windows can't last-write-wipe the same cheat JSON.
         if (CoreManager.ConsoleCoreMap.TryGetValue(game.Console ?? "", out var cheatCores) && cheatCores.Length > 0

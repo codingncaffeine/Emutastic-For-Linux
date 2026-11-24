@@ -452,13 +452,27 @@ public partial class GameDetailWindow : Window
         var notes = new MenuItem { Header = "Notes…" };
         notes.Click += (_, _) => NotesWindow.ShowFor(_game, this);
         menu.Items.Add(notes);
-        var manual = new MenuItem { Header = ManualLauncher.HasUsableManual(_game) ? "View Manual" : "Download Manual…" };
-        manual.Click += (_, _) =>
+        if (Services.C64BasicManuals.IsBasicEntry(_game))
         {
-            var fetch = (this.Owner as MainWindow)?.ArtworkFetch;
-            if (fetch != null) _ = ManualLauncher.OpenOrDownloadAsync(_game, fetch);
-        };
-        menu.Items.Add(manual);
+            // Commodore 64 BASIC: Commodore's own two manuals, each on its own.
+            foreach (var m in Services.C64BasicManuals.All)
+            {
+                var book = m;
+                var item = new MenuItem { Header = Services.C64BasicManuals.Has(book) ? $"View {book.Title}" : $"Download {book.Title}…" };
+                item.Click += (_, _) => { if (this.Owner is MainWindow mw) _ = mw.OpenOrDownloadBasicManualAsync(book); };
+                menu.Items.Add(item);
+            }
+        }
+        else
+        {
+            var manual = new MenuItem { Header = ManualLauncher.HasUsableManual(_game) ? "View Manual" : "Download Manual…" };
+            manual.Click += (_, _) =>
+            {
+                var fetch = (this.Owner as MainWindow)?.ArtworkFetch;
+                if (fetch != null) _ = ManualLauncher.OpenOrDownloadAsync(_game, fetch);
+            };
+            menu.Items.Add(manual);
+        }
 
         // Cheats — shown only when this console's core actually supports cheats (upstream gate).
         if (CoreManager.ConsoleCoreMap.TryGetValue(_game.Console ?? "", out var cores) && cores.Length > 0

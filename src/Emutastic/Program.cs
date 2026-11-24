@@ -92,6 +92,11 @@ sealed class Program
         // output (it refuses a PortableData that has been used). Exit 0 = pass, 1 = fail, 2 = incomplete.
         // Dev-only: `Emutastic --selftest-c64-harddrive CORE.so --portable` makes a C64 hard drive through the
         // same calls as the New Blank Hard Drive window (needs the CMD HD files in System). Exit 0 = pass.
+        if (args.Length >= 1 && args[0] == "--selftest-c64-manuals")
+        {
+            Environment.Exit(Emutastic.Services.C64BasicManualsSelfTest.Run());
+            return;
+        }
         if (args.Length >= 2 && args[0] == "--selftest-c64-harddrive")
         {
             Environment.Exit(Emutastic.Services.C64HardDriveSelfTest.Run(args[1]));
