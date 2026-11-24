@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 
 namespace Emutastic.Platform
@@ -76,6 +77,7 @@ namespace Emutastic.Platform
         [DllImport("SDL3")] static extern int    SDL_GetNumJoystickHats(IntPtr joystick);
         [DllImport("SDL3")] [return: MarshalAs(UnmanagedType.I1)] static extern bool SDL_GetJoystickButton(IntPtr joystick, int button);
         [DllImport("SDL3")] static extern short  SDL_GetJoystickAxis(IntPtr joystick, int axis);
+        [DllImport("SDL3")] [return: MarshalAs(UnmanagedType.I1)] static extern bool SDL_GetJoystickAxisInitialState(IntPtr joystick, int axis, out short state);
         [DllImport("SDL3")] static extern byte   SDL_GetJoystickHat(IntPtr joystick, int hat);
         [DllImport("SDL3")] [return: MarshalAs(UnmanagedType.I1)] static extern bool SDL_GetGamepadButton(IntPtr gamepad, int button);
         [DllImport("SDL3")] static extern short  SDL_GetGamepadAxis(IntPtr gamepad, int axis);
@@ -112,6 +114,12 @@ namespace Emutastic.Platform
             public int    NumButtons  { get; internal set; }
             public int    NumAxes     { get; internal set; }
             public int    NumHats     { get; internal set; }
+            /// <summary>
+            /// Raw joysticks: axes 0-3 (read as the two sticks) that rested at an end of their range when the
+            /// device was opened. Such an axis is not a centered stick (a trigger, or the dummy axes some keypads
+            /// and tablets report), and reading it as one holds a stick pushed into a corner for good.
+            /// </summary>
+            public bool[] AxisRestsAtEnd { get; internal set; } = new bool[4];
             public override string ToString() => Id;
         }
 
@@ -206,9 +214,12 @@ namespace Emutastic.Platform
                 NumAxes    = SDL_GetNumJoystickAxes(joy),
                 NumHats    = SDL_GetNumJoystickHats(joy),
             };
+            for (int a = 0; a < Math.Min(4, d.NumAxes); a++)
+                d.AxisRestsAtEnd[a] = SDL_GetJoystickAxisInitialState(joy, a, out short rest) && Math.Abs((int)rest) > 30000;
             Services.ControllerDiagLog.Write(
                 $"[devices] Opened id={instanceId} \"{name}\" {(d.IsGamepad ? "gamepad-mapped" : "RAW joystick (no SDL mapping)")} " +
-                $"buttons={d.NumButtons} axes={d.NumAxes} hats={d.NumHats}");
+                $"buttons={d.NumButtons} axes={d.NumAxes} hats={d.NumHats}" +
+                (d.AxisRestsAtEnd.Any(x => x) ? $" axes resting at an end (not read as sticks): {string.Join(",", Enumerable.Range(0, 4).Where(i => d.AxisRestsAtEnd[i]))}" : ""));
             return d;
         }
 
@@ -261,7 +272,7 @@ namespace Emutastic.Platform
             switch (axis)
             {
                 case AXIS_LEFTX: case AXIS_LEFTY: case AXIS_RIGHTX: case AXIS_RIGHTY:
-                    return axis < d.NumAxes ? SDL_GetJoystickAxis(d.Joystick, axis) : (short)0;
+                    return axis < d.NumAxes && !d.AxisRestsAtEnd[axis] ? SDL_GetJoystickAxis(d.Joystick, axis) : (short)0;
                 case AXIS_LTRIG: return RawBtn(d, RawSpareL2) ? (short)32767 : (short)0;
                 case AXIS_RTRIG: return RawBtn(d, RawSpareR2) ? (short)32767 : (short)0;
                 default: return 0;
