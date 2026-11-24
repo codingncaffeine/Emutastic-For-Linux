@@ -59,6 +59,7 @@ namespace Emutastic.Services
                 "fbneo" => "FBNeo (Final Burn Neo)", "geolith" => "Geolith (Neo Geo)",
                 "mame2003_plus" => "MAME 2003-Plus", "mednafen_psx_hw" => "Mednafen PSX HW (Beetle)",
                 "midway_verdant" => "Midway Verdant",
+                "kernal64" => "Kernal64",
                 _ => name.Length == 0 ? name : char.ToUpper(name[0]) + name[1..].Replace("_", " "),
             };
         }
@@ -108,6 +109,7 @@ namespace Emutastic.Services
             ["parallel_n64_libretro"]     = "N64",
             ["pcsx2_libretro"]            = "PS2",
             ["midway_verdant_libretro"]   = "Xbox",
+            ["kernal64_libretro"]         = "C64",
             ["picodrive_libretro"]        = "Sega32X",
             ["ppsspp_libretro"]           = "PSP",
             ["prosystem_libretro"]        = "Atari7800",

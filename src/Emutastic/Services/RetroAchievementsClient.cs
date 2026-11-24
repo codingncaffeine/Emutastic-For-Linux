@@ -898,6 +898,7 @@ namespace Emutastic.Services
                 "Jaguar"       => RC_CONSOLE_ATARI_JAGUAR,
                 "ColecoVision" => RC_CONSOLE_COLECOVISION,
                 "Vectrex"      => RC_CONSOLE_VECTREX,
+                "C64"          => RC_CONSOLE_COMMODORE_64,
                 "3DO"          => RC_CONSOLE_3DO,
                 "CDi"          => RC_CONSOLE_CDI,
                 "3DS"          => RC_CONSOLE_NINTENDO_3DS,

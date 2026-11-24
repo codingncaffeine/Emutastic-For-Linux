@@ -45,6 +45,15 @@ namespace Emutastic.Services
             // and 3 in its options are xbox_hdd_2.raw and xbox_hdd_3.raw); an 8 GB+ raw image under another name also works.
             // No size either: hashing 8 GB files would make the folder sweep crawl.
             new("Xbox","Xbox","midway-verdant/xbox_hdd.raw","Hard-disk image",0,null,CreatedByCore: true),
+            // Commodore 64 (Kernal64): found by contents in System/ or System/kernal64/, any names; the canonical
+            // names go in kernal64/. A C64C's combined 16 KB image holds BASIC and KERNAL. The 1541 halves are
+            // needed for disks only.
+            new("C64","Commodore 64","kernal64/basic.901226-01.bin","BASIC ROM",8192,"57af4ae21d4b705c2991d98ed5c1f7b8"),
+            new("C64","Commodore 64","kernal64/kernal.901227-03.bin","KERNAL ROM",8192,"39065497630802346bce17963f13c092"),
+            new("C64","Commodore 64","kernal64/characters.901225-01.bin","Character ROM",4096,"12a4202f5331d45af846af6c58fba946"),
+            new("C64","Commodore 64","kernal64/64c.251913-01.bin","BASIC + KERNAL, C64C combined image (instead of the two above)",16384,"8c37b056c00a44c0725508b8cedbbefb"),
+            new("C64","Commodore 64","kernal64/1541-c000.325302-01.bin","1541 drive ROM, lower half (disks)",8192,"41f5af978d69fc20f1f2fcad7c2ad8cf"),
+            new("C64","Commodore 64","kernal64/1541-e000.901229-05.bin","1541 drive ROM, upper half (disks)",8192,"ea93aaa7016a673aac2294cbb08a9885"),
             // Sega CD
             new("SegaCD","Sega CD","bios_CD_U.bin","USA",131072,"2efd74e3232ff260e371b99f84024f7f"),
             new("SegaCD","Sega CD","bios_CD_J.bin","Japan",131072,"278a9397d192149e84e820ac621a8edd"),

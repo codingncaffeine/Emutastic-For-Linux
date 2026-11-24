@@ -20,7 +20,7 @@ namespace Emutastic.Services
             // multi-disc GC titles (Resident Evil 0, Baten Kaitos, etc.) get
             // routed correctly when the folder name disambiguates. Ambiguity
             // resolved via DAT lookup, folder name, or user picker.
-            { ".m3u", new[] { "PS2", "SegaCD", "Saturn", "PS1", "TGCD", "NeoCD", "3DO", "CDi", "GameCube", "Amiga" } },
+            { ".m3u", new[] { "PS2", "SegaCD", "Saturn", "PS1", "TGCD", "NeoCD", "3DO", "CDi", "GameCube", "Amiga", "C64" } },
             { ".bin", new[] { "PS1", "PS2", "SegaCD", "Saturn", "NeoCD", "3DO", "Dreamcast", "Atari7800", "Atari2600", "Genesis", "Sega32X", "ColecoVision", "NES", "NGP" } },
         };
 
@@ -72,6 +72,15 @@ namespace Emutastic.Services
             { ".col",  "ColecoVision"},
 
             { ".vec",  "Vectrex"     },
+            // Commodore 64 (Kernal64): cartridges, programs, disk images (D64, G64, NIB raw reads), tapes.
+            { ".crt",  "C64"         },
+            { ".prg",  "C64"         },
+            { ".p00",  "C64"         },
+            { ".t64",  "C64"         },
+            { ".d64",  "C64"         },
+            { ".g64",  "C64"         },
+            { ".nib",  "C64"         },
+            { ".tap",  "C64"         },
             { ".gdi",  "Dreamcast"   },
             { ".cdi",  "Dreamcast"   },
             { ".neo",  "NeoGeo"      },
@@ -96,6 +105,7 @@ namespace Emutastic.Services
             { "PS1",          "Sony"       },
             { "PS2",          "Sony"       },
             { "Xbox",         "Microsoft"  },
+            { "C64",          "Commodore"  },
             { "PSP",          "Sony"       },
             { "TG16",         "NEC"        }, { "TGCD",      "NEC"        },
             { "NGP",          "SNK"        },
@@ -133,6 +143,7 @@ namespace Emutastic.Services
             { "PS1",         ("#0A0A2E", "#2196F3") },
             { "PS2",         ("#0A0A1A", "#3D5AFE") },
             { "Xbox",        ("#0A140A", "#4CAF50") },
+            { "C64",         ("#14102E", "#7869C4") },
             { "PSP",         ("#0A1A2E", "#00BCD4") },
             { "Atari2600",   ("#2E1A0A", "#FF5722") },
             { "TG16",        ("#1A2E2E", "#009688") },
@@ -283,6 +294,8 @@ namespace Emutastic.Services
             ("playstation 2", "PS2"),
             ("ps2",           "PS2"),
             ("xbox",          "Xbox"),
+            ("commodore 64",  "C64"),
+            ("c64",           "C64"),
             ("playstation",   "PS1"),
             ("psx",           "PS1"),
             ("ps1",           "PS1"),
@@ -446,6 +459,7 @@ namespace Emutastic.Services
             { "PS1",          1.00 },
             { "PS2",          0.71 },   // DVD-case art; tune against ScreenScraper box-2D if needed
             { "Xbox",         0.71 },   // DVD-case art
+            { "C64",          0.75 },   // tape and disk boxes vary; most are near 3:4
             { "PSP",          0.98 },
             { "TG16",         0.98 },
             { "TGCD",         1.00 },

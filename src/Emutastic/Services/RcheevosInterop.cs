@@ -92,6 +92,7 @@ namespace Emutastic.Services
         public const uint RC_CONSOLE_3DO = 43;
         public const uint RC_CONSOLE_COLECOVISION = 44;
         public const uint RC_CONSOLE_VECTREX = 46;
+        public const uint RC_CONSOLE_COMMODORE_64 = 30;
         public const uint RC_CONSOLE_ATARI_7800 = 51;
         public const uint RC_CONSOLE_NEO_GEO_CD = 56;
         public const uint RC_CONSOLE_NINTENDO_3DS = 62;

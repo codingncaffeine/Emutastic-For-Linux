@@ -386,7 +386,11 @@ namespace Emutastic.Emulator
             return _gl != null && _gl.TryGetWindowRect(out x, out y, out w, out h);
         }
 
-        const int SC_ESCAPE = 41, SC_F11 = 68, SC_P = 19, SC_F5 = 62, SC_F7 = 64, SC_F9 = 66;
+        const int SC_ESCAPE = 41, SC_F11 = 68, SC_P = 19, SC_F5 = 62, SC_F7 = 64, SC_F9 = 66, SC_F10 = 67;
+
+        // A computer's keyboard (IConsoleHandler.ReadsKeyboard): which RETROK keys are down, written by the
+        // window's key events, read by the core through RETRO_DEVICE_KEYBOARD.
+        private readonly bool[] _retroKeys = new bool[Services.SdlRetroKeys.Count];
         const int SC_F12 = 69, SC_PRINTSCREEN = 70;
 
         // Emu-thread handler for the GL window's keyboard: (SDL scancode, SDL keycode or -1, down).
@@ -402,6 +406,23 @@ namespace Emutastic.Emulator
             UpdateChordKey(_diskSwapChord,  scancode, down);
             UpdateChordKey(_saveStateChord, scancode, down);
             UpdateChordKey(_loadStateChord, scancode, down);
+            if (_handler.ReadsKeyboard)
+            {
+                // A computer: the key goes to the machine; only keys it lacks stay frontend keys.
+                uint rk = Services.SdlRetroKeys.ToRetro(scancode);
+                if (rk != 0 && rk < _retroKeys.Length) _retroKeys[rk] = down;
+                if (!down) return;
+                switch (scancode)
+                {
+                    case SC_F10:    _running = false; break;
+                    case SC_F11:    _glFullscreen = !_glFullscreen; (_wlTop ?? _gl)?.SetFullscreen(_glFullscreen); break;
+                    case SC_PRINTSCREEN: TakeScreenshot(); break;
+                    default:
+                        if (scancode == (_screenshotScancode ??= ResolveScreenshotScancode())) TakeScreenshot();
+                        break;
+                }
+                return;
+            }
             int code = keycode >= 0 ? keycode : KeyboardBindings.RawScancode | scancode;
             if (_input.Keyboard.Set(code, down)) return;
             if (!down) return;
@@ -2684,10 +2705,19 @@ namespace Emutastic.Emulator
                 return mask;
             }
 
+            // RETRO_DEVICE_KEYBOARD (3): a computer's keys, by RETROK code.
+            if (device == 3)
+            {
+                bool k = port == 0 && _handler.ReadsKeyboard && id < _retroKeys.Length && _retroKeys[id];
+                if (k && _testType != null) Trace.WriteLine($"[TestType] core read key {id} down");
+                return k ? 1 : 0;
+            }
+
             if (port == 0 && device == SdlInput.RETRO_DEVICE_JOYPAD
                 && id == LibretroInput.JOYPAD_L && _fdsSideChangeFrames > 0)
                 return 1;
             int v = _input.GetInputState(port, device, index, id);
+            if (v != 0 && _testType != null && _testDiag++ < 20) Trace.WriteLine($"[TestType] pad port {port} device {device} index {index} id {id} = {v}");
             // Turbo gate (upstream's TurboGate): a held turbo button reports pressed only during the
             // duty window of each period, auto-releasing for the rest (~10Hz at 60fps). Snapshot the
             // set reference once — toggles swap in a fresh set, so this read is tear-free.
@@ -3890,7 +3920,44 @@ namespace Emutastic.Emulator
             }
             return frames;
         }
-        private void InputPoll_cb() { /* SdlInput.Poll already called at top of the loop */ }
+        private void InputPoll_cb()
+        {
+            /* SdlInput.Poll already called at top of the loop */
+            if (_testType != null) TestTypeStep();
+            if (_testShot > 0 && ++_testShotPolls == _testShot) TakeScreenshot();
+        }
+
+        // Test hook: EMUTASTIC_TEST_SHOT=POLL takes the session's own screenshot (as F12 does) at that input poll.
+        private readonly int _testShot = int.TryParse(Environment.GetEnvironmentVariable("EMUTASTIC_TEST_SHOT"), out int shot) ? shot : 0;
+        private int _testShotPolls;
+
+        // Test hook (a computer's keyboard): EMUTASTIC_TEST_TYPE="FRAME:TEXT" types TEXT from the core's FRAME-th
+        // input poll on, each key 3 polls down and 3 up, through OnGlKey (the window's own key path). TEXT: US
+        // letters, digits, space, and \n for RETURN; " is typed as SHIFT+2 (the C64's place for it).
+        private readonly string? _testType = Environment.GetEnvironmentVariable("EMUTASTIC_TEST_TYPE");
+        private int _testPolls;
+        private int _testDiag;
+        private void TestTypeStep()
+        {
+            int colon = _testType!.IndexOf(':');
+            if (colon < 0 || !int.TryParse(_testType[..colon], out int start)) return;
+            string text = _testType[(colon + 1)..].Replace("\\n", "\n");
+            int t = _testPolls++ - start;
+            if (t < 0 || t / 6 >= text.Length || t % 3 != 0) return;
+            char ch = char.ToUpperInvariant(text[t / 6]);
+            int sc = ch switch
+            {
+                >= 'A' and <= 'Z' => 4 + (ch - 'A'),
+                >= '1' and <= '9' => 30 + (ch - '1'),
+                '0' => 39, ' ' => 44, '\n' => 40, '"' => 31, '*' => 48, '+' => 45, '=' => 49, '$' => 33,
+                _ => 0,
+            };
+            if (sc == 0) return;
+            bool down = t % 6 == 0;
+            Trace.WriteLine($"[TestType] poll {_testPolls - 1}: scancode {sc} {(down ? "down" : "up")}");
+            if (ch is '"' or '$') OnGlKey(225, -1, down);   // SHIFT with it
+            OnGlKey(sc, -1, down);
+        }
 
         // Number of live emulator sessions. The Controls-panel ControllerManager checks this so it
         // doesn't call SDL_PumpEvents concurrently with the emu loop (SDL pumping isn't multi-thread safe).

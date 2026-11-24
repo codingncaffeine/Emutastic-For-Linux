@@ -12,6 +12,7 @@ namespace Emutastic.Services.ConsoleHandlers
 
         public abstract string ConsoleName { get; }
         public virtual bool UsesAnalogStick => false;
+        public virtual bool ReadsKeyboard => false;
         public virtual bool PromoteAnalogStickToDpad => false;
 
         /// <summary>The loaded core's file stem (e.g. "mupen64plus_next_libretro"), set by

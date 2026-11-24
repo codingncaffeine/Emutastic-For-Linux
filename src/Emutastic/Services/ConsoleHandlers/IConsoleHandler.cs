@@ -15,6 +15,13 @@ namespace Emutastic.Services.ConsoleHandlers
         bool UsesAnalogStick { get; }
 
         /// <summary>
+        /// The core reads the keyboard as a keyboard (RETRO_DEVICE_KEYBOARD): a computer. Every key then goes
+        /// to the core by its position, the keyboard does not also play a joypad, and only keys the machine
+        /// lacks stay frontend hotkeys (F10 quit, F11 fullscreen, F12/PrintScreen screenshot).
+        /// </summary>
+        bool ReadsKeyboard { get; }
+
+        /// <summary>
         /// When true, OnInputState falls back to the left analog stick when
         /// no digital JOYPAD direction is pressed, mapping stick UP/DOWN/LEFT/
         /// RIGHT to the corresponding JOYPAD_UP/DOWN/LEFT/RIGHT button. Used

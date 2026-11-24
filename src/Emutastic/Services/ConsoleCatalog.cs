@@ -38,8 +38,8 @@ namespace Emutastic.Services
 
         /// <summary>
         /// Every console the sidebar lists, in shipping order. PS3 is absent on purpose:
-        /// it is a Windows-only platform (RPCS3), so this port has 36 entries to
-        /// upstream's 37.
+        /// it is a Windows-only platform (RPCS3), so this port has 37 entries to
+        /// upstream's 38.
         /// </summary>
         public static readonly IReadOnlyList<ConsoleCatalogEntry> Default = new ConsoleCatalogEntry[]
         {
@@ -88,6 +88,7 @@ namespace Emutastic.Services
             new("CDi",          "Philips CD-i",        "OTHER"),
             new("ColecoVision", "ColecoVision",        "OTHER"),
             new("Vectrex",      "Vectrex",             "OTHER"),
+            new("C64",          "Commodore 64",        "OTHER"),
         };
 
         private static readonly Dictionary<string, ConsoleCatalogEntry> ByTag =

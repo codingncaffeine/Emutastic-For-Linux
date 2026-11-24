@@ -29,7 +29,7 @@ namespace Emutastic.Services
             ("sg-1000", "sg-1000"), ("sg1000", "sg-1000"),
             ("playstation 2", "ps2"), ("playstation portable", "psp"), ("psp", "psp"),
             ("playstation", "psx"), ("ps1", "psx"), ("psx", "psx"),
-            ("xbox", "xbox"),
+            ("xbox", "xbox"), ("commodore 64", "c64"), ("c64", "c64"),
             ("neo geo cd", "neogeocd"), ("neogeo cd", "neogeocd"), ("neocd", "neogeocd"),
             ("neo geo", "neogeo"), ("neogeo", "neogeo"),
             ("turbografx-cd", "tg-cd"), ("turbografx cd", "tg-cd"), ("pc engine cd", "pcenginecd"),
