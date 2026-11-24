@@ -79,6 +79,10 @@ namespace Emutastic.Services
             // published one). A copy also ships in BundledCores; a downloaded one in the Cores folder wins over it.
             new() { FileName = "midway_verdant_libretro.so",   DisplayName = "Midway Verdant",        Systems = ["Xbox"],                              Recommended = true,
                     ZipUrl = "https://github.com/codingncaffeine/Midway-Verdant/releases/latest/download/midway_verdant_libretro-linux-x86_64.zip" },
+
+            // Commodore 64: Kernal64, our own C64 core. Not on the buildbot: its releases on GitHub (the newest published one).
+            new() { FileName = "kernal64_libretro.so",         DisplayName = "Kernal64",              Systems = ["C64"],                               Recommended = true,
+                    ZipUrl = "https://github.com/codingncaffeine/Kernal64/releases/latest/download/kernal64_libretro-linux-x86_64.zip" },
         };
 
         // ── Infrastructure ────────────────────────────────────────────────────
