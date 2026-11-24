@@ -13,18 +13,23 @@ namespace Emutastic.Services
     /// </summary>
     public static class C64BlankMedia
     {
+        public const string StorageFolder = "Commodore 64 Storage", DiskFolder = "Floppy Disks", TapeFolder = "Tapes";
+
         /// <summary>
-        /// Where the media made from a game's card go: a folder named after that game, in Media/C64 of the app's
-        /// data folder (beside its configuration).
+        /// Where the media made from a game's card go, in the app's data folder (beside its configuration):
+        /// Commodore 64 Storage / the game / the kind of medium (Floppy Disks, Tapes).
         /// </summary>
-        public static string FolderFor(string gameTitle) => AppPaths.GetFolder("Media", "C64", SafeName(gameTitle, "Commodore 64"));
+        public static string FolderFor(string gameTitle, string kind) =>
+            AppPaths.GetFolder(StorageFolder, SafeName(gameTitle, "Commodore 64"), kind);
 
-        /// <summary>Writes "NAME.d64" (or "NAME 2.d64" ... when taken) in the game's folder and returns its path.</summary>
-        public static string CreateDisk(string gameTitle, string name) => Write(gameTitle, name, ".d64", FormattedD64(name));
+        /// <summary>Writes "NAME.d64" (or "NAME 2.d64" ... when taken) and returns its path.</summary>
+        public static string CreateDisk(string gameTitle, string name) =>
+            Write(FolderFor(gameTitle, DiskFolder), name, ".d64", FormattedD64(name));
 
-        /// <summary>Writes "NAME.tap" (or "NAME 2.tap" ...) in the game's folder and returns its path.</summary>
+        /// <summary>Writes "NAME.tap" (or "NAME 2.tap" ...) and returns its path.</summary>
         public static string CreateTape(string gameTitle, string name) =>
-            Write(gameTitle, name, ".tap", Encoding.ASCII.GetBytes("C64-TAPE-RAW").Concat(new byte[] { 1, 0, 0, 0, 0, 0, 0, 0 }).ToArray());
+            Write(FolderFor(gameTitle, TapeFolder), name, ".tap",
+                Encoding.ASCII.GetBytes("C64-TAPE-RAW").Concat(new byte[] { 1, 0, 0, 0, 0, 0, 0, 0 }).ToArray());
 
         private static string SafeName(string name, string fallback)
         {
@@ -32,9 +37,8 @@ namespace Emutastic.Services
             return safe.Length == 0 ? fallback : safe;
         }
 
-        private static string Write(string gameTitle, string name, string ext, byte[] data)
+        private static string Write(string folder, string name, string ext, byte[] data)
         {
-            string folder = FolderFor(gameTitle);
             string safe = SafeName(name, "Blank");
             string path = Path.Combine(folder, safe + ext);
             for (int n = 2; File.Exists(path); n++) path = Path.Combine(folder, $"{safe} {n}{ext}");

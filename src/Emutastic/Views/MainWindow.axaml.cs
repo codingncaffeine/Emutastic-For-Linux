@@ -1817,7 +1817,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>Asks for a name, writes an empty C64 floppy (formatted D64) or tape (TAP) into the game's own
-    /// folder (Media/C64/GAME in the data folder) and adds it to the library: started, a floppy is at READY and a
+    /// folder (Commodore 64 Storage/GAME/Floppy Disks or Tapes in the data folder) and adds it to the library: started, a floppy is at READY and a
     /// tape is ready to record.</summary>
     private async Task AddBlankC64MediaAsync(Game game, bool tape)
     {
