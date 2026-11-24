@@ -104,6 +104,13 @@ namespace Emutastic.Emulator
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate bool GetEjectStateFn();
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint GetImageIndexFn();
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint GetNumImagesFn();
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate bool ReplaceImageIndexFn(uint index, IntPtr info);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate bool AddImageIndexFn();
+        private ReplaceImageIndexFn? _replaceImageIndex;
+        private AddImageIndexFn? _addImageIndex;
+        // In-game cog → "New Blank Floppy Disk / Tape" (C64): the request the emu thread carries out
+        // (0 none, 1 floppy, 2 tape); the core is only called from the emu thread.
+        private int _newBlankMedia;
         private SetEjectStateFn? _setEjectState;
         private SetImageIndexFn? _setImageIndex;
         private GetEjectStateFn? _getEjectState;
@@ -1302,6 +1309,14 @@ namespace Emutastic.Emulator
                 }
                 if (HandlerConsoleName == "N64" && CoreOptionValue("mupen64plus-pak1").Length > 0)
                     m.Add(("Pak", true, CoreOptionValue("mupen64plus-pak1"), "mupen64plus-pak1"));
+                // Commodore 64: new, empty media to save programs to, made and put in at once (the floppy in
+                // drive 8, the tape in the datasette ready to record); each also joins the library.
+                if (HandlerConsoleName == "C64")
+                {
+                    bool canInsert = _addImageIndex != null && _replaceImageIndex != null;
+                    m.Add(("New Blank Floppy Disk", canInsert, null, canInsert ? "\x01C64DISK" : null));
+                    m.Add(("New Blank Tape", canInsert, null, canInsert ? "\x01C64TAPE" : null));
+                }
                 m.Add((IsRecording ? "Stop Recording" : "Record", true, null, "\x01RECORD"));
                 m.Add(("View Recordings", true, null, "\x01VIEWREC"));
                 // Cheats: live when the core supports them (or legacy cheats exist for this game) and
@@ -1563,6 +1578,11 @@ namespace Emutastic.Emulator
                             if (CheatGameId >= 0)
                                 Services.BezelService.SetEnabledForGame(CheatGameId, _bezelActive);
                             cogMenu = buildCogMain();   // refresh the On/Off label
+                        }
+                        else if (key == "\x01C64DISK" || key == "\x01C64TAPE")
+                        {
+                            Interlocked.Exchange(ref _newBlankMedia, key == "\x01C64TAPE" ? 2 : 1);
+                            cogMenu = null;
                         }
                         else if (key == "\x01RECORD")
                         {
@@ -2091,6 +2111,8 @@ namespace Emutastic.Emulator
                         if (dc.get_eject_state != IntPtr.Zero) _getEjectState = Marshal.GetDelegateForFunctionPointer<GetEjectStateFn>(dc.get_eject_state);
                         if (dc.get_image_index != IntPtr.Zero) _getImageIndex = Marshal.GetDelegateForFunctionPointer<GetImageIndexFn>(dc.get_image_index);
                         if (dc.get_num_images != IntPtr.Zero) _getNumImages = Marshal.GetDelegateForFunctionPointer<GetNumImagesFn>(dc.get_num_images);
+                        if (dc.replace_image_index != IntPtr.Zero) _replaceImageIndex = Marshal.GetDelegateForFunctionPointer<ReplaceImageIndexFn>(dc.replace_image_index);
+                        if (dc.add_image_index != IntPtr.Zero) _addImageIndex = Marshal.GetDelegateForFunctionPointer<AddImageIndexFn>(dc.add_image_index);
                         _diskControlAvailable = true;
                     }
                     return true;
@@ -2856,6 +2878,9 @@ namespace Emutastic.Emulator
             // (NES/FDS etc. don't map L3). User-configured chord (Preferences → Controls →
             // FRONTEND) wins; L3 + Start (raw 7 + 6) is the unbound default. A configured keyboard
             // chord (held flags fed by OnGlKey) also triggers. Rising edge so a held chord fires once.
+            int blank = Interlocked.Exchange(ref _newBlankMedia, 0);
+            if (blank != 0) InsertNewBlankMedia(tape: blank == 2);
+
             bool held = ChordHeld(_diskSwapChord, 7, 6);
             if (held && !_diskSwapChord.PrevHeld) SwapToNextDisk();
             _diskSwapChord.PrevHeld = held;
@@ -2918,6 +2943,43 @@ namespace Emutastic.Emulator
 
         // Surface a transient message in the OSD status line (read by the present loop). Shared by
         // disc-swap feedback and save-state feedback — same single-line OSD slot upstream uses.
+        /// <summary>
+        /// Emu thread: makes an empty C64 floppy or tape in Commodore 64 Storage / this game / Floppy Disks or Tapes,
+        /// puts it in through the core's disk control (the core takes a tape into the datasette) and asks the main
+        /// app to add it to the library.
+        /// </summary>
+        private void InsertNewBlankMedia(bool tape)
+        {
+            if (_addImageIndex == null || _replaceImageIndex == null || _getNumImages == null) return;
+            string title = _game?.Title is { Length: > 0 } t ? t : Path.GetFileNameWithoutExtension(_romPath);
+            string path;
+            try { path = tape ? Services.C64BlankMedia.CreateTape(title, "Tape") : Services.C64BlankMedia.CreateDisk(title, "Disk"); }
+            catch (Exception ex) { ShowDiskMessage("Could not make the new medium: " + ex.Message); return; }
+            string name = Path.GetFileNameWithoutExtension(path);
+            IntPtr pathPtr = Marshal.StringToHGlobalAnsi(path);
+            IntPtr info = Marshal.AllocHGlobal(Marshal.SizeOf<Services.retro_game_info>());
+            try
+            {
+                Marshal.StructureToPtr(new Services.retro_game_info { path = pathPtr }, info, false);
+                uint before = _getNumImages();
+                bool ok = _addImageIndex() && _replaceImageIndex(before, info);
+                uint after = _getNumImages();
+                if (ok && after > before && _setEjectState != null && _setImageIndex != null)
+                {
+                    // A floppy: into drive 8 (eject, pick it, the deferred insert as a swap does).
+                    _setEjectState(true);
+                    _setImageIndex(before);
+                    _diskInsertPendingFrames = 100;
+                }
+                Trace.WriteLine($"[C64] new blank {(tape ? "tape" : "floppy")} {path}: {(ok ? "in" : "refused")}");
+                ShowDiskMessage(!ok ? "The new medium was not taken" :
+                    tape ? $"New tape \"{name}\" in the datasette: ready to record" : $"New floppy \"{name}\" in drive 8");
+                if (ok) EmitHostCommand?.Invoke($"add-to-library C64 {path}");
+            }
+            catch (Exception ex) { Trace.WriteLine($"[C64] new blank medium failed: {ex.Message}"); }
+            finally { Marshal.FreeHGlobal(info); Marshal.FreeHGlobal(pathPtr); }
+        }
+
         private void ShowDiskMessage(string msg, int seconds = 3)
         {
             _diskMsg = msg;
@@ -3927,30 +3989,47 @@ namespace Emutastic.Emulator
             /* SdlInput.Poll already called at top of the loop */
             if (_testType != null) TestTypeStep();
             if (_testShot > 0 && ++_testShotPolls == _testShot) TakeScreenshot();
+            if (_testNewMediaAt > 0 && ++_testNewMediaPolls == _testNewMediaAt)
+                Interlocked.Exchange(ref _newBlankMedia, _testNewMediaTape ? 2 : 1);   // as the cog row does
         }
+
+        // Test hook: EMUTASTIC_TEST_NEWMEDIA="POLL:disk" or "POLL:tape" asks for a new blank medium at that input
+        // poll, exactly as the cog's C64 rows do.
+        private static readonly string _testNewMedia = Environment.GetEnvironmentVariable("EMUTASTIC_TEST_NEWMEDIA") ?? "";
+        private readonly int _testNewMediaAt = int.TryParse(_testNewMedia.Split(':')[0], out int nm) ? nm : 0;
+        private readonly bool _testNewMediaTape = _testNewMedia.EndsWith(":tape", StringComparison.Ordinal);
+        private int _testNewMediaPolls;
 
         // Test hook: EMUTASTIC_TEST_SHOT=POLL takes the session's own screenshot (as F12 does) at that input poll.
         private readonly int _testShot = int.TryParse(Environment.GetEnvironmentVariable("EMUTASTIC_TEST_SHOT"), out int shot) ? shot : 0;
         private int _testShotPolls;
 
-        // Test hook (a computer's keyboard): EMUTASTIC_TEST_TYPE="FRAME:TEXT" types TEXT from the core's FRAME-th
+        // Test hook (a computer's keyboard): EMUTASTIC_TEST_TYPE="FRAME:TEXT[|FRAME:TEXT...]" types TEXT from the core's FRAME-th
         // input poll on, each key 3 polls down and 3 up, through OnGlKey (the window's own key path). TEXT: letters,
         // digits, space, \n for RETURN, and * + = " $ typed as on a US keyboard (SHIFT where it needs one).
         private readonly string? _testType = Environment.GetEnvironmentVariable("EMUTASTIC_TEST_TYPE");
         private int _testPolls;
         private void TestTypeStep()
         {
-            int colon = _testType!.IndexOf(':');
-            if (colon < 0 || !int.TryParse(_testType[..colon], out int start)) return;
-            string text = _testType[(colon + 1)..].Replace("\\n", "\n");
-            int t = _testPolls++ - start;
-            if (t < 0 || t / 6 >= text.Length || t % 3 != 0) return;
+            // Several pieces may follow each other: "POLL:TEXT|POLL:TEXT|...".
+            int poll = _testPolls++;
+            string? text = null;
+            int t = 0;
+            foreach (string piece in _testType!.Split('|'))
+            {
+                int colon = piece.IndexOf(':');
+                if (colon < 0 || !int.TryParse(piece[..colon], out int start)) continue;
+                string pt = piece[(colon + 1)..].Replace("\\n", "\n");
+                int pos = poll - start;
+                if (pos >= 0 && pos / 6 < pt.Length) { text = pt; t = pos; break; }
+            }
+            if (text == null || t % 3 != 0) return;
             char ch = char.ToUpperInvariant(text[t / 6]);
             int sc = ch switch
             {
                 >= 'A' and <= 'Z' => 4 + (ch - 'A'),
                 >= '1' and <= '9' => 30 + (ch - '1'),
-                '0' => 39, ' ' => 44, '\n' => 40, '"' => 52, '*' => 37, '+' => 46, '=' => 46, '$' => 33,
+                '0' => 39, ' ' => 44, '\n' => 40, ',' => 54, '"' => 52, '*' => 37, '+' => 46, '=' => 46, '$' => 33,
                 _ => 0,
             };
             if (sc == 0) return;

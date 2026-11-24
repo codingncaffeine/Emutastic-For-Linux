@@ -846,6 +846,9 @@ public partial class MainWindow : Window
                 App.Configuration.SetThemeConfiguration(theme);
                 App.Configuration.ScheduleSave();
             }
+            // In-game cog → a new C64 floppy or tape: "add-to-library CONSOLE PATH" imports the file.
+            else if (verb == "add-to-library" && arg != null && arg.IndexOf(' ') > 0)
+                ImportIntoLibrary(arg[(arg.IndexOf(' ') + 1)..], arg[..arg.IndexOf(' ')], null);
             // In-game cog → "Notes"/"Manual": both windows live here (the host has no Avalonia).
             else if (verb == "open-notes" && int.TryParse(arg, out int notesGameId))
             {
@@ -1838,6 +1841,25 @@ public partial class MainWindow : Window
         };
         _importer!.ImportQueueDrained += onDrained;
         _importer.ImportFilesAsync(new[] { path }, "C64");
+    }
+
+    /// <summary>Imports one file for CONSOLE and shows it once the import queue drains (status: MESSAGE).</summary>
+    private void ImportIntoLibrary(string path, string console, string? message)
+    {
+        if (_importer == null || !System.IO.File.Exists(path)) return;
+        Action? onDrained = null;
+        onDrained = () =>
+        {
+            _importer!.ImportQueueDrained -= onDrained;
+            Dispatcher.UIThread.Post(async () =>
+            {
+                await Task.Run(() => _vm!.Reload());
+                await _vm!.FilterGamesAsync();
+                if (message != null) _vm.SetStatus(message, autoClear: true);
+            });
+        };
+        _importer.ImportQueueDrained += onDrained;
+        _importer.ImportFilesAsync(new[] { path }, console);
     }
 
     private ContextMenu BuildGameContextMenu(Game game)

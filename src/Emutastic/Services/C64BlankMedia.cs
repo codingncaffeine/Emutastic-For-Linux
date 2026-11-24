@@ -22,14 +22,20 @@ namespace Emutastic.Services
         public static string FolderFor(string gameTitle, string kind) =>
             AppPaths.GetFolder(StorageFolder, SafeName(gameTitle, "Commodore 64"), kind);
 
-        /// <summary>Writes "NAME.d64" (or "NAME 2.d64" ... when taken) and returns its path.</summary>
-        public static string CreateDisk(string gameTitle, string name) =>
-            Write(FolderFor(gameTitle, DiskFolder), name, ".d64", FormattedD64(name));
+        // The file is named "GAME - NAME": Kernal64 keeps what is written to a medium in the save folder under
+        // the medium's file name, so two games' media must not share a name.
 
-        /// <summary>Writes "NAME.tap" (or "NAME 2.tap" ...) and returns its path.</summary>
+        /// <summary>Writes "GAME - NAME.d64" (or "... NAME 2.d64" when taken) and returns its path.</summary>
+        public static string CreateDisk(string gameTitle, string name) =>
+            Write(FolderFor(gameTitle, DiskFolder), FileStem(gameTitle, name), ".d64", FormattedD64(name));
+
+        /// <summary>Writes "GAME - NAME.tap" (or "... NAME 2.tap") and returns its path.</summary>
         public static string CreateTape(string gameTitle, string name) =>
-            Write(FolderFor(gameTitle, TapeFolder), name, ".tap",
+            Write(FolderFor(gameTitle, TapeFolder), FileStem(gameTitle, name), ".tap",
                 Encoding.ASCII.GetBytes("C64-TAPE-RAW").Concat(new byte[] { 1, 0, 0, 0, 0, 0, 0, 0 }).ToArray());
+
+        private static string FileStem(string gameTitle, string name) =>
+            SafeName(gameTitle, "Commodore 64") + " - " + SafeName(name, "Blank");
 
         private static string SafeName(string name, string fallback)
         {
