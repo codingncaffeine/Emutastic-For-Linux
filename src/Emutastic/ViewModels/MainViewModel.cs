@@ -301,22 +301,31 @@ namespace Emutastic.ViewModels
             // Merge non-default fields from 'updated' onto the existing game so partial
             // objects (e.g. from the missing-artwork query) don't wipe fields like
             // BoxArt3DPath, PlayCount, IsFavorite, etc.
+            // Whether the card must be rebuilt (re-seated) to show the change: the art paths notify by
+            // themselves, so a new cover alone does not; a field that does not notify (Title, ...) or a
+            // cover downloaded again under the same path does. A re-seat replaces the card, which closes a
+            // context menu open on it: with covers arriving for a whole library, every right-click menu
+            // closed right after it opened.
+            bool reseat = false;
             void MergeOnto(Game target)
             {
-                if (!string.IsNullOrEmpty(updated.Title))     target.Title = updated.Title;
+                if (!string.IsNullOrEmpty(updated.Title) && updated.Title != target.Title) { target.Title = updated.Title; reseat = true; }
                 if (!string.IsNullOrEmpty(updated.CoverArtPath))
                 {
                     PathToImageConverter.Evict(target.CoverArtPath);
+                    reseat |= updated.CoverArtPath == target.CoverArtPath;
                     target.CoverArtPath = updated.CoverArtPath;
                 }
                 if (!string.IsNullOrEmpty(updated.BoxArt3DPath))
                 {
                     PathToImageConverter.Evict(target.BoxArt3DPath);
+                    reseat |= updated.BoxArt3DPath == target.BoxArt3DPath;
                     target.BoxArt3DPath = updated.BoxArt3DPath;
                 }
                 if (!string.IsNullOrEmpty(updated.ScreenScraperArtPath))
                 {
                     PathToImageConverter.Evict(target.ScreenScraperArtPath);
+                    reseat |= updated.ScreenScraperArtPath == target.ScreenScraperArtPath;
                     target.ScreenScraperArtPath = updated.ScreenScraperArtPath;
                 }
                 if (!string.IsNullOrEmpty(updated.Developer))  target.Developer = updated.Developer;
@@ -327,12 +336,13 @@ namespace Emutastic.ViewModels
                 if (!string.IsNullOrEmpty(updated.RomPath))   target.RomPath = updated.RomPath;
                 if (updated.BackgroundColor != "#1F1F21")     target.BackgroundColor = updated.BackgroundColor;
                 if (updated.AccentColor != "#E03535")          target.AccentColor = updated.AccentColor;
-                if (updated.PlayCount > 0)   target.PlayCount = updated.PlayCount;
-                if (updated.SaveCount > 0)   target.SaveCount = updated.SaveCount;
-                if (updated.TotalPlayTimeSeconds > 0) target.TotalPlayTimeSeconds = updated.TotalPlayTimeSeconds;
-                if (updated.IsFavorite)      target.IsFavorite = true;
-                if (updated.Rating > 0)      target.Rating = updated.Rating;
-                if (updated.LastPlayed != null) target.LastPlayed = updated.LastPlayed;
+                if (updated.PlayCount > 0 && updated.PlayCount != target.PlayCount) { target.PlayCount = updated.PlayCount; reseat = true; }
+                if (updated.SaveCount > 0 && updated.SaveCount != target.SaveCount) { target.SaveCount = updated.SaveCount; reseat = true; }
+                if (updated.TotalPlayTimeSeconds > 0 && updated.TotalPlayTimeSeconds != target.TotalPlayTimeSeconds)
+                { target.TotalPlayTimeSeconds = updated.TotalPlayTimeSeconds; reseat = true; }
+                if (updated.IsFavorite && !target.IsFavorite) { target.IsFavorite = true; reseat = true; }
+                if (updated.Rating > 0 && updated.Rating != target.Rating) { target.Rating = updated.Rating; reseat = true; }
+                if (updated.LastPlayed != null && updated.LastPlayed != target.LastPlayed) { target.LastPlayed = updated.LastPlayed; reseat = true; }
                 if (!string.IsNullOrEmpty(updated.ManualPath)) target.ManualPath = updated.ManualPath;
                 if (!string.IsNullOrEmpty(updated.Notes))      target.Notes = updated.Notes;
                 if (!string.IsNullOrEmpty(updated.PatchPath))  target.PatchPath = updated.PatchPath;
@@ -349,6 +359,7 @@ namespace Emutastic.ViewModels
             }
             else
             {
+                reseat = true;
                 _allGames.Add(updated);
                 _gameIndex[updated.Id] = updated;
             }
@@ -382,9 +393,12 @@ namespace Emutastic.ViewModels
             var inView = Games.FirstOrDefault(g => g.Id == updated.Id);
             if (inView != null)
             {
-                if (inView != existing) MergeOnto(inView);
-                int idx = Games.IndexOf(inView);
-                Games[idx] = inView; // re-seat to trigger collection change
+                if (inView != existing) { reseat = true; MergeOnto(inView); }
+                if (reseat)
+                {
+                    int idx = Games.IndexOf(inView);
+                    Games[idx] = inView; // re-seat to trigger collection change
+                }
             }
             else if (Games != _allGames)
             {
