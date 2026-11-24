@@ -1874,6 +1874,12 @@ public partial class MainWindow : Window
         {
             items.Add(MenuAction("💾  New Blank Floppy Disk…", () => RunGuarded(() => AddBlankC64MediaAsync(game, tape: false))));
             items.Add(MenuAction("📼  New Blank Tape…", () => RunGuarded(() => AddBlankC64MediaAsync(game, tape: true))));
+            items.Add(MenuAction("🗄  New Blank Hard Drive…", () => RunGuarded(async () =>
+            {
+                string corePath = _coreManager?.GetCorePathForGame(game) ?? "";
+                string? done = await new HardDriveWindow(game, corePath).ShowDialog<string?>(this);
+                if (done != null) _vm!.SetStatus(done, autoClear: true);
+            })));
         }
 
         // ── Play Save State submenu (first 10, newest first — matches upstream) ──

@@ -1,0 +1,27 @@
+<Window xmlns="https://github.com/avaloniaui"
+        Icon="/Assets/banners and icons/emutastic-logo.png"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Emutastic.Views.HardDriveWindow"
+        x:CompileBindings="False"
+        Width="440" SizeToContent="Height" CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource BgPrimaryBrush}"
+        Title="New Blank Hard Drive">
+    <StackPanel Margin="20" Spacing="12">
+        <TextBlock Name="HeadingText" Text="New blank hard drive" FontFamily="{DynamicResource PrimaryFont}" FontSize="15"
+                   FontWeight="Bold" Foreground="{DynamicResource TextPrimaryBrush}"/>
+        <TextBlock Name="InfoText" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}"/>
+        <StackPanel Orientation="Horizontal" Spacing="10">
+            <TextBlock Text="Size" VerticalAlignment="Center" Foreground="{DynamicResource TextPrimaryBrush}"/>
+            <ComboBox Name="SizeBox" MinWidth="120"/>
+        </StackPanel>
+        <TextBlock Name="SizeNote" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}"/>
+        <TextBlock Name="WarnText" TextWrapping="Wrap" Foreground="#E0A030" IsVisible="False"/>
+        <ProgressBar Name="Progress" Minimum="0" Maximum="100" Height="6" IsVisible="False"/>
+        <TextBlock Name="StatusText" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}" IsVisible="False"/>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+            <Button Name="CancelButton" Content="Cancel" Theme="{DynamicResource SecondaryButtonStyle}"/>
+            <Button Name="OkButton" Content="Create" Theme="{DynamicResource PrimaryButtonStyle}"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

@@ -90,6 +90,13 @@ sealed class Program
         // Dev-only: a whole cloud sync against an in-process fake GitHub API — no account, no
         // network. `Emutastic --selftest-cloudsync-offline --portable` from a fresh copy of the build
         // output (it refuses a PortableData that has been used). Exit 0 = pass, 1 = fail, 2 = incomplete.
+        // Dev-only: `Emutastic --selftest-c64-harddrive CORE.so --portable` makes a C64 hard drive through the
+        // same calls as the New Blank Hard Drive window (needs the CMD HD files in System). Exit 0 = pass.
+        if (args.Length >= 2 && args[0] == "--selftest-c64-harddrive")
+        {
+            Environment.Exit(Emutastic.Services.C64HardDriveSelfTest.Run(args[1]));
+            return;
+        }
         if (args.Length >= 1 && args[0] == "--selftest-cloudsync-offline")
         {
             Environment.Exit(Emutastic.Services.CloudSyncOfflineSelfTest.Run());

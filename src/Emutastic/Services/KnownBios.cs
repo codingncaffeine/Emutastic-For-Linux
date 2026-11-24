@@ -54,6 +54,10 @@ namespace Emutastic.Services
             new("C64","Commodore 64","kernal64/64c.251913-01.bin","BASIC + KERNAL, C64C combined image (instead of the two above)",16384,"8c37b056c00a44c0725508b8cedbbefb"),
             new("C64","Commodore 64","kernal64/1541-c000.325302-01.bin","1541 drive ROM, lower half (disks)",8192,"41f5af978d69fc20f1f2fcad7c2ad8cf"),
             new("C64","Commodore 64","kernal64/1541-e000.901229-05.bin","1541 drive ROM, upper half (disks)",8192,"ea93aaa7016a673aac2294cbb08a9885"),
+            new("C64","Commodore 64","kernal64/cmd_hd_bootrom_v280.bin","CMD HD boot ROM v2.80 (hard drives)",32768,"d0d97a52d3455aac4e23afcfadaa3a59",
+                AltMd5s: new[] { "3e4b2f2718e4d581b946aa0b67100fc4" }),   // the same ROM as a 16K image
+            new("C64","Commodore 64","kernal64/cmd_hd_utilities.d81","CMD HD utilities disk (.d81): the floppy that came with the CMD hard drive, " +
+                "with the programs that set a new drive up. Needed to make hard drives",819200,"55f98f28cf85bdf337be853bfbf8e722"),
             // Sega CD
             new("SegaCD","Sega CD","bios_CD_U.bin","USA",131072,"2efd74e3232ff260e371b99f84024f7f"),
             new("SegaCD","Sega CD","bios_CD_J.bin","Japan",131072,"278a9397d192149e84e820ac621a8edd"),
