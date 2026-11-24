@@ -476,15 +476,61 @@ namespace Emutastic.Services
             { "brutal unleashed",                  "Brutal - Above the Claw" },
         };
 
+        // The libretro thumbnails are served by thumbnails.libretro.com and kept in the libretro-thumbnails
+        // repositories on GitHub (one per system: "Commodore - 64" -> libretro-thumbnails/Commodore_-_64). When
+        // the server does not answer for a file it certainly has (2026-11-23 it answered 404 for every system),
+        // the GitHub copies are used for the rest of the session.
+        private static volatile int _libretroServerState;   // 0 unknown, 1 serving, 2 not serving
+        private static readonly SemaphoreSlim _probeGate = new(1, 1);
+        private const string ProbeUrl =
+            "https://thumbnails.libretro.com/Nintendo%20-%20Nintendo%20Entertainment%20System/Named_Boxarts/Super%20Mario%20Bros.%20(World).png";
+
+        private async Task EnsureThumbnailHostAsync()
+        {
+            if (_libretroServerState != 0) return;
+            await _probeGate.WaitAsync();
+            try
+            {
+                if (_libretroServerState != 0) return;
+                bool up;
+                try
+                {
+                    using var req = new HttpRequestMessage(HttpMethod.Head, ProbeUrl);
+                    using var resp = await _http.SendAsync(req);
+                    up = resp.IsSuccessStatusCode;
+                }
+                catch { up = false; }
+                _libretroServerState = up ? 1 : 2;
+                System.Diagnostics.Trace.WriteLine($"[Artwork] libretro thumbnail server {(up ? "serving" : "not serving: using the GitHub copies")}");
+            }
+            finally { _probeGate.Release(); }
+        }
+
+        private static bool UseGitHubThumbnails => _libretroServerState == 2;
+        private static string GitHubThumbnailRepo(string systemFolder) => systemFolder.Replace(' ', '_');
+
+        /// <summary>The folder URL a thumbnail file name (escaped, + ".png") is appended to.</summary>
+        private static string ThumbnailBase(string systemFolder, string category) => UseGitHubThumbnails
+            ? $"https://raw.githubusercontent.com/libretro-thumbnails/{GitHubThumbnailRepo(systemFolder)}/master/{category}/"
+            : $"https://thumbnails.libretro.com/{Uri.EscapeDataString(systemFolder)}/{category}/";
+
         /// <summary>
         /// Fetches the directory listing for a libretro thumbnail folder and caches it
-        /// for the session. Returns decoded filenames without extensions.
+        /// for the session. Returns decoded filenames without extensions. From the GitHub copy (two API
+        /// requests, the list kept on disk for a week) when the server is not serving.
         /// </summary>
         private async Task<List<string>> GetThumbnailIndexAsync(string systemFolder, string category)
         {
             string key = $"{systemFolder}/{category}";
             if (_thumbnailIndex.TryGetValue(key, out var cached))
                 return cached;
+            await EnsureThumbnailHostAsync();
+            if (UseGitHubThumbnails)
+            {
+                var list = await GetGitHubThumbnailIndexAsync(systemFolder, category);
+                _thumbnailIndex[key] = list;
+                return list;
+            }
 
             string url = $"https://thumbnails.libretro.com/{Uri.EscapeDataString(systemFolder)}/{category}/";
             try
@@ -505,6 +551,44 @@ namespace Emutastic.Services
                 _thumbnailIndex[key] = new List<string>();
                 return _thumbnailIndex[key];
             }
+        }
+
+        private async Task<List<string>> GetGitHubThumbnailIndexAsync(string systemFolder, string category)
+        {
+            string repo = GitHubThumbnailRepo(systemFolder);
+            string cacheFile = Path.Combine(AppPaths.GetFolder("Artwork", ".thumbnail-index"), $"{repo}.{category}.txt");
+            try
+            {
+                if (File.Exists(cacheFile) && DateTime.UtcNow - File.GetLastWriteTimeUtc(cacheFile) < TimeSpan.FromDays(7))
+                    return File.ReadAllLines(cacheFile).Where(l => l.Length > 0).ToList();
+            }
+            catch { }
+            var names = new List<string>();
+            try
+            {
+                // The repository's top tree names the category folder's tree; that tree lists its files.
+                string api = $"https://api.github.com/repos/libretro-thumbnails/{repo}/git/trees/master";
+                using var top = System.Text.Json.JsonDocument.Parse(await _http.GetStringAsync(api));
+                string? sha = null;
+                foreach (var e in top.RootElement.GetProperty("tree").EnumerateArray())
+                    if (e.GetProperty("path").GetString() == category) { sha = e.GetProperty("sha").GetString(); break; }
+                if (sha == null) return names;
+                using var tree = System.Text.Json.JsonDocument.Parse(
+                    await _http.GetStringAsync($"https://api.github.com/repos/libretro-thumbnails/{repo}/git/trees/{sha}"));
+                foreach (var e in tree.RootElement.GetProperty("tree").EnumerateArray())
+                {
+                    string? name = e.GetProperty("path").GetString();
+                    if (name != null && name.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
+                        names.Add(name[..^4]);
+                }
+                File.WriteAllLines(cacheFile, names);
+                System.Diagnostics.Trace.WriteLine($"[Artwork] GitHub thumbnail list {repo}/{category}: {names.Count} names");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.WriteLine($"[Artwork] GitHub thumbnail list {repo}/{category} failed: {ex.Message}");
+            }
+            return names;
         }
 
         /// <summary>
@@ -590,8 +674,7 @@ namespace Emutastic.Services
             string category)
         {
             var urls = new List<string>();
-            string encodedSystem = Uri.EscapeDataString(systemFolder);
-            string baseUrl = $"https://thumbnails.libretro.com/{encodedSystem}/{category}/";
+            string baseUrl = ThumbnailBase(systemFolder, category);
             string sanitized = SanitizeLibretroTitle(gameTitle);
 
             var variants = new[]
@@ -693,6 +776,7 @@ namespace Emutastic.Services
         /// </summary>
         public async Task<string?> FetchSnapAsync(string romHash, string? romPath, string console)
         {
+            await EnsureThumbnailHostAsync();
             var titleCandidates = new List<string>();
 
             if (!string.IsNullOrWhiteSpace(romPath))
@@ -763,7 +847,7 @@ namespace Emutastic.Services
                     {
                         string? matched = FindBestThumbnailTitle(title, index);
                         if (matched == null) continue;
-                        string matchUrl = $"https://thumbnails.libretro.com/{Uri.EscapeDataString(systemFolder)}/{category}/{Uri.EscapeDataString(matched)}.png";
+                        string matchUrl = $"{ThumbnailBase(systemFolder, category)}{Uri.EscapeDataString(matched)}.png";
                         string matchHash = Convert.ToHexString(
                             System.Security.Cryptography.MD5.HashData(
                                 System.Text.Encoding.UTF8.GetBytes(matchUrl)));
@@ -780,6 +864,7 @@ namespace Emutastic.Services
         public async Task<(string? artworkPath, string? screenScraperArtPath, ArtworkResult? metadata)> FetchArtworkAsync(
             string md5Hash, string? romPath = null, string? console = null)
         {
+            await EnsureThumbnailHostAsync();
             // Source priority for the metadata fields (Title, Year, Developer,
             // Publisher, Genre, Description):
             //   1. ScreenScraper jeuInfos — when the user has SS credentials
@@ -949,7 +1034,7 @@ namespace Emutastic.Services
                         {
                             string? matched = FindBestThumbnailTitle(titleCandidate, index);
                             if (matched == null) continue;
-                            string matchUrl = $"https://thumbnails.libretro.com/{Uri.EscapeDataString(systemFolder)}/{category}/{Uri.EscapeDataString(matched)}.png";
+                            string matchUrl = $"{ThumbnailBase(systemFolder, category)}{Uri.EscapeDataString(matched)}.png";
                             artworkPath = await DownloadArtworkAsync(matchUrl, md5Hash, console);
                             if (artworkPath != null)
                             {
